@@ -208,11 +208,7 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	// Stop recording 5 seconds after receiving a decision
 	go func() {
 		time.Sleep(5 * time.Second)
-		startTimeMillis := videos.GetStartTimeMillis()
-		if _, err := strconv.ParseInt(startTimeMillis, 10, 64); err != nil {
-			startTimeMillis = "0"
-		}
-		if err := videos.StopRecording(startTimeMillis); err != nil {
+		if err := videos.StopRecording(""); err != nil {
 			logging.ErrorLogger.Printf("Failed to stop recording: %v", err)
 		}
 	}()

@@ -115,6 +115,9 @@ func StopRecording(_ string) error {
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("failed to trim video: %w", err)
 			}
+			if err := os.Remove(currentFileName); err != nil {
+				return fmt.Errorf("failed to remove untrimmed video file: %w", err)
+			}
 		}
 	}
 
