@@ -74,7 +74,6 @@ func StopRecording(_ string) error {
 
 	if noVideo {
 		logging.InfoLogger.Printf("Simulating stop recording video: %s", currentFileName)
-		currentFileName = ""
 	} else {
 		// Stop the recording
 		logging.InfoLogger.Println("Sending signal to ffmpeg to stop recording")
@@ -91,28 +90,32 @@ func StopRecording(_ string) error {
 	stopTime := time.Now().UnixNano() / int64(time.Millisecond)
 	duration := stopTime - startTime - 5000 // subtract 5 seconds
 
-	// Trim the front of the video
-	trimmedFileName := filepath.Join(videoDir, fmt.Sprintf("%s_trimmed.mp4", filepath.Base(currentFileName)))
-	quotedTrimmedFileName := fmt.Sprintf("\"%s\"", trimmedFileName)
-	cmd := exec.Command("ffmpeg", "-y", "-ss", fmt.Sprintf("%d", duration/1000), "-i", currentFileName, "-c", "copy", quotedTrimmedFileName)
+	logging.InfoLogger.Printf("Duration to be trimmed: %d milliseconds", duration)
 
-	if noVideo {
-		logging.InfoLogger.Printf("Simulating trim video: %s", trimmedFileName)
-		logging.InfoLogger.Printf("ffmpeg command: %s", cmd.String())
-		currentFileName = ""
-	} else {
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to trim video: %w", err)
-		}
-	}
-
-	// Rename the trimmed file with an ISO 8601 timestamp
-	timestamp := time.Now().Format(time.RFC3339)
+	// Save the video with an ISO 8601 timestamp without time zone
+	timestamp := time.Now().Format("2006-01-02_15h04m05s")
 	finalFileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s", timestamp, filepath.Base(currentFileName)))
-	if noVideo {
-		logging.InfoLogger.Printf("Simulating rename video: %s -> %s", trimmedFileName, finalFileName)
-	} else if err := os.Rename(trimmedFileName, finalFileName); err != nil {
-		return fmt.Errorf("failed to rename video file to %s: %w", finalFileName, err)
+	quotedFinalFileName := fmt.Sprintf("\"%s\"", finalFileName)
+	quotedCurrentFileName := fmt.Sprintf("\"%s\"", currentFileName)
+
+	if startTime == 0 {
+		logging.InfoLogger.Println("Start time is 0, not trimming the video")
+		if noVideo {
+			logging.InfoLogger.Printf("Simulating rename video: %s -> %s", currentFileName, finalFileName)
+		} else if err := os.Rename(currentFileName, finalFileName); err != nil {
+			return fmt.Errorf("failed to rename video file to %s: %w", finalFileName, err)
+		}
+	} else {
+		cmd := exec.Command("ffmpeg", "-y", "-ss", fmt.Sprintf("%d", duration/1000), "-i", quotedCurrentFileName, "-c", "copy", quotedFinalFileName)
+
+		if noVideo {
+			logging.InfoLogger.Printf("Simulating trim video: %s", finalFileName)
+			logging.InfoLogger.Printf("ffmpeg command: %s", cmd.String())
+		} else {
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to trim video: %w", err)
+			}
+		}
 	}
 
 	logging.InfoLogger.Printf("Stopped recording and saved video: %s", finalFileName)

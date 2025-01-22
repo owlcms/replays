@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -46,14 +47,40 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintf(w, "<html><body><h1>Video Files</h1><ul>")
+	// Sort files in reverse order (most recent first)
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Name() > files[j].Name()
+	})
+
+	fmt.Fprintf(w, `
+		<html>
+		<head>
+			<title>Video Files</title>
+			<script type="text/javascript">
+				document.addEventListener('visibilitychange', function() {
+					if (document.visibilityState === 'visible') {
+						location.reload();
+					}
+				});
+			</script>
+		</head>
+		<body>
+			<h1>Video Files</h1>
+			<ul>
+	`)
+
 	for _, file := range files {
 		if !file.IsDir() {
 			fileName := file.Name()
 			fmt.Fprintf(w, `<li><a href="/videos/%s">%s</a></li>`, fileName, fileName)
 		}
 	}
-	fmt.Fprintf(w, "</ul></body></html>")
+
+	fmt.Fprintf(w, `
+			</ul>
+		</body>
+		</html>
+	`)
 }
 
 // timerHandler handles the /timer endpoint
@@ -181,7 +208,11 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	// Stop recording 5 seconds after receiving a decision
 	go func() {
 		time.Sleep(5 * time.Second)
-		if err := videos.StopRecording(""); err != nil {
+		startTimeMillis := videos.GetStartTimeMillis()
+		if _, err := strconv.ParseInt(startTimeMillis, 10, 64); err != nil {
+			startTimeMillis = "0"
+		}
+		if err := videos.StopRecording(startTimeMillis); err != nil {
 			logging.ErrorLogger.Printf("Failed to stop recording: %v", err)
 		}
 	}()
