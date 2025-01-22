@@ -3,12 +3,12 @@ package http
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/videos"
 )
 
@@ -32,9 +32,9 @@ func StartServer(port int, verbose bool) {
 		Handler: mux,
 	}
 
-	log.Printf("Starting HTTP server on %s\n", addr)
+	logging.InfoLogger.Printf("Starting HTTP server on %s\n", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Failed to start server: %v", err)
+		logging.ErrorLogger.Printf("Failed to start server: %v", err)
 	}
 }
 
@@ -90,15 +90,8 @@ func timerHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 		return
 	}
 
-	if athleteTimerEventType == "StartTime" {
-		if err := videos.StartRecording(fullName, liftTypeKey, attemptNumber, athleteStartTimeMillis); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to start recording: %v", err), http.StatusInternalServerError)
-			return
-		}
-	}
-
 	if verbose {
-		log.Printf("Received /timer request:\n"+
+		logging.InfoLogger.Printf("Received /timer request:\n"+
 			"    fullName=%s\n"+
 			"    attemptNumber=%d\n"+
 			"    liftTypeKey=%s\n"+
@@ -109,6 +102,13 @@ func timerHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 			"    athleteStartTimeMillis=%s\n"+
 			"    athleteMillisRemaining=%s\n",
 			fullName, attemptNumber, liftTypeKey, fopName, fopState, mode, athleteTimerEventType, athleteStartTimeMillis, athleteMillisRemaining)
+	}
+
+	if athleteTimerEventType == "StartTime" {
+		if err := videos.StartRecording(fullName, liftTypeKey, attemptNumber, athleteStartTimeMillis); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to start recording: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	fmt.Fprintf(w, "Timer endpoint received")
@@ -128,10 +128,19 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	}
 
 	decisionEventType := r.FormValue("decisionEventType")
+	fopState := r.FormValue("fopState")
+	if fopState != "DECISION_VISIBLE" || decisionEventType == "RESET" {
+		if verbose {
+			logging.InfoLogger.Printf("Ignoring decision: fopState=%s, decisionEventType=%s", fopState, decisionEventType)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Decision endpoint received")
+		return
+	}
+
 	mode := r.FormValue("mode")
 	competitionName := r.FormValue("competitionName")
 	fop := r.FormValue("fop")
-	fopState := r.FormValue("fopState")
 	breakValue := r.FormValue("break")
 	d1 := r.FormValue("d1")
 	d2 := r.FormValue("d2")
@@ -150,7 +159,7 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	}
 
 	if verbose {
-		log.Printf("Received /decision request:\n"+
+		logging.InfoLogger.Printf("Received /decision request:\n"+
 			"    decisionEventType=%s\n"+
 			"    mode=%s\n"+
 			"    competitionName=%s\n"+
@@ -172,18 +181,15 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	// Stop recording 5 seconds after receiving a decision
 	go func() {
 		time.Sleep(5 * time.Second)
-		if err := videos.StopRecording(r.FormValue("athleteStartTimeMillis")); err != nil {
-			log.Printf("Failed to stop recording: %v", err)
+		if err := videos.StopRecording(""); err != nil {
+			logging.ErrorLogger.Printf("Failed to stop recording: %v", err)
 		}
 	}()
-
-	fmt.Fprintf(w, "Decision endpoint received")
 }
 
 // updateHandler handles the /update endpoint and always returns 200 success
 func updateHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Update endpoint")
 }
 
 // StopServer gracefully shuts down the HTTP server
@@ -192,8 +198,8 @@ func StopServer() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			log.Fatalf("Server forced to shutdown: %v", err)
+			logging.ErrorLogger.Printf("Server forced to shutdown: %v", err)
 		}
-		log.Println("Server gracefully stopped")
+		logging.InfoLogger.Println("Server stopped")
 	}
 }

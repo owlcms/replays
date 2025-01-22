@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/http"
+	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/videos"
 )
 
@@ -25,6 +26,9 @@ func main() {
 	flag.BoolVar(&verbose, "verbose", false, "enable verbose logging")
 	flag.BoolVar(&noVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
 	flag.Parse()
+
+	// Initialize loggers
+	logging.Init()
 
 	// Set the noVideo flag in the videos package
 	videos.SetNoVideo(noVideo)
@@ -59,7 +63,7 @@ func main() {
 	// Goroutine to handle interrupt signals
 	go func() {
 		<-sigChan
-		fmt.Println("Interrupt signal received. Shutting down...")
+		logging.InfoLogger.Println("Interrupt signal received. Shutting down...")
 		http.StopServer()
 		myApp.Quit()
 	}()
