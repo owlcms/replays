@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -13,15 +14,21 @@ var currentRecording *exec.Cmd
 var currentFileName string
 var startTimeMillis string
 var noVideo bool
+var videoDir string
 
 // SetNoVideo sets the noVideo flag
 func SetNoVideo(value bool) {
 	noVideo = value
 }
 
+// SetVideoDir sets the video directory
+func SetVideoDir(dir string) {
+	videoDir = dir
+}
+
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int, startMillis string) error {
-	fileName := fmt.Sprintf("%s_%s_attempt%d_%s.mp4", fullName, liftTypeKey, attemptNumber, startMillis)
+	fileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s_attempt%d_%s.mp4", fullName, liftTypeKey, attemptNumber, startMillis))
 
 	// If there is an ongoing recording, stop it and discard the file
 	if currentRecording != nil {
@@ -84,7 +91,7 @@ func StopRecording(stopMillis string) error {
 	duration := stopTime - startTime - 5000 // subtract 5 seconds
 
 	// Trim the front of the video
-	trimmedFileName := fmt.Sprintf("%s_trimmed.mp4", currentFileName)
+	trimmedFileName := filepath.Join(videoDir, fmt.Sprintf("%s_trimmed.mp4", currentFileName))
 	cmd := exec.Command("ffmpeg", "-y", "-ss", fmt.Sprintf("%d", duration/1000), "-i", currentFileName, "-c", "copy", trimmedFileName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to trim video: %w", err)
@@ -92,7 +99,7 @@ func StopRecording(stopMillis string) error {
 
 	// Rename the trimmed file with an ISO 8601 timestamp
 	timestamp := time.Now().Format(time.RFC3339)
-	finalFileName := fmt.Sprintf("%s_%s", timestamp, currentFileName)
+	finalFileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s", timestamp, filepath.Base(currentFileName)))
 	if err := os.Rename(trimmedFileName, finalFileName); err != nil {
 		return fmt.Errorf("failed to rename video file: %w", err)
 	}

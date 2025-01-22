@@ -91,7 +91,7 @@ func timerHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	}
 
 	if athleteTimerEventType == "StartTime" {
-		if err := videos.StartRecording(fullName, liftTypeKey, attemptNumber, athleteStartTimeMillis, athleteMillisRemaining); err != nil {
+		if err := videos.StartRecording(fullName, liftTypeKey, attemptNumber, athleteStartTimeMillis); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to start recording: %v", err), http.StatusInternalServerError)
 			return
 		}
