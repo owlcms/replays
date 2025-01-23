@@ -103,7 +103,6 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 						reloadPage();
 						}
 					});
-				setInterval(reloadPage, 10000); // Reload every 10 seconds
 
 				// WebSocket connection
 				const ws = new WebSocket("ws://" + window.location.host + "/ws");
@@ -134,8 +133,8 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		if !file.IsDir() {
 			fileName := file.Name()
 			// Replace Clean_and_Jerk with CJ
-			fileName = strings.ReplaceAll(fileName, "Clean_and_Jerk", "CJ")
-			matches := re.FindStringSubmatch(fileName)
+			fileName2 := strings.ReplaceAll(fileName, "Clean_and_Jerk", "CJ")
+			matches := re.FindStringSubmatch(fileName2)
 			if len(matches) == 6 {
 				date := matches[1]
 				hourMinuteSeconds := matches[2]
