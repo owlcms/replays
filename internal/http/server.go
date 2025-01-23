@@ -12,11 +12,22 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/videos"
 )
 
-var server *http.Server
+var (
+	Server   *http.Server // Make server public
+	upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+	clients = make(map[*websocket.Conn]bool)
+)
 
 // StartServer starts the HTTP server on the specified port
 func StartServer(port int, verbose bool) {
@@ -36,15 +47,16 @@ func StartServer(port int, verbose bool) {
 		decisionHandler(w, r, verbose)
 	})
 	r.HandleFunc("/update", updateHandler)
+	r.HandleFunc("/ws", handleWebSocket)
 
 	addr := fmt.Sprintf(":%d", port)
-	server = &http.Server{
+	Server = &http.Server{ // Use Server instead of server
 		Addr:    addr,
 		Handler: r,
 	}
 
 	logging.InfoLogger.Printf("Starting HTTP server on %s\n", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := Server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logging.ErrorLogger.Printf("Failed to start server: %v", err)
 	}
 }
@@ -89,9 +101,17 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 				document.addEventListener('visibilitychange', function() {
 					if (document.visibilityState === 'visible') {
 						reloadPage();
-					}
+						}
 					});
 				setInterval(reloadPage, 10000); // Reload every 10 seconds
+
+				// WebSocket connection
+				const ws = new WebSocket("ws://" + window.location.host + "/ws");
+				ws.onmessage = function(event) {
+					if (event.data === "reload") {
+						reloadPage();
+					}
+				};
 			</script>
 		</head>
 		<body>
@@ -273,6 +293,7 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 		if err := videos.StopRecording(""); err != nil {
 			logging.ErrorLogger.Printf("%v", err)
 		}
+		NotifyClients()
 	}()
 }
 
@@ -283,12 +304,44 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
 // StopServer gracefully shuts down the HTTP server
 func StopServer() {
-	if server != nil {
+	if Server != nil { // Use Server instead of server
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
+		if err := Server.Shutdown(ctx); err != nil {
 			logging.ErrorLogger.Printf("Server forced to shutdown: %v", err)
 		}
 		logging.InfoLogger.Println("Server stopped")
+	}
+}
+
+// NotifyClients sends a reload message to all connected WebSocket clients
+func NotifyClients() {
+	for client := range clients {
+		err := client.WriteMessage(websocket.TextMessage, []byte("reload"))
+		if err != nil {
+			client.Close()
+			delete(clients, client)
+		}
+	}
+}
+
+// handleWebSocket upgrades HTTP connection to WebSocket
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		logging.ErrorLogger.Printf("WebSocket upgrade failed: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	clients[conn] = true
+	defer delete(clients, conn)
+
+	// Keep the connection alive
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
 	}
 }
