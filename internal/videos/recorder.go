@@ -24,6 +24,9 @@ var (
 	width            int
 	height           int
 	fps              int
+	ffmpegPath       string
+	ffmpegCamera     string
+	ffmpegFormat     string
 )
 
 // SetNoVideo sets the noVideo flag
@@ -41,6 +44,13 @@ func SetVideoConfig(w, h, f int) {
 	width = w
 	height = h
 	fps = f
+}
+
+// SetFfmpegConfig sets the ffmpeg configuration parameters
+func SetFfmpegConfig(path, camera, format string) {
+	ffmpegPath = path
+	ffmpegCamera = camera
+	ffmpegFormat = format
 }
 
 // StartRecording starts recording a video using ffmpeg
@@ -68,16 +78,16 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 
 	var cmd *exec.Cmd
 	if noVideo {
-		cmd = exec.Command("ffmpeg", "-y", "-f", "v4l2",
+		cmd = exec.Command(ffmpegPath, "-y", "-f", ffmpegFormat,
 			"-video_size", fmt.Sprintf("%dx%d", width, height),
 			"-framerate", fmt.Sprintf("%d", fps),
-			"-i", "/dev/video0", fileName)
+			"-i", ffmpegCamera, fileName)
 		logging.InfoLogger.Printf("Simulating start recording video: %s", fileName)
 	} else {
-		cmd = exec.Command("ffmpeg", "-y", "-f", "v4l2",
+		cmd = exec.Command(ffmpegPath, "-y", "-f", ffmpegFormat,
 			"-video_size", fmt.Sprintf("%dx%d", width, height),
 			"-framerate", fmt.Sprintf("%d", fps),
-			"-i", "/dev/video0", fileName)
+			"-i", ffmpegCamera, fileName)
 		logging.InfoLogger.Printf("%s", cmd.String())
 	}
 
