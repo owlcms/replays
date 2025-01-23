@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/videos"
 )
@@ -17,20 +18,24 @@ var server *http.Server
 
 // StartServer starts the HTTP server on the specified port
 func StartServer(port int, verbose bool) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", listFilesHandler)
-	mux.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
+	r := mux.NewRouter()
+
+	// Serve video files
+	r.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir("videos"))))
+
+	r.HandleFunc("/", listFilesHandler)
+	r.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
 		timerHandler(w, r, verbose)
 	})
-	mux.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) {
 		decisionHandler(w, r, verbose)
 	})
-	mux.HandleFunc("/update", updateHandler)
+	r.HandleFunc("/update", updateHandler)
 
 	addr := fmt.Sprintf(":%d", port)
 	server = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: r,
 	}
 
 	logging.InfoLogger.Printf("Starting HTTP server on %s\n", addr)
@@ -209,7 +214,7 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	go func() {
 		time.Sleep(5 * time.Second)
 		if err := videos.StopRecording(""); err != nil {
-			logging.ErrorLogger.Printf("Failed to stop recording: %v", err)
+			logging.ErrorLogger.Printf("%v", err)
 		}
 	}()
 }
