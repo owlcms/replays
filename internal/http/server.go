@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -27,7 +29,7 @@ func StartServer(port int, verbose bool) {
 	r.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
 		timerHandler(w, r, verbose)
 	})
-	r.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) { // Fix the undefined Request error
 		decisionHandler(w, r, verbose)
 	})
 	r.HandleFunc("/update", updateHandler)
@@ -74,10 +76,31 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 			<ul>
 	`)
 
+	// Regex to extract date, hour, name, lift type, and attempt
+	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CJ|Snatch)_attempt(\d+)(?:_\d+)?\.mp4$`)
+
 	for _, file := range files {
 		if !file.IsDir() {
 			fileName := file.Name()
-			fmt.Fprintf(w, `<li><a href="/videos/%s">%s</a></li>`, fileName, fileName)
+			// Replace Clean_and_Jerk with CJ
+			fileName = strings.ReplaceAll(fileName, "Clean_and_Jerk", "CJ")
+			matches := re.FindStringSubmatch(fileName)
+			logging.InfoLogger.Printf("Matches: %v", matches) // Log the matches
+			if len(matches) == 6 {
+				date := matches[1]
+				hourMinuteSeconds := matches[2]
+				name := matches[3]
+				lift := matches[4]
+				attempt := matches[5]
+				// Fix the hour, minute, seconds to hh:mm:ss format
+				hourMinuteSeconds = strings.ReplaceAll(hourMinuteSeconds, "h", ":")
+				hourMinuteSeconds = strings.ReplaceAll(hourMinuteSeconds, "m", ":")
+				hourMinuteSeconds = strings.ReplaceAll(hourMinuteSeconds, "s", "")
+				// Change _ in the name with space
+				name = strings.ReplaceAll(name, "_", " ")
+				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s", date, hourMinuteSeconds, name, lift, attempt)
+				fmt.Fprintf(w, `<li><a href="/videos/%s">%s</a></li>`, fileName, displayName)
+			}
 		}
 	}
 

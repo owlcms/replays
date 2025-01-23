@@ -109,7 +109,8 @@ func StopRecording(_ string) error {
 
 	// Save the video with an ISO 8601 timestamp without time zone
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
-	finalFileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s", timestamp, filepath.Base(currentFileName)))
+	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
+	finalFileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
 
 	if startTime == 0 {
 		logging.InfoLogger.Println("Start time is 0, not trimming the video")
