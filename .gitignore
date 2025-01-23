@@ -37,3 +37,6 @@ videos/
 
 # Environment variables
 .env
+
+# Other
+*.mp4

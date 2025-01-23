@@ -17,6 +17,7 @@ import (
 
 var (
 	currentRecording *exec.Cmd
+	currentStdin     *os.File
 	currentFileName  string
 	noVideo          bool
 	videoDir         string
@@ -87,11 +88,19 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		return nil
 	}
 
+	// Create a pipe for stdin
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
+		stdin.Close()
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
 	currentRecording = cmd
+	currentStdin = stdin.(*os.File)
 	currentFileName = fileName
 	state.LastTimerStopTime = 0
 
@@ -108,10 +117,16 @@ func StopRecording(decisionTime int64) error {
 	if noVideo {
 		logging.InfoLogger.Printf("Simulating stop recording video: %s", currentFileName)
 	} else {
-		// Stop the recording
-		logging.InfoLogger.Println("Sending signal to ffmpeg to stop recording")
-		if err := currentRecording.Process.Signal(os.Interrupt); err != nil {
-			return fmt.Errorf("failed to stop recording: %w", err)
+		// Stop the recording using stdin
+		logging.InfoLogger.Println("Sending 'q' to ffmpeg to stop recording")
+		if _, err := currentStdin.Write([]byte("q")); err != nil {
+			return fmt.Errorf("failed to send quit command: %w", err)
+		}
+
+		// Close stdin and wait for the process to finish
+		currentStdin.Close()
+		if err := currentRecording.Wait(); err != nil {
+			return fmt.Errorf("failed to wait for ffmpeg to finish: %w", err)
 		}
 	}
 
@@ -168,6 +183,7 @@ func StopRecording(decisionTime int64) error {
 
 	logging.InfoLogger.Printf("Stopped recording and saved video: %s", finalFileName)
 	currentRecording = nil
+	currentStdin = nil
 	currentFileName = ""
 
 	return nil
