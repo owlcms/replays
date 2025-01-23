@@ -25,6 +25,9 @@ func StartServer(port int, verbose bool) {
 	// Serve video files
 	r.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir("videos"))))
 
+	// Serve CSS files
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+
 	r.HandleFunc("/", listFilesHandler)
 	r.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
 		timerHandler(w, r, verbose)
@@ -63,16 +66,22 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		<html>
 		<head>
 			<title>Video Files</title>
+			<link rel="stylesheet" type="text/css" href="/static/styles.css">
 			<script type="text/javascript">
+				function reloadPage() {
+					location.reload();
+				}
 				document.addEventListener('visibilitychange', function() {
 					if (document.visibilityState === 'visible') {
-						location.reload();
+						reloadPage();
 					}
 				});
+				window.addEventListener('focus', reloadPage);
+				setInterval(reloadPage, 5000);
 			</script>
 		</head>
 		<body>
-			<h1>Video Files</h1>
+			<h1>Replays</h1>
 			<ul>
 	`)
 
