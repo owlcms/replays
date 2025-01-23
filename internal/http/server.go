@@ -62,6 +62,12 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return files[i].Name() > files[j].Name()
 	})
 
+	showAll := r.URL.Query().Get("showAll") == "true"
+	fileCount := len(files)
+	if !showAll && fileCount > 20 {
+		files = files[:20]
+	}
+
 	fmt.Fprintf(w, `
 		<html>
 		<head>
@@ -76,8 +82,7 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 						reloadPage();
 					}
 				});
-				window.addEventListener('focus', reloadPage);
-				setInterval(reloadPage, 5000);
+1				setInterval(reloadPage, 10000); // Reload every 10 seconds
 			</script>
 		</head>
 		<body>
@@ -108,9 +113,13 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 				// Change _ in the name with space
 				name = strings.ReplaceAll(name, "_", " ")
 				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s", date, hourMinuteSeconds, name, lift, attempt)
-				fmt.Fprintf(w, `<li><a href="/videos/%s">%s</a></li>`, fileName, displayName)
+				fmt.Fprintf(w, `<li><a href="/videos/%s" target="_blank" rel="noopener noreferrer">%s</a></li>`, fileName, displayName)
 			}
 		}
+	}
+
+	if !showAll && fileCount > 20 {
+		fmt.Fprintf(w, `<li><a href="/?showAll=true">Show all</a></li>`)
 	}
 
 	fmt.Fprintf(w, `
