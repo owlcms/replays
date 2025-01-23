@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/state"
 	"github.com/owlcms/replays/internal/videos"
 )
 
@@ -101,8 +102,8 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 				document.addEventListener('visibilitychange', function() {
 					if (document.visibilityState === 'visible') {
 						reloadPage();
-						}
-					});
+					}
+				});
 
 				// WebSocket connection
 				const ws = new WebSocket("ws://" + window.location.host + "/ws");
@@ -212,8 +213,14 @@ func timerHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 			fullName, attemptNumber, liftTypeKey, fopName, fopState, mode, athleteTimerEventType, athleteStartTimeMillis, athleteMillisRemaining)
 	}
 
+	if athleteTimerEventType == "StopTime" && state.LastTimerStopTime == 0 {
+		logging.InfoLogger.Printf("Received StopTime event for %s, attempt %d", fullName, attemptNumber)
+		state.LastTimerStopTime = time.Now().UnixNano() / int64(time.Millisecond)
+	}
+
 	if athleteTimerEventType == "StartTime" {
-		if err := videos.StartRecording(fullName, liftTypeKey, attemptNumber, athleteStartTimeMillis); err != nil {
+		state.LastStartTime = time.Now().UnixNano() / int64(time.Millisecond)
+		if err := videos.StartRecording(fullName, liftTypeKey, attemptNumber); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to start recording: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -286,10 +293,11 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 			decisionEventType, mode, competitionName, fop, fopState, breakValue, d1, d2, d3, decisionsVisible, down, recordKind, fullName, attemptNumber, liftTypeKey)
 	}
 
-	// Stop recording 5 seconds after receiving a decision
+	// Stop recording 2 seconds after receiving a decision
+	state.LastDecisionTime = time.Now().UnixNano() / int64(time.Millisecond)
 	go func() {
-		time.Sleep(5 * time.Second)
-		if err := videos.StopRecording(""); err != nil {
+		time.Sleep(2 * time.Second)
+		if err := videos.StopRecording(state.LastDecisionTime); err != nil {
 			logging.ErrorLogger.Printf("%v", err)
 		}
 		NotifyClients()

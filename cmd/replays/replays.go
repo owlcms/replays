@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -51,11 +52,13 @@ func main() {
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
 	label := widget.NewLabel("OWLCMS Jury Replays")
-	portLabel := widget.NewLabel(fmt.Sprintf("Listening on port %d", cfg.Port))
-	content := container.NewVBox(label, portLabel)
+	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
+	parsedURL, _ := url.Parse(urlStr)
+	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
+	content := container.NewVBox(label, hyperlink)
 
 	window.SetContent(content)
-	window.Resize(fyne.NewSize(800, 600))
+	window.Resize(fyne.NewSize(400, 200))
 	window.CenterOnScreen()
 
 	// Show the window before running the application
