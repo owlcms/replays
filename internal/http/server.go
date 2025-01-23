@@ -62,10 +62,19 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return files[i].Name() > files[j].Name()
 	})
 
+	// Count only valid video files (those starting with a date)
+	datePattern := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}`)
+	validFiles := make([]os.DirEntry, 0)
+	for _, file := range files {
+		if !file.IsDir() && datePattern.MatchString(file.Name()) {
+			validFiles = append(validFiles, file)
+		}
+	}
+
 	showAll := r.URL.Query().Get("showAll") == "true"
-	fileCount := len(files)
+	fileCount := len(validFiles)
 	if !showAll && fileCount > 20 {
-		files = files[:20]
+		validFiles = validFiles[:20]
 	}
 
 	fmt.Fprintf(w, `
@@ -81,25 +90,32 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 					if (document.visibilityState === 'visible') {
 						reloadPage();
 					}
-				});
-1				setInterval(reloadPage, 10000); // Reload every 10 seconds
+					});
+				setInterval(reloadPage, 10000); // Reload every 10 seconds
 			</script>
 		</head>
 		<body>
 			<h1>Replays</h1>
-			<ul>
 	`)
+
+	if showAll {
+		fmt.Fprintf(w, `<div class="showAll"><a href="/">Show recent videos</a></div>`)
+	} else {
+		fmt.Fprintf(w, `<div class="showAll"><a href="/?showAll=true">Show All (%d videos)</a></div>`, fileCount)
+	}
+
+	fmt.Fprintf(w, `<ul>`)
 
 	// Regex to extract date, hour, name, lift type, and attempt
 	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CJ|Snatch)_attempt(\d+)(?:_\d+)?\.mp4$`)
 
-	for _, file := range files {
+	// Use validFiles instead of files for the loop
+	for _, file := range validFiles {
 		if !file.IsDir() {
 			fileName := file.Name()
 			// Replace Clean_and_Jerk with CJ
 			fileName = strings.ReplaceAll(fileName, "Clean_and_Jerk", "CJ")
 			matches := re.FindStringSubmatch(fileName)
-			logging.InfoLogger.Printf("Matches: %v", matches) // Log the matches
 			if len(matches) == 6 {
 				date := matches[1]
 				hourMinuteSeconds := matches[2]
@@ -119,7 +135,7 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !showAll && fileCount > 20 {
-		fmt.Fprintf(w, `<li><a href="/?showAll=true">Show all</a></li>`)
+		fmt.Fprintf(w, `<li><a href="/?showAll=true">List all replays</a></li>`)
 	}
 
 	fmt.Fprintf(w, `

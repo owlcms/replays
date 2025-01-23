@@ -31,3 +31,20 @@ a {
 a:hover {
 	text-decoration: underline;
 }
+
+.showAll {
+    text-align: center;
+    margin: 1em 0;
+}
+
+.showAll a {
+    padding: 0.5em 1em;
+    background-color: #007bff;
+    color: white;
+    border-radius: 3px;
+}
+
+.showAll a:hover {
+    background-color: #0056b3;
+    text-decoration: none;
+}
