@@ -14,11 +14,16 @@ import (
 	"github.com/owlcms/replays/internal/logging"
 )
 
-var currentRecording *exec.Cmd
-var currentFileName string
-var startTimeMillis string
-var noVideo bool
-var videoDir string
+var (
+	currentRecording *exec.Cmd
+	currentFileName  string
+	startTimeMillis  string
+	noVideo          bool
+	videoDir         string
+	width            int
+	height           int
+	fps              int
+)
 
 // SetNoVideo sets the noVideo flag
 func SetNoVideo(value bool) {
@@ -28,6 +33,13 @@ func SetNoVideo(value bool) {
 // SetVideoDir sets the video directory
 func SetVideoDir(dir string) {
 	videoDir = dir
+}
+
+// SetVideoConfig sets the video configuration parameters
+func SetVideoConfig(w, h, f int) {
+	width = w
+	height = h
+	fps = f
 }
 
 // StartRecording starts recording a video using ffmpeg
@@ -55,10 +67,16 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int, startMillis
 
 	var cmd *exec.Cmd
 	if noVideo {
-		cmd = exec.Command("ffmpeg", "-y", "-f", "v4l2", "-i", "/dev/video0", fileName)
+		cmd = exec.Command("ffmpeg", "-y", "-f", "v4l2",
+			"-video_size", fmt.Sprintf("%dx%d", width, height),
+			"-framerate", fmt.Sprintf("%d", fps),
+			"-i", "/dev/video0", fileName)
 		logging.InfoLogger.Printf("Simulating start recording video: %s", fileName)
 	} else {
-		cmd = exec.Command("ffmpeg", "-y", "-f", "v4l2", "-i", "/dev/video0", fileName)
+		cmd = exec.Command("ffmpeg", "-y", "-f", "v4l2",
+			"-video_size", fmt.Sprintf("%dx%d", width, height),
+			"-framerate", fmt.Sprintf("%d", fps),
+			"-i", "/dev/video0", fileName)
 		logging.InfoLogger.Printf("%s", cmd.String())
 	}
 

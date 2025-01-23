@@ -1,0 +1,12 @@
+# HTTP server port
+port = 8080
+
+# Directory to store video files
+videoDir = "videos"
+
+# Video resolution
+width = 1280
+height = 720
+
+# Frames per second
+fps = 30

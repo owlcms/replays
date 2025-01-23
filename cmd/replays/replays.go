@@ -35,8 +35,9 @@ func main() {
 
 	cfg := config.LoadConfig()
 
-	// Set the videoDir in the videos package
+	// Set the videoDir and video configuration in the videos package
 	videos.SetVideoDir(cfg.VideoDir)
+	videos.SetVideoConfig(cfg.Width, cfg.Height, cfg.FPS)
 
 	// Channel to listen for interrupt signals
 	sigChan := make(chan os.Signal, 1)
