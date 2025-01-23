@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -16,9 +15,9 @@ type Config struct {
 	Width        int    `toml:"width"`  // Video width in pixels
 	Height       int    `toml:"height"` // Video height in pixels
 	FPS          int    `toml:"fps"`    // Frames per second
-	FfmpegPath   string
-	FfmpegCamera string
-	FfmpegFormat string
+	FfmpegPath   string `toml:"ffmpegPath"`
+	FfmpegCamera string `toml:"ffmpegCamera"`
+	FfmpegFormat string `toml:"ffmpegFormat"`
 }
 
 func isWSL() bool {
@@ -36,31 +35,49 @@ func LoadConfig() Config {
 	config.Height = 720          // default height
 	config.FPS = 30              // default FPS
 
-	if _, err := os.Stat("env.properties"); err == nil {
-		if _, err := toml.DecodeFile("env.properties", &config); err != nil {
-			logging.ErrorLogger.Printf("Error reading env.properties: %v", err)
+	if _, err := os.Stat("config.toml"); err == nil {
+		if _, err := toml.DecodeFile("config.toml", &config); err != nil {
+			logging.ErrorLogger.Printf("Error reading config.toml: %v", err)
 		}
 	} else {
-		logging.WarningLogger.Println("env.properties file not found, using default configuration")
+		logging.WarningLogger.Println("config.toml file not found, using default configuration")
 	}
 
-	// Set ffmpeg defaults based on OS
-	switch {
-	case runtime.GOOS == "windows":
-		config.FfmpegPath = filepath.Clean("C:/ProgramData/chocolatey/bin/ffmpeg.exe")
-		config.FfmpegCamera = "video=OV01A"
-		config.FfmpegFormat = "dshow"
-	case isWSL():
-		config.FfmpegPath = "/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe"
-		config.FfmpegCamera = "video=OV01A"
-		config.FfmpegFormat = "dshow"
-	default: // Linux
-		config.FfmpegPath = "/usr/bin/ffmpeg"
-		config.FfmpegCamera = "/dev/video0"
-		config.FfmpegFormat = "v4l2"
+	if config.FfmpegPath == "" || config.FfmpegCamera == "" || config.FfmpegFormat == "" {
+		switch {
+		case runtime.GOOS == "windows":
+			if config.FfmpegPath == "" {
+				config.FfmpegPath = "'C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe'"
+			}
+			if config.FfmpegCamera == "" {
+				config.FfmpegCamera = "video=OV01A"
+			}
+			if config.FfmpegFormat == "" {
+				config.FfmpegFormat = "dshow"
+			}
+		case isWSL():
+			if config.FfmpegPath == "" {
+				config.FfmpegPath = "/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe"
+			}
+			if config.FfmpegCamera == "" {
+				config.FfmpegCamera = "video=OV01A"
+			}
+			if config.FfmpegFormat == "" {
+				config.FfmpegFormat = "dshow"
+			}
+		default: // Linux
+			if config.FfmpegPath == "" {
+				config.FfmpegPath = "/usr/bin/ffmpeg"
+			}
+			if config.FfmpegCamera == "" {
+				config.FfmpegCamera = "/dev/video0"
+			}
+			if config.FfmpegFormat == "" {
+				config.FfmpegFormat = "v4l2"
+			}
+		}
 	}
 
-	// Override from environment variables if present
 	if path := os.Getenv("FFMPEG_PATH"); path != "" {
 		config.FfmpegPath = path
 	}

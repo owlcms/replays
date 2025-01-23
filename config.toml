@@ -1,5 +1,5 @@
 # HTTP server port
-port = 8080
+port = 8091
 
 # Directory to store video files
 videoDir = "videos"
@@ -10,3 +10,18 @@ height = 720
 
 # Frames per second
 fps = 30
+
+# FFmpeg configuration - Windows defaults
+#ffmpegPath = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe'
+#ffmpegCamera = "video=OV01A"
+#ffmpegFormat = "dshow"
+
+# FFmpeg configuration - WSL defaults
+#ffmpegPath = "/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe"
+#ffmpegCamera = "video=OV01A"
+#ffmpegFormat = "dshow"
+
+# FFmpeg configuration - Linux defaults
+#ffmpegPath = "/usr/bin/ffmpeg"
+#ffmpegCamera = "/dev/video0"
+#ffmpegFormat = "v4l2"

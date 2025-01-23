@@ -40,3 +40,7 @@ videos/
 
 # Other
 *.mp4
+fyne-cross/
+
+# Log files
+*.log
