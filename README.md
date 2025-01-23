@@ -1,4 +1,4 @@
-## Simple Jury Replays for owlcms
+# Simple Jury Replays for owlcms
 
 This project aims to capture jury replay videos as instructed by the owlcms software.
 The program listens to events pushed over http using the same json contents as used for the publicresults and wise-eyes modules.
@@ -6,7 +6,7 @@ ffmpeg is used to capture the videos.
 
 The target platforms are the Raspberry Pi with v4l2 and Windows laptops with gdigrab.
 
-## Project Structure
+### Project Structure
 
 - `cmd/replays`: Main application entry point
 - `internal/`: Private application code
@@ -18,7 +18,7 @@ The target platforms are the Raspberry Pi with v4l2 and Windows laptops with gdi
 - `scripts/`: Build and deployment scripts
 - `test/`: Additional test files
 
-## Getting Started
+### Running in IDE
 
 ```bash
 # Run the application
