@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/signal"
@@ -20,12 +21,14 @@ import (
 
 var verbose bool
 var noVideo bool
+var sigChan = make(chan os.Signal, 1)
 
 func main() {
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
 
 	// Parse command-line flags
+	configFile := flag.String("config", "config.toml", "path to configuration file")
 	flag.BoolVar(&verbose, "v", false, "enable verbose logging")
 	flag.BoolVar(&verbose, "verbose", false, "enable verbose logging")
 	flag.BoolVar(&noVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
@@ -34,20 +37,16 @@ func main() {
 	// Initialize loggers
 	logging.Init()
 
+	// Load configuration
+	cfg, err := config.LoadConfig(*configFile)
+	if err != nil {
+		log.Fatalf("Error loading configuration: %v", err)
+	}
+
 	// Set the noVideo flag in the videos package
 	videos.SetNoVideo(noVideo)
 
-	cfg := config.LoadConfig()
-
-	// Set the videoDir and video configuration in the videos package
-	videos.SetVideoDir(cfg.VideoDir)
-	videos.SetVideoConfig(cfg.Width, cfg.Height, cfg.FPS)
-	videos.SetFfmpegConfig(cfg.FfmpegPath, cfg.FfmpegCamera, cfg.FfmpegFormat)
-
-	// Channel to listen for interrupt signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
+	// Start HTTP server
 	go func() {
 		http.StartServer(cfg.Port, verbose)
 	}()
@@ -67,6 +66,9 @@ func main() {
 
 	// Show the window before running the application
 	window.Show()
+
+	// Initialize signal handling
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	// Goroutine to handle interrupt signals
 	go func() {

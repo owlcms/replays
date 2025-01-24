@@ -1,0 +1,33 @@
+# HTTP server port
+port = 8091
+
+# Directory to store video files
+videoDir = 'videos'
+
+# Video resolution
+width = 1280
+height = 720
+
+# Frames per second
+fps = 30
+
+# Platform-specific FFmpeg configurations
+
+[linux]
+ffmpegPath = '/usr/bin/ffmpeg'
+ffmpegCamera = '/dev/video0'
+ffmpegFormat = 'v4l2'
+
+[windows]
+# To find the camera name use:
+#   ffmpeg -f dshow -list_devices true -i dummy
+ffmpegPath = 'hiddenffmpeg.exe'
+ffmpegCamera = 'video=OV01A'
+ffmpegFormat = 'dshow'
+
+[wsl]
+# To find the camera name use:
+#   ffmpeg -f dshow -list_devices true -i dummy
+ffmpegPath = '/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe'
+ffmpegCamera = 'video=OV01A'
+ffmpegFormat = 'dshow'
