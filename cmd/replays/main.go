@@ -58,11 +58,27 @@ func main() {
 	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
 	parsedURL, _ := url.Parse(urlStr)
 	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
-	content := container.NewVBox(label, hyperlink)
+
+	// Add status label
+	statusLabel := widget.NewLabel("Ready")
+	content := container.NewVBox(
+		label,
+		hyperlink,
+		widget.NewSeparator(),
+		statusLabel,
+	)
 
 	window.SetContent(content)
 	window.Resize(fyne.NewSize(400, 200))
 	window.CenterOnScreen()
+
+	// Status update goroutine
+	go func() {
+		for status := range videos.StatusChan {
+			// Update status in UI thread
+			statusLabel.SetText(status)
+		}
+	}()
 
 	// Show the window before running the application
 	window.Show()

@@ -1,6 +1,7 @@
 package videos
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/state"
+	"github.com/owlcms/replays/internal/status"
 )
 
 var (
@@ -19,8 +21,24 @@ var (
 	currentFileName  string
 )
 
+// SendStatus sends a status update with code and message
+func SendStatus(code string, text string) {
+	msg := status.Message{
+		Code: code,
+		Text: text,
+	}
+	if data, err := json.Marshal(msg); err == nil {
+		sendWebSocketMessage(string(data))
+	}
+}
+
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
+	// Update state
+	state.CurrentAthlete = fullName
+	state.CurrentLiftType = liftTypeKey
+	state.CurrentAttempt = attemptNumber
+
 	// Ensure the video directory exists
 	if err := os.MkdirAll(VideoDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create video directory: %w", err)
@@ -83,6 +101,12 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	currentFileName = fileName
 	state.LastTimerStopTime = 0
 
+	// Update status with spaces instead of underscores
+	SendStatus(status.Recording, fmt.Sprintf("%s - %s attempt %d",
+		strings.ReplaceAll(fullName, "_", " "),
+		liftTypeKey,
+		attemptNumber))
+
 	logging.InfoLogger.Printf("Started recording video: %s", fileName)
 	return nil
 }
@@ -119,6 +143,14 @@ func StopRecording(decisionTime int64) error {
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
 	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))] // Remove the millis timestamp
 	finalFileName := filepath.Join(VideoDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
+
+	// Use state information instead of parsing filename
+	attemptInfo := fmt.Sprintf("%s - %s attempt %d",
+		strings.ReplaceAll(state.CurrentAthlete, "_", " "),
+		state.CurrentLiftType,
+		state.CurrentAttempt)
+
+	SendStatus(status.Trimming, fmt.Sprintf("Trimming video: %s", attemptInfo))
 
 	var err error
 	if startTime == 0 {
@@ -168,6 +200,8 @@ func StopRecording(decisionTime int64) error {
 			return fmt.Errorf("failed to remove untrimmed video file: %w", err)
 		}
 	}
+
+	SendStatus(status.Ready, fmt.Sprintf("Video ready: %s", attemptInfo))
 
 	logging.InfoLogger.Printf("Stopped recording and saved video: %s", finalFileName)
 	currentRecording = nil

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video List</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <h1>Video List</h1>
+    <div class="video-list">
+        {{range .Videos}}
+        <div class="video-item">
+            <a href="/videos/{{.Filename}}" class="video-link" target="_blank">{{.DisplayName}}</a>
+        </div>
+        {{end}}
+    </div>
+    {{if not .ShowAll}}
+        {{if gt .TotalCount 20}}
+            <p><a href="/?showAll=true">Show all {{.TotalCount}} videos</a></p>
+        {{end}}
+    {{else}}
+        <p><a href="/">Show recent videos only</a></p>
+    {{end}}
+
+    <script>
+        const ws = new WebSocket('ws://' + window.location.host + '/ws');
+        let hideTimeout;
+        function handleStatusUpdate(message) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = message;
+            
+            // Clear any existing timeout
+            if (hideTimeout) {
+                clearTimeout(hideTimeout);
+            }
+            
+            // If it's a "Video ready" message, set a timeout to clear it
+            if (message.startsWith('Video ready:')) {
+                hideTimeout = setTimeout(() => {
+                    statusElement.textContent = '';
+                }, 10000); // 10 seconds
+            }
+        }
+
+        // Update the WebSocket message handler
+        ws.onmessage = function(event) {
+            if (event.data === 'reload') {
+                location.reload();
+            } else {
+                handleStatusUpdate(event.data);
+            }
+        };
+    </script>
+</body>
+</html>

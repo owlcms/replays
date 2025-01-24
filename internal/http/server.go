@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -284,6 +285,12 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 	// Stop recording 2 seconds after receiving a decision
 	state.LastDecisionTime = time.Now().UnixNano() / int64(time.Millisecond)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Recovered from panic in decision handler: %v", r)
+			}
+		}()
+
 		time.Sleep(2 * time.Second)
 		if err := videos.StopRecording(state.LastDecisionTime); err != nil {
 			logging.ErrorLogger.Printf("%v", err)
