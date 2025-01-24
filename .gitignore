@@ -45,3 +45,4 @@ fyne-cross/
 # Log files
 *.log
 
+config.toml
