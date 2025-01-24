@@ -110,16 +110,41 @@ func StopRecording(decisionTime int64) error {
 	if NoVideo {
 		logging.InfoLogger.Printf("Simulating stop recording video: %s", currentFileName)
 	} else {
-		// Stop the recording using stdin
-		logging.InfoLogger.Println("Sending 'q' to ffmpeg to stop recording")
-		if _, err := currentStdin.Write([]byte("q")); err != nil {
-			return fmt.Errorf("failed to send quit command: %w", err)
+		// Stop the recording gracefully first
+		logging.InfoLogger.Println("Attempting to stop ffmpeg gracefully...")
+		if _, err := currentStdin.Write([]byte("q\n")); err != nil { // Added \n after q
+			logging.InfoLogger.Printf("Could not write 'q' to ffmpeg (this is normal if process exited): %v", err)
 		}
 
-		// Close stdin and wait for the process to finish
-		currentStdin.Close()
-		if err := currentRecording.Wait(); err != nil {
-			return fmt.Errorf("failed to wait for ffmpeg to finish: %w", err)
+		// Wait a moment to ensure the quit command is processed
+		time.Sleep(100 * time.Millisecond)
+
+		// Close stdin pipe
+		if err := currentStdin.Close(); err != nil {
+			logging.InfoLogger.Printf("Could not close stdin (this is normal if process exited): %v", err)
+		}
+
+		// Give ffmpeg a moment to exit gracefully
+		done := make(chan error, 1)
+		go func() {
+			done <- currentRecording.Wait()
+		}()
+
+		// Wait up to 2 seconds for graceful exit
+		select {
+		case err := <-done:
+			if err != nil {
+				logging.InfoLogger.Printf("ffmpeg exited with error (this is normal): %v", err)
+			} else {
+				logging.InfoLogger.Println("ffmpeg stopped gracefully")
+			}
+		case <-time.After(2 * time.Second):
+			logging.InfoLogger.Println("ffmpeg did not stop gracefully, killing process...")
+			if err := currentRecording.Process.Kill(); err != nil {
+				if !strings.Contains(err.Error(), "process already finished") {
+					return fmt.Errorf("failed to kill ffmpeg process: %w", err)
+				}
+			}
 		}
 	}
 
@@ -157,8 +182,7 @@ func StopRecording(decisionTime int64) error {
 			recode := false
 			args := []string{"-y"}
 			if recode {
-				args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000),
-					"-i", currentFileName,
+				args = append(args, "-i", currentFileName,
 					"-c:v", "libx264",
 					"-crf", "18",
 					"-preset", "medium",
@@ -166,11 +190,13 @@ func StopRecording(decisionTime int64) error {
 					"-pix_fmt", "yuv420p",
 					finalFileName)
 			} else {
-				args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000),
-					"-i", currentFileName,
-					"-c", "copy",
-					finalFileName)
+				args = append(args, "-i", currentFileName)
+				if trimDuration > 0 {
+					args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
+				}
+				args = append(args, "-c", "copy", finalFileName)
 			}
+
 			cmd = exec.Command(FfmpegPath, args...)
 			if i == 0 {
 				logging.InfoLogger.Printf("Executing trim command: %s %s", FfmpegPath, strings.Join(args, " "))
