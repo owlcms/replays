@@ -11,6 +11,9 @@ height = 720
 # Frames per second
 fps = 30
 
+# Video processing options
+recode = trye     # true = recode using libx264, false = copy streams without recompression
+
 # Platform-specific FFmpeg configurations
 
 [linux]

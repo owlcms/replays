@@ -18,6 +18,7 @@ type Config struct {
 	Width    int    `toml:"width"`
 	Height   int    `toml:"height"`
 	Fps      int    `toml:"fps"`
+	Recode   bool   `toml:"recode"` // Add recode option
 
 	// Platform-specific configurations
 	Linux   FFmpegConfig `toml:"linux"`
@@ -82,6 +83,24 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	logging.InfoLogger.Printf("Loaded configuration from %s for platform %s", configFile, getPlatformName())
 	return &config, nil
+}
+
+// ValidateCamera checks if camera configuration is correct for the platform
+func (c *Config) ValidateCamera() error {
+	// Get current OS
+	os := runtime.GOOS
+
+	// Check camera config for Windows and WSL
+	if os == "windows" {
+		if !strings.HasPrefix(c.Windows.FfmpegCamera, "video=") {
+			return fmt.Errorf("windows camera name must start with 'video=', current: %s", c.Windows.FfmpegCamera)
+		}
+	} else if os == "linux" && isWSL() {
+		if !strings.HasPrefix(c.WSL.FfmpegCamera, "video=") {
+			return fmt.Errorf("wsl camera name must start with 'video=', current: %s", c.WSL.FfmpegCamera)
+		}
+	}
+	return nil
 }
 
 // isWSL checks if we're running under Windows Subsystem for Linux

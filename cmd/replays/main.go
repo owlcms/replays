@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,8 +46,17 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	// Set the noVideo flag in the videos package
+	// Validate camera configuration and set initial status
+	var initialStatus string
+	if err := cfg.ValidateCamera(); err != nil {
+		initialStatus = "Error: " + err.Error()
+	} else {
+		initialStatus = "Ready"
+	}
+
+	// Set the noVideo flag and recode option in the videos package
 	videos.SetNoVideo(noVideo)
+	videos.SetRecode(cfg.Recode)
 
 	// Start HTTP server
 	go func() {
@@ -61,14 +71,19 @@ func main() {
 	parsedURL, _ := url.Parse(urlStr)
 	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
 
-	// Add status label
-	statusLabel := widget.NewLabel("Ready")
-	content := container.NewVBox(
+	// Add status label with initial status (bold for errors)
+	statusLabel := widget.NewLabel(initialStatus)
+	statusLabel.Wrapping = fyne.TextWrapWord
+	if strings.HasPrefix(initialStatus, "Error:") {
+		statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+	}
+
+	content := container.NewPadded(container.NewVBox(
 		label,
 		hyperlink,
 		widget.NewSeparator(),
 		statusLabel,
-	)
+	))
 
 	window.SetContent(content)
 	window.Resize(fyne.NewSize(400, 200))
@@ -78,18 +93,23 @@ func main() {
 	go func() {
 		var hideTimer *time.Timer
 		for msg := range status.StatusChan {
-			// Cancel any existing timer
 			if hideTimer != nil {
 				hideTimer.Stop()
 			}
 
-			// Update status in UI thread
+			// Update status text and style
 			statusLabel.SetText(msg.Text)
+			statusLabel.TextStyle = fyne.TextStyle{
+				Bold: strings.HasPrefix(msg.Text, "Error:"),
+			}
+			statusLabel.Refresh()
 
 			// Auto-hide Ready messages after 10 seconds
 			if msg.Code == status.Ready {
 				hideTimer = time.AfterFunc(10*time.Second, func() {
-					statusLabel.SetText("")
+					statusLabel.SetText("Ready")
+					statusLabel.TextStyle = fyne.TextStyle{Bold: false}
+					statusLabel.Refresh()
 				})
 			}
 		}

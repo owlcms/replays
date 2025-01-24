@@ -18,7 +18,13 @@ var (
 	currentRecording *exec.Cmd
 	currentStdin     *os.File
 	currentFileName  string
+	recode           bool // Add recode variable
 )
+
+// SetRecode sets the recode option
+func SetRecode(r bool) {
+	recode = r
+}
 
 // Remove the duplicated SendStatus function
 
@@ -179,9 +185,11 @@ func StopRecording(decisionTime int64) error {
 		// 5 attempts -- ffmpeg will fail if the input file has not been closed by the previous command
 		for i := 0; i < 5; i++ {
 			var cmd *exec.Cmd
-			recode := false
 			args := []string{"-y"}
 			if recode {
+				if trimDuration > 0 {
+					args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
+				}
 				args = append(args, "-i", currentFileName,
 					"-c:v", "libx264",
 					"-crf", "18",
@@ -190,11 +198,13 @@ func StopRecording(decisionTime int64) error {
 					"-pix_fmt", "yuv420p",
 					finalFileName)
 			} else {
-				args = append(args, "-i", currentFileName)
+				// Put -ss before -i for better seeking
 				if trimDuration > 0 {
 					args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
 				}
-				args = append(args, "-c", "copy", finalFileName)
+				args = append(args, "-i", currentFileName,
+					"-c", "copy",
+					finalFileName)
 			}
 
 			cmd = exec.Command(FfmpegPath, args...)
