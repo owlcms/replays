@@ -4,31 +4,47 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 )
 
 var (
-	// InfoLogger is used for informational messages
-	InfoLogger *log.Logger
-	// WarningLogger is used for warning messages
+	InfoLogger    *log.Logger
 	WarningLogger *log.Logger
-	// ErrorLogger is used for error messages
-	ErrorLogger *log.Logger
+	ErrorLogger   *log.Logger
+	logFile       *os.File
 )
 
 // Init initializes the loggers
 func Init() {
 	// Create or append to log file
-	logFile, err := os.OpenFile("replays.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	var err error
+	logFile, err = os.OpenFile("replays.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		log.Fatal("Failed to open log file: ", err)
 	}
 
-	// Create multi-writers that write to both console and file
-	infoWriter := io.MultiWriter(os.Stdout, logFile)
-	errorWriter := io.MultiWriter(os.Stderr, logFile)
+	// Initialize writers based on platform
+	var infoWriter, warnWriter, errorWriter io.Writer
+	if runtime.GOOS == "windows" {
+		// Windows: write only to file
+		infoWriter = logFile
+		warnWriter = logFile
+		errorWriter = logFile
+	} else {
+		// Linux/WSL: write to both console and file
+		infoWriter = io.MultiWriter(os.Stdout, logFile)
+		warnWriter = io.MultiWriter(os.Stdout, logFile)
+		errorWriter = io.MultiWriter(os.Stderr, logFile)
+	}
 
-	// Initialize loggers with appropriate prefixes and flags
-	InfoLogger = log.New(infoWriter, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
-	WarningLogger = log.New(infoWriter, "WARNING: ", log.Ldate|log.Ltime|log.Lshortfile)
-	ErrorLogger = log.New(errorWriter, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
+	// Initialize loggers with timestamps and source file info
+	flags := log.Ldate | log.Ltime | log.Lshortfile
+	InfoLogger = log.New(infoWriter, "INFO: ", flags)
+	WarningLogger = log.New(warnWriter, "WARN: ", flags)
+	ErrorLogger = log.New(errorWriter, "ERROR: ", flags)
+
+	// Register cleanup on program exit
+	if cleanup := os.Getenv("CLEANUP_ON_EXIT"); cleanup != "" {
+		defer logFile.Close()
+	}
 }

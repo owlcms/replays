@@ -183,7 +183,7 @@ func StopRecording(decisionTime int64) error {
 				break
 			}
 			if i == 4 {
-				return fmt.Errorf("Failed to open input video after 5 attempts: %w", err)
+				return fmt.Errorf("failed to open input video after 5 attempts: %w", err)
 			}
 		}
 		if err = os.Remove(currentFileName); err != nil {

@@ -47,7 +47,7 @@ func LoadConfig() Config {
 		switch {
 		case runtime.GOOS == "windows":
 			if config.FfmpegPath == "" {
-				config.FfmpegPath = "'C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe'"
+				config.FfmpegPath = "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe"
 			}
 			if config.FfmpegCamera == "" {
 				config.FfmpegCamera = "video=OV01A"
