@@ -4,12 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-
 	"path/filepath"
 	"strconv"
-	"time"
-
 	"strings"
+	"time"
 
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/state"
@@ -19,51 +17,19 @@ var (
 	currentRecording *exec.Cmd
 	currentStdin     *os.File
 	currentFileName  string
-	noVideo          bool
-	videoDir         string
-	width            int
-	height           int
-	fps              int
-	ffmpegPath       string
-	ffmpegCamera     string
-	ffmpegFormat     string
 )
-
-// SetNoVideo sets the noVideo flag
-func SetNoVideo(value bool) {
-	noVideo = value
-}
-
-// SetVideoDir sets the video directory
-func SetVideoDir(dir string) {
-	videoDir = dir
-}
-
-// SetVideoConfig sets the video configuration parameters
-func SetVideoConfig(w, h, f int) {
-	width = w
-	height = h
-	fps = f
-}
-
-// SetFfmpegConfig sets the ffmpeg configuration parameters
-func SetFfmpegConfig(path, camera, format string) {
-	ffmpegPath = path
-	ffmpegCamera = camera
-	ffmpegFormat = format
-}
 
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	// Ensure the video directory exists
-	if err := os.MkdirAll(videoDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(VideoDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create video directory: %w", err)
 	}
 
 	// Replace blanks in fullName with underscores
 	fullName = strings.ReplaceAll(fullName, " ", "_")
 
-	fileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
+	fileName := filepath.Join(VideoDir, fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
 
 	// If there is an ongoing recording, stop it and discard the file
 	if currentRecording != nil {
@@ -77,21 +43,21 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	}
 
 	var cmd *exec.Cmd
-	if noVideo {
-		cmd = exec.Command(ffmpegPath, "-y", "-f", ffmpegFormat,
-			"-video_size", fmt.Sprintf("%dx%d", width, height),
-			"-framerate", fmt.Sprintf("%d", fps),
-			"-i", ffmpegCamera, fileName)
+	if NoVideo {
+		cmd = exec.Command(FfmpegPath, "-y", "-f", FfmpegFormat,
+			"-video_size", fmt.Sprintf("%dx%d", Width, Height),
+			"-framerate", fmt.Sprintf("%d", Fps),
+			"-i", FfmpegCamera, fileName)
 		logging.InfoLogger.Printf("Simulating start recording video: %s", fileName)
 	} else {
-		cmd = exec.Command(ffmpegPath, "-y", "-f", ffmpegFormat,
-			"-video_size", fmt.Sprintf("%dx%d", width, height),
-			"-framerate", fmt.Sprintf("%d", fps),
-			"-i", ffmpegCamera, fileName)
+		cmd = exec.Command(FfmpegPath, "-y", "-f", FfmpegFormat,
+			"-video_size", fmt.Sprintf("%dx%d", Width, Height),
+			"-framerate", fmt.Sprintf("%d", Fps),
+			"-i", FfmpegCamera, fileName)
 		logging.InfoLogger.Printf("%s", cmd.String())
 	}
 
-	if noVideo {
+	if NoVideo {
 		logging.InfoLogger.Printf("ffmpeg command: %s", cmd.String())
 		currentFileName = fileName
 		state.LastTimerStopTime = 0
@@ -120,11 +86,11 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 
 // StopRecording stops the current recording and trims the video
 func StopRecording(decisionTime int64) error {
-	if currentRecording == nil && !noVideo {
+	if currentRecording == nil && !NoVideo {
 		return fmt.Errorf("no ongoing recording to stop")
 	}
 
-	if noVideo {
+	if NoVideo {
 		logging.InfoLogger.Printf("Simulating stop recording video: %s", currentFileName)
 	} else {
 		// Stop the recording using stdin
@@ -149,12 +115,12 @@ func StopRecording(decisionTime int64) error {
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
 	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))] // Remove the millis timestamp
-	finalFileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
+	finalFileName := filepath.Join(VideoDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
 
 	var err error
 	if startTime == 0 {
 		logging.InfoLogger.Println("Start time is 0, not trimming the video")
-		if noVideo {
+		if NoVideo {
 			logging.InfoLogger.Printf("Simulating rename video: %s -> %s", currentFileName, finalFileName)
 		} else if err = os.Rename(currentFileName, finalFileName); err != nil {
 			return fmt.Errorf("failed to rename video file to %s: %w", finalFileName, err)
