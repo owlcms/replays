@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -16,9 +17,14 @@ var (
 
 // Init initializes the loggers
 func Init() {
-	// Create or append to log file
+	// Create logs directory if it doesn't exist
+	if err := os.MkdirAll("logs", os.ModePerm); err != nil {
+		log.Fatal(err)
+	}
+
+	// Open log file
 	var err error
-	logFile, err = os.OpenFile("replays.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logFile, err = os.OpenFile(filepath.Join("logs", "replays.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		log.Fatal("Failed to open log file: ", err)
 	}
@@ -26,10 +32,11 @@ func Init() {
 	// Initialize writers based on platform
 	var infoWriter, warnWriter, errorWriter io.Writer
 	if runtime.GOOS == "windows" {
-		// Windows: write only to file
-		infoWriter = logFile
-		warnWriter = logFile
-		errorWriter = logFile
+		// Windows: write to both console and file
+		multiWriter := io.MultiWriter(os.Stdout, logFile)
+		infoWriter = multiWriter
+		warnWriter = multiWriter
+		errorWriter = multiWriter
 	} else {
 		// Linux/WSL: write to both console and file
 		infoWriter = io.MultiWriter(os.Stdout, logFile)

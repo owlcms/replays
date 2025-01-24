@@ -1,6 +1,6 @@
 module github.com/owlcms/replays
 
-go 1.21
+go 1.23
 
 // Direct dependencies
 require fyne.io/fyne/v2 v2.5.3
@@ -41,4 +41,5 @@ require (
 require (
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
+	golang.org/x/sys v0.20.0
 )

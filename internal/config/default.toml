@@ -26,9 +26,7 @@ ffmpegFormat = 'v4l2'
 #   ffmpeg -f dshow -list_devices true -i dummy
 ffmpegCamera = 'video=Logitech Webcam C930e'
 #ffmpegCamera = 'video=OV01A'
-
-# for Windows, special ffmpeg is required to keep console hidden
-ffmpegPath = '.\hiddenffmpeg.exe'
+ffmpegPath = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe'
 ffmpegFormat = 'dshow'
 
 [wsl]
