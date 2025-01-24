@@ -43,18 +43,21 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	}
 
 	var cmd *exec.Cmd
+	args := []string{
+		"-y",               // Overwrite output files
+		"-f", FfmpegFormat, // Format
+		"-video_size", fmt.Sprintf("%dx%d", Width, Height),
+		"-framerate", fmt.Sprintf("%d", Fps),
+		"-i", FfmpegCamera,
+		fileName,
+	}
+
 	if NoVideo {
-		cmd = exec.Command(FfmpegPath, "-y", "-f", FfmpegFormat,
-			"-video_size", fmt.Sprintf("%dx%d", Width, Height),
-			"-framerate", fmt.Sprintf("%d", Fps),
-			"-i", FfmpegCamera, fileName)
+		cmd = exec.Command(FfmpegPath, args...)
 		logging.InfoLogger.Printf("Simulating start recording video: %s", fileName)
 	} else {
-		cmd = exec.Command(FfmpegPath, "-y", "-f", FfmpegFormat,
-			"-video_size", fmt.Sprintf("%dx%d", Width, Height),
-			"-framerate", fmt.Sprintf("%d", Fps),
-			"-i", FfmpegCamera, fileName)
-		logging.InfoLogger.Printf("%s", cmd.String())
+		cmd = exec.Command(FfmpegPath, args...)
+		logging.InfoLogger.Printf("Executing command: %s %s", FfmpegPath, strings.Join(args, " "))
 	}
 
 	if NoVideo {
@@ -130,16 +133,25 @@ func StopRecording(decisionTime int64) error {
 		for i := 0; i < 5; i++ {
 			var cmd *exec.Cmd
 			recode := false
+			args := []string{"-y"}
 			if recode {
-				cmd = exec.Command("ffmpeg", "-y", "-ss", fmt.Sprintf("%d", trimDuration/1000), "-i", currentFileName,
-					"-c:v", "libx264", "-crf", "18", "-preset", "medium", "-profile:v", "main", "-pix_fmt", "yuv420p",
+				args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000),
+					"-i", currentFileName,
+					"-c:v", "libx264",
+					"-crf", "18",
+					"-preset", "medium",
+					"-profile:v", "main",
+					"-pix_fmt", "yuv420p",
 					finalFileName)
 			} else {
-				cmd = exec.Command("ffmpeg", "-y", "-ss", fmt.Sprintf("%d", trimDuration/1000), "-i", currentFileName,
-					"-c", "copy", finalFileName)
+				args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000),
+					"-i", currentFileName,
+					"-c", "copy",
+					finalFileName)
 			}
+			cmd = exec.Command(FfmpegPath, args...)
 			if i == 0 {
-				logging.InfoLogger.Printf("%s", cmd.String())
+				logging.InfoLogger.Printf("Executing trim command: %s %s", FfmpegPath, strings.Join(args, " "))
 			}
 
 			if err = cmd.Run(); err != nil {

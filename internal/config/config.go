@@ -47,12 +47,13 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	// Determine platform and select appropriate ffmpeg config
 	var ffmpegConfig FFmpegConfig
-	switch {
-	case runtime.GOOS == "windows":
+	platform := strings.ToLower(getPlatformName())
+	switch platform {
+	case "windows":
 		ffmpegConfig = config.Windows
-	case isWSL():
+	case "wsl":
 		ffmpegConfig = config.WSL
-	default: // Linux
+	default: // linux
 		ffmpegConfig = config.Linux
 	}
 
@@ -60,6 +61,24 @@ func LoadConfig(configFile string) (*Config, error) {
 	videos.SetVideoDir(config.VideoDir)
 	videos.SetVideoConfig(config.Width, config.Height, config.Fps)
 	videos.SetFfmpegConfig(ffmpegConfig.FfmpegPath, ffmpegConfig.FfmpegCamera, ffmpegConfig.FfmpegFormat)
+
+	// Log all configuration parameters
+	logging.InfoLogger.Printf("Configuration loaded for platform %s:\n"+
+		"    Port: %d\n"+
+		"    VideoDir: %s\n"+
+		"    Resolution: %dx%d\n"+
+		"    FPS: %d\n"+
+		"    FFmpeg Path: %s\n"+
+		"    FFmpeg Camera: %s\n"+
+		"    FFmpeg Format: %s",
+		platform,
+		config.Port,
+		config.VideoDir,
+		config.Width, config.Height,
+		config.Fps,
+		ffmpegConfig.FfmpegPath,
+		ffmpegConfig.FfmpegCamera,
+		ffmpegConfig.FfmpegFormat)
 
 	logging.InfoLogger.Printf("Loaded configuration from %s for platform %s", configFile, getPlatformName())
 	return &config, nil
