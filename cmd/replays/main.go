@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -16,6 +17,7 @@ import (
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/http"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/status"
 	"github.com/owlcms/replays/internal/videos"
 )
 
@@ -74,9 +76,22 @@ func main() {
 
 	// Status update goroutine
 	go func() {
-		for status := range videos.StatusChan {
+		var hideTimer *time.Timer
+		for msg := range status.StatusChan {
+			// Cancel any existing timer
+			if hideTimer != nil {
+				hideTimer.Stop()
+			}
+
 			// Update status in UI thread
-			statusLabel.SetText(status)
+			statusLabel.SetText(msg.Text)
+
+			// Auto-hide Ready messages after 10 seconds
+			if msg.Code == status.Ready {
+				hideTimer = time.AfterFunc(10*time.Second, func() {
+					statusLabel.SetText("")
+				})
+			}
 		}
 	}()
 

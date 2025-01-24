@@ -1,7 +1,6 @@
 package videos
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,16 +20,7 @@ var (
 	currentFileName  string
 )
 
-// SendStatus sends a status update with code and message
-func SendStatus(code string, text string) {
-	msg := status.Message{
-		Code: code,
-		Text: text,
-	}
-	if data, err := json.Marshal(msg); err == nil {
-		sendWebSocketMessage(string(data))
-	}
-}
+// Remove the duplicated SendStatus function
 
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
@@ -102,7 +92,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	state.LastTimerStopTime = 0
 
 	// Update status with spaces instead of underscores
-	SendStatus(status.Recording, fmt.Sprintf("%s - %s attempt %d",
+	SendStatus(status.Recording, fmt.Sprintf("Recording: %s - %s attempt %d",
 		strings.ReplaceAll(fullName, "_", " "),
 		liftTypeKey,
 		attemptNumber))

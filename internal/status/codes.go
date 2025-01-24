@@ -11,3 +11,6 @@ type Message struct {
 	Code string `json:"code"`
 	Text string `json:"text"`
 }
+
+// StatusChan is used to send status updates to the UI
+var StatusChan = make(chan Message, 10)

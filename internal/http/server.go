@@ -14,22 +14,14 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/gorilla/websocket"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/state"
 	"github.com/owlcms/replays/internal/videos"
+	"github.com/owlcms/replays/internal/websocket"
 )
 
 var (
-	Server   *http.Server // Make server public
-	upgrader = websocket.Upgrader{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	}
-	clients   = make(map[*websocket.Conn]bool)
+	Server    *http.Server // Make server public
 	srv       *http.Server
 	verbose   bool
 	templates *template.Template
@@ -295,7 +287,7 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 		if err := videos.StopRecording(state.LastDecisionTime); err != nil {
 			logging.ErrorLogger.Printf("%v", err)
 		}
-		NotifyClients()
+		// Remove NotifyClients() from here - it will be called by SendStatus when video is ready
 	}()
 }
 
@@ -316,28 +308,17 @@ func StopServer() {
 	}
 }
 
-// NotifyClients sends a reload message to all connected WebSocket clients
-func NotifyClients() {
-	for client := range clients {
-		err := client.WriteMessage(websocket.TextMessage, []byte("reload"))
-		if err != nil {
-			client.Close()
-			delete(clients, client)
-		}
-	}
-}
-
 // handleWebSocket upgrades HTTP connection to WebSocket
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := websocket.Upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		logging.ErrorLogger.Printf("WebSocket upgrade failed: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	clients[conn] = true
-	defer delete(clients, conn)
+	websocket.Clients[conn] = true
+	defer delete(websocket.Clients, conn)
 
 	// Keep the connection alive
 	for {
