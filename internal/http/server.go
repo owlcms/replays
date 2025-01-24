@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"html/template"
 	"net/http"
 	"os"
 	"regexp"
@@ -27,33 +28,58 @@ var (
 			return true
 		},
 	}
-	clients = make(map[*websocket.Conn]bool)
+	clients   = make(map[*websocket.Conn]bool)
+	srv       *http.Server
+	verbose   bool
+	templates *template.Template
 )
 
+type VideoInfo struct {
+	Filename    string
+	DisplayName string
+}
+
+type TemplateData struct {
+	Videos     []VideoInfo
+	ShowAll    bool
+	TotalCount int
+}
+
+func init() {
+	// Load templates from embedded filesystem
+	var err error
+	templates, err = template.ParseFS(templateFiles, "templates/*.html")
+	if err != nil {
+		panic(err)
+	}
+}
+
 // StartServer starts the HTTP server on the specified port
-func StartServer(port int, verbose bool) {
-	r := mux.NewRouter()
+func StartServer(port int, verboseLogging bool) {
+	verbose = verboseLogging
+	router := mux.NewRouter()
+
+	// Serve static files from embedded filesystem
+	fileServer := http.FileServer(getFileSystem())
+	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fileServer))
 
 	// Serve video files
-	r.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir("videos"))))
+	router.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir("videos"))))
 
-	// Serve CSS files
-	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-
-	r.HandleFunc("/", listFilesHandler)
-	r.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/", listFilesHandler)
+	router.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
 		timerHandler(w, r, verbose)
 	})
-	r.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) { // Fix the undefined Request error
+	router.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) { // Fix the undefined Request error
 		decisionHandler(w, r, verbose)
 	})
-	r.HandleFunc("/update", updateHandler)
-	r.HandleFunc("/ws", handleWebSocket)
+	router.HandleFunc("/update", updateHandler)
+	router.HandleFunc("/ws", handleWebSocket)
 
 	addr := fmt.Sprintf(":%d", port)
 	Server = &http.Server{ // Use Server instead of server
 		Addr:    addr,
-		Handler: r,
+		Handler: router,
 	}
 
 	logging.InfoLogger.Printf("Starting HTTP server on %s\n", addr)
@@ -90,46 +116,10 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		validFiles = validFiles[:20]
 	}
 
-	fmt.Fprintf(w, `
-		<html>
-		<head>
-			<title>Video Files</title>
-			<link rel="stylesheet" type="text/css" href="/static/styles.css">
-			<script type="text/javascript">
-				function reloadPage() {
-					location.reload();
-				}
-				document.addEventListener('visibilitychange', function() {
-					if (document.visibilityState === 'visible') {
-						reloadPage();
-					}
-				});
-
-				// WebSocket connection
-				const ws = new WebSocket("ws://" + window.location.host + "/ws");
-				ws.onmessage = function(event) {
-					if (event.data === "reload") {
-						reloadPage();
-					}
-				};
-			</script>
-		</head>
-		<body>
-			<h1>Replays</h1>
-	`)
-
-	if showAll {
-		fmt.Fprintf(w, `<div class="showAll"><a href="/">Show recent videos</a></div>`)
-	} else {
-		fmt.Fprintf(w, `<div class="showAll"><a href="/?showAll=true">Show All (%d videos)</a></div>`, fileCount)
-	}
-
-	fmt.Fprintf(w, `<ul>`)
-
 	// Regex to extract date, hour, name, lift type, and attempt
 	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CJ|Snatch)_attempt(\d+)(?:_\d+)?\.mp4$`)
 
-	// Use validFiles instead of files for the loop
+	videos := make([]VideoInfo, 0)
 	for _, file := range validFiles {
 		if !file.IsDir() {
 			fileName := file.Name()
@@ -138,31 +128,29 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 			matches := re.FindStringSubmatch(fileName2)
 			if len(matches) == 6 {
 				date := matches[1]
-				hourMinuteSeconds := matches[2]
-				name := matches[3]
+				hourMinuteSeconds := strings.NewReplacer("h", ":", "m", ":", "s", "").Replace(matches[2])
+				name := strings.ReplaceAll(matches[3], "_", " ")
 				lift := matches[4]
 				attempt := matches[5]
-				// Fix the hour, minute, seconds to hh:mm:ss format
-				hourMinuteSeconds = strings.ReplaceAll(hourMinuteSeconds, "h", ":")
-				hourMinuteSeconds = strings.ReplaceAll(hourMinuteSeconds, "m", ":")
-				hourMinuteSeconds = strings.ReplaceAll(hourMinuteSeconds, "s", "")
-				// Change _ in the name with space
-				name = strings.ReplaceAll(name, "_", " ")
-				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s", date, hourMinuteSeconds, name, lift, attempt)
-				fmt.Fprintf(w, `<li><a href="/videos/%s" target="_blank" rel="noopener noreferrer">%s</a></li>`, fileName, displayName)
+				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s",
+					date, hourMinuteSeconds, name, lift, attempt)
+				videos = append(videos, VideoInfo{
+					Filename:    fileName,
+					DisplayName: displayName,
+				})
 			}
 		}
 	}
 
-	if !showAll && fileCount > 20 {
-		fmt.Fprintf(w, `<li><a href="/?showAll=true">List all replays</a></li>`)
+	data := TemplateData{
+		Videos:     videos,
+		ShowAll:    showAll,
+		TotalCount: fileCount,
 	}
 
-	fmt.Fprintf(w, `
-			</ul>
-		</body>
-		</html>
-	`)
+	if err := templates.ExecuteTemplate(w, "videolist.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // timerHandler handles the /timer endpoint

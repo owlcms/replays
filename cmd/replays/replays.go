@@ -22,6 +22,9 @@ var verbose bool
 var noVideo bool
 
 func main() {
+	// Disable Fyne telemetry
+	os.Setenv("FYNE_TELEMETRY", "0")
+
 	// Parse command-line flags
 	flag.BoolVar(&verbose, "v", false, "enable verbose logging")
 	flag.BoolVar(&verbose, "verbose", false, "enable verbose logging")
