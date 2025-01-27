@@ -1,6 +1,6 @@
 module github.com/owlcms/replays
 
-go 1.22
+go 1.19
 
 // Direct dependencies
 require (
