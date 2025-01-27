@@ -4,7 +4,7 @@
 go install github.com/fyne-io/fyne-cross@latest
 
 # Set the tag
-TAG=$1
+TAG=0.9.2-beta02
 
 # Extract the first two parts and the third number from the tag
 FIRST_TWO_PARTS=$(echo $TAG | awk -F. '{print $1"."$2}')
@@ -29,14 +29,11 @@ fi
 APP_VERSION="${FIRST_TWO_PARTS}.${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE}"
 echo "App version: $APP_VERSION THIRD_NUMBER: $THIRD_NUMBER MAPPED_RELEASE: $MAPPED_RELEASE PRE_RELEASE: $PRE_RELEASE"
 
-# Set the Go version for fyne-cross
-export FYNE_CROSS_GO_VERSION=1.23
-
 # Package the app for arm64
-fyne-cross linux --arch arm64 --go 1.23
+fyne-cross linux --arch arm64
 
 # Package the app for Windows
-fyne-cross windows --app-id app.owlcms.replays --app-version $APP_VERSION --go 1.21
+fyne-cross windows --app-id app.owlcms.replays --app-version $APP_VERSION
 
 # Determine if the release should be marked as a prerelease
 if [[ $TAG == *"-"* ]]; then
