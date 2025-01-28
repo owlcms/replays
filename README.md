@@ -5,14 +5,14 @@ This project aims to capture jury replay videos as instructed by the owlcms soft
 This version is primarily targeted at national/regional/multi-national events where a _single replay camera is sufficient_.
 (but it is of course possible to do the setup multiple times for multiple cameras)
 
-**Supported platforms:**
+## Supported platforms
 
 Download the program from the [release area](https://github.com/owlcms/replays/releases)
 
 - for Raspberry Pi : use the `replays` program
 - for Windows: use `replays.exe`
 
-**How to use**
+## How to use
 (after doing the setup steps shown down this page)
 
 - Start the replay application
@@ -40,17 +40,17 @@ Download the program from the [release area](https://github.com/owlcms/replays/r
     
     ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
 
-**owlcms Setup instructions:**
+## owlcms Setup instructions
 
 - Start the replay program and open the `Help` > `owlcms Configuration Settings` menu
 - In owlcms, set the `Language and System Settings` > `Connections` Video URL option to that value
 ![replays10](https://github.com/user-attachments/assets/7c8590b0-b477-4c12-bea3-925386d8e40a)
 
-**Raspberry Pi Initial Setup Instructions**
+## Raspberry Pi Initial Setup Instructions
 
 - No further actions required.  By default your camera will be on /dev/video0. 
 
-**Windows Initial Setup Instructions:**
+## Windows Initial Setup Instructions
 
 - The ffmpeg program is used for the actual recording, and is a prerequisite.
 
