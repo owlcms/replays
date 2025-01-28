@@ -28,6 +28,11 @@ func SetVideoDir(dir string) {
 	videoDir = dir
 }
 
+// GetVideoDir returns the absolute directory where videos are stored
+func GetVideoDir() string {
+	return videoDir
+}
+
 // SetRecode sets the recode option
 func SetRecode(value bool) {
 	recode = value

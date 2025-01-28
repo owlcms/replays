@@ -1,27 +1,8 @@
+**Instructions**
+
+For installation and usage instructions, see the main [README.md](https://github.com/owlcms/replays/blob/main/README.md) 
+
 **Supported platforms:**
 
 - for Raspberry Pi : use the `replays` program
 - for Windows: use `replays.exe`
-
-**Raspberry Pi instructions:**
-
-- no configuration required.  your video camera should be automatically detected as /dev/video0
-
-**Windows instructions:**
-
-- The ffmpeg program is used for the actual recording, and is a prerequisite.
-  - The simplest way to install is to use the command line and type 
-    ```
-    winget install ffmpeg
-    ```
-- ** log out ** and log back in to make sure the program is visible on your path.
-- You need to edit the config.toml file to put the name of your camera
-  - To get the name, use the command
-    ```
-    ffmpeg -f dshow -list_devices true -i dummy
-    ```
-  - In the configuration file, if your device is listed as `Logitech Webcam C930e` you must add `video=` before the name and use
-    ```
-    ffmpegCamera = 'video=Logitech Webcam C930e'
-    ```
-

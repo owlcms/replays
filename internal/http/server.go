@@ -22,7 +22,6 @@ import (
 
 var (
 	Server    *http.Server // Make server public
-	srv       *http.Server
 	verbose   bool
 	templates *template.Template
 )
@@ -57,7 +56,9 @@ func StartServer(port int, verboseLogging bool) {
 	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fileServer))
 
 	// Serve video files
-	router.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir("videos"))))
+	x := recording.GetVideoDir()
+	logging.InfoLogger.Printf("Serving video files from %s\n", x)
+	router.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir(x))))
 
 	router.HandleFunc("/", listFilesHandler)
 	router.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +84,7 @@ func StartServer(port int, verboseLogging bool) {
 
 // listFilesHandler lists all files in the videos directory as clickable hyperlinks
 func listFilesHandler(w http.ResponseWriter, r *http.Request) {
-	files, err := os.ReadDir("videos")
+	files, err := os.ReadDir(recording.GetVideoDir())
 	if err != nil {
 		http.Error(w, "Failed to read videos directory", http.StatusInternalServerError)
 		return
