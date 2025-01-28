@@ -15,15 +15,12 @@ import (
 
 // Config represents the configuration file structure
 type Config struct {
-	Port         int    `toml:"port"`
-	VideoDir     string `toml:"videoDir"`
-	Width        int    `toml:"width"`
-	Height       int    `toml:"height"`
-	Fps          int    `toml:"fps"`
-	Recode       bool   `toml:"recode"` // Add recode option
-	FfmpegPath   string
-	FfmpegCamera string
-	FfmpegFormat string
+	Port     int    `toml:"port"`
+	VideoDir string `toml:"videoDir"`
+	Width    int    `toml:"width"`
+	Height   int    `toml:"height"`
+	Fps      int    `toml:"fps"`
+	Recode   bool   `toml:"recode"`
 }
 
 // PlatformConfig represents platform-specific configurations
@@ -56,7 +53,10 @@ func LoadConfig(configFile string) (*Config, error) {
 		return nil, err
 	}
 
-	// Ensure VideoDir is absolute
+	// Ensure VideoDir is absolute and default to "videos" if not specified
+	if config.VideoDir == "" {
+		config.VideoDir = "videos"
+	}
 	if !filepath.IsAbs(config.VideoDir) {
 		config.VideoDir = filepath.Join(GetInstallDir(), config.VideoDir)
 	}
@@ -65,6 +65,9 @@ func LoadConfig(configFile string) (*Config, error) {
 	if err := os.MkdirAll(config.VideoDir, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("failed to create video directory: %w", err)
 	}
+
+	// Log the video directory
+	logging.InfoLogger.Printf("Videos will be stored in: %s", config.VideoDir)
 
 	// Platform-specific configurations
 	platform := getPlatformName()
@@ -103,8 +106,6 @@ func LoadConfig(configFile string) (*Config, error) {
 		recording.FfmpegPath,
 		recording.FfmpegCamera,
 		recording.FfmpegFormat)
-
-	logging.InfoLogger.Printf("Loaded configuration from %s for platform %s", configFile, getPlatformName())
 	return &config, nil
 }
 

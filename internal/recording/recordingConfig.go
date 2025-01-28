@@ -14,6 +14,8 @@ var (
 	Width        int
 	Height       int
 	Fps          int
+	videoDir     string
+	recode       bool
 )
 
 // SetNoVideo sets the noVideo flag
@@ -21,9 +23,14 @@ func SetNoVideo(value bool) {
 	NoVideo = value
 }
 
-// SetVideoDir sets the video directory
+// SetVideoDir sets the directory where videos will be stored
 func SetVideoDir(dir string) {
-	VideoDir = dir
+	videoDir = dir
+}
+
+// SetRecode sets the recode option
+func SetRecode(value bool) {
+	recode = value
 }
 
 // SetVideoConfig sets the video configuration parameters

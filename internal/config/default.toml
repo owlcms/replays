@@ -23,7 +23,7 @@ ffmpegFormat = 'v4l2'
 
 [windows]
 # To find the camera name use:
-#   ffmpeg -f dshow -list_devices true -i dummy
+#   ffmpeg -hide_banner -f dshow -list_devices true -i dummy
 # Must include  video=  before the name.
 ffmpegCamera = 'video=Logitech Webcam C930e'
 #ffmpegCamera = 'video=OV01A'
@@ -32,7 +32,7 @@ ffmpegFormat = 'dshow'
 
 [wsl]
 # To find the camera name use:
-#   ffmpeg -f dshow -list_devices true -i dummy
+#   ffmpeg -hide_banner -f dshow -list_devices true -i dummy
 # Must include  video=  before the name.
 ffmpegCamera = 'video=OV01A'
 ffmpegPath = '/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe'

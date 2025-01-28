@@ -18,15 +18,7 @@ var (
 	currentRecording *exec.Cmd
 	currentStdin     *os.File
 	currentFileName  string
-	recode           bool // Add recode variable
 )
-
-// SetRecode sets the recode option
-func SetRecode(r bool) {
-	recode = r
-}
-
-// Remove the duplicated SendStatus function
 
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
@@ -36,14 +28,14 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	state.CurrentAttempt = attemptNumber
 
 	// Ensure the video directory exists
-	if err := os.MkdirAll(VideoDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(videoDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create video directory: %w", err)
 	}
 
 	// Replace blanks in fullName with underscores
 	fullName = strings.ReplaceAll(fullName, " ", "_")
 
-	fileName := filepath.Join(VideoDir, fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
+	fileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
 
 	// If there is an ongoing recording, stop it and discard the file
 	if currentRecording != nil {
@@ -163,7 +155,7 @@ func StopRecording(decisionTime int64) error {
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
 	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))] // Remove the millis timestamp
-	finalFileName := filepath.Join(VideoDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
+	finalFileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
 
 	// Use state information instead of parsing filename
 	attemptInfo := fmt.Sprintf("%s - %s attempt %d",
