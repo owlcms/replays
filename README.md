@@ -3,6 +3,8 @@
 This project aims to capture jury replay videos as instructed by the owlcms software.
 The jury can, on their own, without external intervention, watch the replays using a web browser.
 
+As an additional benefit, this creates a full video archive of all the lifts in the competition, correctly labeled with the athlete,  attempt number and time of day.
+
 This version is primarily targeted at national/regional/multi-national events with a single replay camera.
 (but it is of course possible to do the setup multiple times for multiple cameras)
 
