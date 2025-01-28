@@ -26,9 +26,11 @@ This version is primarily targeted at national/regional/multi-national events wh
     
     ![replays50](https://github.com/user-attachments/assets/79201b88-701e-4884-a4d2-2f64b5ffcd5d)
 
-  - The replays app will then trim the video down to a bit before the actual lift (when the clock was last stopped) and show that it is available.
+  - After the decision is shown, the app trims the video down to remove the wait time before the actual lift (when the clock was last stopped).
 
     ![replay60](https://github.com/user-attachments/assets/4090f9ba-7671-41a8-95ba-07f30496944c)
+ 
+  - The video is shown as being available
 
     ![replays60](https://github.com/user-attachments/assets/5bd06703-42cc-4b9b-bb54-f008a813db96)
 
