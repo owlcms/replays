@@ -199,9 +199,9 @@ func StopRecording(decisionTime int64) error {
 					finalFileName)
 			}
 
-			cmd = exec.Command(FfmpegPath, args...)
+			cmd = createFfmpegCmd(args)
 			if i == 0 {
-				logging.InfoLogger.Printf("Executing trim command: %s %s", FfmpegPath, strings.Join(args, " "))
+				logging.InfoLogger.Printf("Executing trim command: %s", strings.Join(args, " "))
 			}
 
 			if err = cmd.Run(); err != nil {

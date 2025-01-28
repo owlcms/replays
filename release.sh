@@ -50,7 +50,7 @@ fyne-cross linux --arch arm64 --app-id app.owlcms.replays --app-version $APP_VER
 # Package the app for Windows
 fyne-cross windows --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays
 
-# Determine if the release should be marked as a prerelease
+# Determine if the release should be marked as a prereleasedo
 if [[ $TAG == *"-"* ]]; then
   PRERELEASE_FLAG="--prerelease"
 else
