@@ -1,8 +1,11 @@
-# Simple Jury Replays for owlcms
+# Self-service Jury Replays for owlcms
 
 This project aims to capture jury replay videos as instructed by the owlcms software.
+The jury can, on their own, without external intervention, watch the replays using a web browser.
 
-This version is primarily targeted at national/regional/multi-national events where a _single replay camera is sufficient_.
+As an additional benefit, this creates a full video archive of all the lifts in the competition, correctly labeled with the athlete,  attempt number and time of day.
+
+This version is primarily targeted at national/regional/multi-national events with a single replay camera.
 (but it is of course possible to do the setup multiple times for multiple cameras)
 
 ## Supported platforms
@@ -48,6 +51,7 @@ Download the program from the [release area](https://github.com/owlcms/replays/r
 
 ## Raspberry Pi Initial Setup Instructions
 
+- Right-click on the program.  Set the execution permissions to "anyone"
 - No further actions required.  By default your camera will be on /dev/video0. 
 
 ## Windows Initial Setup Instructions
