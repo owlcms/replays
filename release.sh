@@ -1,13 +1,11 @@
 #!/bin/bash
+TAG=0.9.2
 
-# Install the latest version of fyne-cross
-go install github.com/fyne-io/fyne-cross@latest
-
-# Set the tag
-TAG=0.9.2-beta02
 git tag -d  $TAG
 git push origin --delete $TAG
 gh release delete $TAG -y
+
+git add -am "$TAG"
 
 # Extract the first two parts and the third number from the tag
 FIRST_TWO_PARTS=$(echo $TAG | awk -F. '{print $1"."$2}')
