@@ -1,12 +1,10 @@
-package videos
+package recording
 
 import (
-	"os"
-	"path/filepath"
 	"runtime"
 )
 
-// Configuration variables exported for use within the videos package
+// Configuration variables exported for use within the recording package
 var (
 	FfmpegPath   string
 	FfmpegCamera string
@@ -39,12 +37,7 @@ func SetVideoConfig(w, h, f int) {
 func SetFfmpegConfig(path, camera, format string) {
 	if path == "" {
 		if runtime.GOOS == "windows" {
-			exePath, err := os.Executable()
-			if err == nil {
-				FfmpegPath = filepath.Join(filepath.Dir(exePath), "hiddenffmpeg.exe")
-			} else {
-				FfmpegPath = "ffmpeg"
-			}
+			FfmpegPath = "ffmpeg.exe"
 		} else {
 			FfmpegPath = "ffmpeg"
 		}

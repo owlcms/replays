@@ -15,8 +15,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/recording"
 	"github.com/owlcms/replays/internal/state"
-	"github.com/owlcms/replays/internal/videos"
 	"github.com/owlcms/replays/internal/websocket"
 )
 
@@ -201,7 +201,7 @@ func timerHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 
 	if athleteTimerEventType == "StartTime" {
 		state.LastStartTime = time.Now().UnixNano() / int64(time.Millisecond)
-		if err := videos.StartRecording(fullName, liftTypeKey, attemptNumber); err != nil {
+		if err := recording.StartRecording(fullName, liftTypeKey, attemptNumber); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to start recording: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -284,7 +284,7 @@ func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
 		}()
 
 		time.Sleep(2 * time.Second)
-		if err := videos.StopRecording(state.LastDecisionTime); err != nil {
+		if err := recording.StopRecording(state.LastDecisionTime); err != nil {
 			logging.ErrorLogger.Printf("%v", err)
 		}
 		// Remove NotifyClients() from here - it will be called by SendStatus when video is ready

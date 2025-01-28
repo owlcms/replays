@@ -1,6 +1,6 @@
 //go:build !windows
 
-package videos
+package recording
 
 import "os/exec"
 

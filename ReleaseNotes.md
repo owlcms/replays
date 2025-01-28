@@ -14,6 +14,7 @@
     ```
     winget install ffmpeg
     ```
+- ** log out ** and log back in to make sure the program is visible on your path.
 - You need to edit the config.toml file to put the name of your camera
   - To get the name, use the command
     ```

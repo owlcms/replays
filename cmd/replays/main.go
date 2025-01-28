@@ -3,12 +3,13 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -21,31 +22,18 @@ import (
 	"github.com/owlcms/replays/internal/http"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/status"
-	"github.com/owlcms/replays/internal/videos"
 )
 
-var verbose bool
-var noVideo bool
 var sigChan = make(chan os.Signal, 1)
 
 func main() {
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
 
-	// Parse command-line flags
-	configFile := flag.String("config", "config.toml", "path to configuration file")
-	flag.BoolVar(&verbose, "v", false, "enable verbose logging")
-	flag.BoolVar(&verbose, "verbose", false, "enable verbose logging")
-	flag.BoolVar(&noVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
-	flag.Parse()
-
-	// Initialize loggers
-	logging.Init()
-
-	// Load configuration
-	cfg, err := config.LoadConfig(*configFile)
+	// Process command-line flags and load configuration
+	cfg, err := config.InitConfig()
 	if err != nil {
-		log.Fatalf("Error loading configuration: %v", err)
+		log.Fatalf("Error processing flags: %v", err)
 	}
 
 	// Validate camera configuration and set initial status
@@ -56,22 +44,24 @@ func main() {
 		initialStatus = "Ready"
 	}
 
-	// Set the noVideo flag and recode option in the videos package
-	videos.SetNoVideo(noVideo)
-	videos.SetRecode(cfg.Recode)
-
 	// Start HTTP server
 	go func() {
-		http.StartServer(cfg.Port, verbose)
+		http.StartServer(cfg.Port, config.Verbose)
 	}()
 
 	myApp := app.New()
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
 	label := widget.NewLabel("OWLCMS Jury Replays")
+	label.TextStyle = fyne.TextStyle{Bold: true}
+
 	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
 	parsedURL, _ := url.Parse(urlStr)
 	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
+	portLabel := widget.NewLabel(fmt.Sprintf("Port: %d", cfg.Port))
+
+	// Create a horizontal container for the hyperlink and portLabel
+	horizontalContainer := container.NewHBox(hyperlink, portLabel)
 
 	// Add status label with initial status (bold for errors)
 	statusLabel := widget.NewLabel(initialStatus)
@@ -82,14 +72,24 @@ func main() {
 
 	content := container.NewPadded(container.NewVBox(
 		label,
-		hyperlink,
+		horizontalContainer, // Use the horizontal container here
 		widget.NewSeparator(),
 		statusLabel,
 	))
 
 	window.SetContent(content)
-	window.Resize(fyne.NewSize(400, 200))
+	window.Resize(fyne.NewSize(600, 400))
 	window.CenterOnScreen()
+
+	// Create main menu
+	mainMenu := fyne.NewMainMenu(
+		fyne.NewMenu("Files",
+			fyne.NewMenuItem("Open Application Directory", func() {
+				openApplicationDirectory()
+			}),
+		),
+	)
+	window.SetMainMenu(mainMenu)
 
 	// Status update goroutine
 	go func() {
@@ -132,4 +132,24 @@ func main() {
 	}()
 
 	window.ShowAndRun()
+}
+
+// openApplicationDirectory opens the application directory in the file explorer
+func openApplicationDirectory() {
+	dir := config.GetInstallDir()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", dir)
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	case "linux":
+		cmd = exec.Command("xdg-open", dir)
+	default:
+		log.Printf("Unsupported platform: %s", runtime.GOOS)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to open application directory: %v", err)
+	}
 }

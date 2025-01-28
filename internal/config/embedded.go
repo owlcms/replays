@@ -1,5 +1,8 @@
 package config
 
+// this package is used to extract the default config file if none exists
+// the default file default.toml is embedded in the binary by a go:embed directive
+
 import (
 	_ "embed"
 	"os"
