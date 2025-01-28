@@ -48,6 +48,7 @@ Download the program from the [release area](https://github.com/owlcms/replays/r
 
 ## Raspberry Pi Initial Setup Instructions
 
+- Right-click on the program.  Set the execution permissions to "anyone"
 - No further actions required.  By default your camera will be on /dev/video0. 
 
 ## Windows Initial Setup Instructions
