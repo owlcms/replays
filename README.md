@@ -32,12 +32,11 @@ This version is primarily targeted at national/regional/multi-national events wh
  
   - The video is shown as being available
 
-    ![replays60](https://github.com/user-attachments/assets/5bd06703-42cc-4b9b-bb54-f008a813db96)
+    ![image](https://github.com/user-attachments/assets/0e15e9d0-2b7a-49f8-bd21-66307c4f1437)
 
   - The replay app makes the video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
     
-    ![replays70](https://github.com/user-attachments/assets/14a3467d-efb9-46a6-83a3-60b954ee5d1c)
-
+    ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
 
 **owlcms Setup instructions:**
 
