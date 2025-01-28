@@ -1,6 +1,9 @@
 # Simple Jury Replays for owlcms
 
 This project aims to capture jury replay videos as instructed by the owlcms software.
+
+This version is targeted at national/regional/multi-national events where a single replay camera is accepted.
+
 The program listens to events pushed over http using the same json contents as used for the publicresults and wise-eyes modules.
 ffmpeg is used to capture the videos.
 
