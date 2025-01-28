@@ -4,6 +4,6 @@ package videos
 
 import "os/exec"
 
-func createWindowsFfmpegCmd(args []string) *exec.Cmd {
+func createFfmpegCmd(args []string) *exec.Cmd {
 	return exec.Command(FfmpegPath, args...)
 }

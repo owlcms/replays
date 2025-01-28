@@ -1,11 +1,26 @@
-Supported platforms:
-- for Raspberry Pi : replays
-- for Windows: replays.exe
+**Supported platforms:**
 
-Windows instructions;
-- you need to install ffmpeg
-  - The current version assumes you used chocolatey to install.
-- you need to edit the config.toml file to put the name of your camera. 
+- for Raspberry Pi : use the `replays` program
+- for Windows: use `replays.exe`
 
-Raspberry Pi instructions:
+**Raspberry Pi instructions:**
+
 - no configuration required.  your video camera should be automatically detected as /dev/video0
+
+**Windows instructions:**
+
+- The ffmpeg program is used for the actual recording, and is a prerequisite.
+  - The simplest way to install is to use the command line and type 
+    ```
+    winget ffmpeg
+    ```
+- You need to edit the config.toml file to put the name of your camera
+  - To get the name, use the command
+    ```
+    ffmpeg -f dshow -list_devices true -i dummy
+    ```
+  - In the configuration file, if your device is listed as `Logitech Webcam C930e` you must add `video=` before the name and use
+    ```
+    ffmpegCamera = 'video=Logitech Webcam C930e'
+    ```
+

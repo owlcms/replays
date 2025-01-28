@@ -4,23 +4,37 @@ This project aims to capture jury replay videos as instructed by the owlcms soft
 The program listens to events pushed over http using the same json contents as used for the publicresults and wise-eyes modules.
 ffmpeg is used to capture the videos.
 
-The target platforms are the Raspberry Pi with v4l2 and Windows laptops with gdigrab.
+**Supported platforms:**
 
-### Project Structure
+- for Raspberry Pi : use the `replays` program
+- for Windows: use `replays.exe`
 
-- `cmd/replays`: Main application entry point
-- `internal/`: Private application code
-  - `api/`: API handlers and middleware
-  - `models/`: Data models
-  - `service/`: Business logic
-- `pkg/`: Public packages that can be used by external projects
-- `configs/`: Configuration files
-- `scripts/`: Build and deployment scripts
-- `test/`: Additional test files
+**Raspberry Pi instructions:**
 
-### Running in IDE
+- no configuration required.  your video camera should be automatically detected as /dev/video0
 
-```bash
-# Run the application
-go run cmd/replays/main.go
-```
+**Windows instructions:**
+
+- The ffmpeg program is used for the actual recording, and is a prerequisite.
+
+  - The simplest way to install is to use the command line and type 
+
+    ```
+    winget ffmpeg
+    ```
+
+- You need to edit the config.toml file to put the name of your camera
+
+  - To get the name, use the command
+
+    ```
+    ffmpeg -f dshow -list_devices true -i dummy
+    ```
+
+  - In the configuration file, if your device is listed as `Logitech Webcam C930e` you must add `video=` before the name and use
+
+    ```
+    ffmpegCamera = 'video=Logitech Webcam C930e'
+    ```
+
+

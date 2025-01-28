@@ -67,10 +67,10 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	}
 
 	if NoVideo {
-		cmd = createWindowsFfmpegCmd(args)
+		cmd = createFfmpegCmd(args)
 		logging.InfoLogger.Printf("Simulating start recording video: %s", fileName)
 	} else {
-		cmd = createWindowsFfmpegCmd(args)
+		cmd = createFfmpegCmd(args)
 		logging.InfoLogger.Printf("Executing command: %s %s", FfmpegPath, strings.Join(args, " "))
 	}
 
