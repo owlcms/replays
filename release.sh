@@ -22,7 +22,7 @@ fi
 
 # Set the app version
 APP_VERSION="${FIRST_TWO_PARTS}.${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE}"
-#echo "App version: $APP_VERSION THIRD_NUMBER: $THIRD_NUMBER MAPPED_RELEASE: $MAPPED_RELEASE PRE_RELEASE: $PRE_RELEASE"
+echo "App version: $APP_VERSION THIRD_NUMBER: $THIRD_NUMBER MAPPED_RELEASE: $MAPPED_RELEASE PRE_RELEASE: $PRE_RELEASE"
 
 # Ensure the script is run from the project root
 cd "$(dirname "$0")"
@@ -32,11 +32,14 @@ VERSION_TAG=$TAG
 
 # Copy the version template to the config directory
 cp dist/version.go.template internal/config/version.go
-
-# Substitute _TAG_ with the actual version tag
 sed -i "s/_TAG_/$VERSION_TAG/" internal/config/version.go
-
 echo "Version set to $VERSION_TAG in internal/config/version.go"
+
+# Copy the FyneApp.toml template to the main directory
+cp dist/FyneApp.template.toml FyneApp.toml
+sed -i "s/_TAG_/${APP_VERSION}/" FyneApp.toml
+sed -i "s/_BUILD_/${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE}/" FyneApp.toml
+echo "Version set to ${APP_VERSION} ; Build set to ${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE} in FyneApp.toml"
 
 git tag -d  $TAG
 git push origin --delete $TAG
@@ -45,7 +48,7 @@ gh release delete $TAG -y
 git commit -am "$TAG"
 
 # Package the app for arm64
-fyne-cross linux --arch arm64 --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays
+fyne-cross linux --arch arm64 --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays 
 
 # Package the app for Windows
 fyne-cross windows --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays
