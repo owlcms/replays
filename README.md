@@ -23,7 +23,7 @@ ffmpeg is used to capture the videos.
   - The simplest way to install is to use the command line and type 
 
     ```
-    winget ffmpeg
+    winget install ffmpeg
     ```
 
 - You need to edit the config.toml file to put the name of your camera
