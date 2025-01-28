@@ -16,9 +16,11 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/http"
+	"github.com/owlcms/replays/internal/iputils"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/status"
 )
@@ -57,10 +59,9 @@ func main() {
 	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
 	parsedURL, _ := url.Parse(urlStr)
 	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
-	portLabel := widget.NewLabel(fmt.Sprintf("Port: %d", cfg.Port))
 
-	// Create a horizontal container for the hyperlink and portLabel
-	horizontalContainer := container.NewHBox(hyperlink, portLabel)
+	// Create a horizontal container for the hyperlink
+	horizontalContainer := container.NewHBox(hyperlink)
 
 	// Add status label with initial status (bold for errors)
 	statusLabel := widget.NewLabel(initialStatus)
@@ -85,6 +86,14 @@ func main() {
 		fyne.NewMenu("Files",
 			fyne.NewMenuItem("Open Application Directory", func() {
 				openApplicationDirectory()
+			}),
+		),
+		fyne.NewMenu("Help",
+			fyne.NewMenuItem("owlcms Configuration Settings", func() {
+				showConfigSettingsDialog(window, cfg.Port)
+			}),
+			fyne.NewMenuItem("About", func() {
+				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
 			}),
 		),
 	)
@@ -151,4 +160,27 @@ func openApplicationDirectory() {
 	if err := cmd.Start(); err != nil {
 		logging.ErrorLogger.Printf("Failed to open application directory: %v", err)
 	}
+}
+
+// showConfigSettingsDialog shows a dialog with the configuration settings and local URLs
+func showConfigSettingsDialog(window fyne.Window, port int) {
+	// Get local IPv4 addresses
+	ipAddresses, err := iputils.GetLocalIPv4Addresses()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get local IP addresses: %v", err)
+	}
+
+	// Create a list of URLs for each local IP address
+	var urlLabels []fyne.CanvasObject
+	for _, ip := range ipAddresses {
+		urlStr := fmt.Sprintf("http://%s:%d", ip, port)
+		parsedURL, _ := url.Parse(urlStr)
+		urlLabels = append(urlLabels, widget.NewHyperlink(urlStr, parsedURL))
+	}
+
+	// Add instruction label
+	instructionLabel := widget.NewLabel("In the Language and System Settings > Connections page, set the Video URL to:")
+
+	content := container.NewVBox(instructionLabel, container.NewVBox(urlLabels...))
+	dialog.ShowCustom("owlcms Configuration Settings", "Close", content, window)
 }
