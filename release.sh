@@ -1,5 +1,5 @@
 #!/bin/bash
-TAG=0.9.3-beta01
+TAG=0.9.3
 
 # Extract the first two parts and the third number from the tag
 FIRST_TWO_PARTS=$(echo $TAG | awk -F. '{print $1"."$2}')
@@ -37,8 +37,6 @@ cp dist/version.go.template internal/config/version.go
 sed -i "s/_TAG_/$VERSION_TAG/" internal/config/version.go
 
 echo "Version set to $VERSION_TAG in internal/config/version.go"
-
-exit
 
 git tag -d  $TAG
 git push origin --delete $TAG
