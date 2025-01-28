@@ -36,10 +36,10 @@ sed -i "s/_TAG_/$VERSION_TAG/" internal/config/version.go
 echo "Version set to $VERSION_TAG in internal/config/version.go"
 
 # Copy the FyneApp.toml template to the main directory
-cp dist/FyneApp.template.toml FyneApp.toml
-sed -i "s/_TAG_/${APP_VERSION}/" FyneApp.toml
-sed -i "s/_BUILD_/${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE}/" FyneApp.toml
-echo "Version set to ${APP_VERSION} ; Build set to ${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE} in FyneApp.toml"
+# cp dist/FyneApp.template.toml FyneApp.toml
+# sed -i "s/_TAG_/${APP_VERSION}/" FyneApp.toml
+# sed -i "s/_BUILD_/${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE}/" FyneApp.toml
+# echo "Version set to ${APP_VERSION} ; Build set to ${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE} in FyneApp.toml"
 
 git tag -d  $TAG
 git push origin --delete $TAG
