@@ -48,10 +48,10 @@ gh release delete $TAG -y
 git commit -am "$TAG"
 
 # Package the app for arm64
-fyne-cross linux --arch arm64 --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays 
+fyne-cross linux --arch arm64 -app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays 
 
 # Package the app for Windows
-fyne-cross windows --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays
+fyne-cross windows --app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png fyne./cmd/replays
 
 # Determine if the release should be marked as a prereleasedo
 if [[ $TAG == *"-"* ]]; then
