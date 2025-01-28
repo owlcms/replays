@@ -5,6 +5,9 @@ go install github.com/fyne-io/fyne-cross@latest
 
 # Set the tag
 TAG=0.9.2-beta02
+git tag -d  $TAG
+git push origin --delete $TAG
+gh release delete $TAG -y
 
 # Extract the first two parts and the third number from the tag
 FIRST_TWO_PARTS=$(echo $TAG | awk -F. '{print $1"."$2}')
@@ -30,10 +33,10 @@ APP_VERSION="${FIRST_TWO_PARTS}.${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE}"
 echo "App version: $APP_VERSION THIRD_NUMBER: $THIRD_NUMBER MAPPED_RELEASE: $MAPPED_RELEASE PRE_RELEASE: $PRE_RELEASE"
 
 # Package the app for arm64
-fyne-cross linux --arch arm64
+fyne-cross linux --arch arm64 --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays
 
 # Package the app for Windows
-fyne-cross windows --app-id app.owlcms.replays --app-version $APP_VERSION
+fyne-cross windows --app-id app.owlcms.replays --app-version $APP_VERSION ./cmd/replays
 
 # Determine if the release should be marked as a prerelease
 if [[ $TAG == *"-"* ]]; then
@@ -43,7 +46,7 @@ else
 fi
 
 # Create a release using the tag and ReleaseNotes.md
-gh release create $TAG -F ReleaseNotes.md $PRERELEASE_FLAG
+gh release create $TAG -F ReleaseNotes.md $PRERELEASE_FLAG --title "owlcms jury replays $TAG"
 
 # Upload the executables
 gh release upload $TAG fyne-cross/bin/linux-arm64/replays fyne-cross/bin/windows-amd64/replays.exe
