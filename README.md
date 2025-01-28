@@ -1,8 +1,9 @@
-# Simple Jury Replays for owlcms
+# Self-service Jury Replays for owlcms
 
 This project aims to capture jury replay videos as instructed by the owlcms software.
+The jury can, on their own, without external intervention, watch the replays using a web browser.
 
-This version is primarily targeted at national/regional/multi-national events where a _single replay camera is sufficient_.
+This version is primarily targeted at national/regional/multi-national events with a single replay camera.
 (but it is of course possible to do the setup multiple times for multiple cameras)
 
 ## Supported platforms
