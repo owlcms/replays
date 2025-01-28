@@ -13,20 +13,23 @@ var (
 	WarningLogger *log.Logger
 	ErrorLogger   *log.Logger
 	logFile       *os.File
+	logDir        string
 )
 
 // Init initializes the loggers
-func Init() {
+func Init(logDirectory string) error {
+	logDir = logDirectory
+
 	// Create logs directory if it doesn't exist
-	if err := os.MkdirAll("logs", os.ModePerm); err != nil {
-		log.Fatal(err)
+	if err := os.MkdirAll(logDir, os.ModePerm); err != nil {
+		return err
 	}
 
 	// Open log file
 	var err error
-	logFile, err = os.OpenFile(filepath.Join("logs", "replays.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logFile, err = os.OpenFile(filepath.Join(logDir, "replays.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
-		log.Fatal("Failed to open log file: ", err)
+		return err
 	}
 
 	// Initialize writers based on platform
@@ -50,8 +53,5 @@ func Init() {
 	WarningLogger = log.New(warnWriter, "WARN: ", flags)
 	ErrorLogger = log.New(errorWriter, "ERROR: ", flags)
 
-	// Register cleanup on program exit
-	if cleanup := os.Getenv("CLEANUP_ON_EXIT"); cleanup != "" {
-		defer logFile.Close()
-	}
+	return nil
 }

@@ -56,6 +56,16 @@ func LoadConfig(configFile string) (*Config, error) {
 		return nil, err
 	}
 
+	// Ensure VideoDir is absolute
+	if !filepath.IsAbs(config.VideoDir) {
+		config.VideoDir = filepath.Join(GetInstallDir(), config.VideoDir)
+	}
+
+	// Create VideoDir if it doesn't exist
+	if err := os.MkdirAll(config.VideoDir, os.ModePerm); err != nil {
+		return nil, fmt.Errorf("failed to create video directory: %w", err)
+	}
+
 	// Platform-specific configurations
 	platform := getPlatformName()
 	if _, err := toml.DecodeFile(configFile, &platformConfig); err != nil {
@@ -114,8 +124,13 @@ func InitConfig() (*Config, error) {
 	flag.BoolVar(&NoVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
 	flag.Parse()
 
+	// Ensure logging directory is absolute
+	logDir := filepath.Join(GetInstallDir(), "logs")
+
 	// Initialize loggers
-	logging.Init()
+	if err := logging.Init(logDir); err != nil {
+		return nil, fmt.Errorf("failed to initialize logging: %w", err)
+	}
 
 	// Load configuration
 	cfg, err := LoadConfig(*configFile)

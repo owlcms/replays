@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -33,7 +32,7 @@ func main() {
 	// Process command-line flags and load configuration
 	cfg, err := config.InitConfig()
 	if err != nil {
-		log.Fatalf("Error processing flags: %v", err)
+		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
 	// Validate camera configuration and set initial status
@@ -146,10 +145,10 @@ func openApplicationDirectory() {
 	case "linux":
 		cmd = exec.Command("xdg-open", dir)
 	default:
-		log.Printf("Unsupported platform: %s", runtime.GOOS)
+		logging.WarningLogger.Printf("Unsupported platform: %s", runtime.GOOS)
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to open application directory: %v", err)
+		logging.ErrorLogger.Printf("Failed to open application directory: %v", err)
 	}
 }
