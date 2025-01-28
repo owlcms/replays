@@ -7,6 +7,8 @@ This version is primarily targeted at national/regional/multi-national events wh
 
 **Supported platforms:**
 
+Download the program from the [release area](https://github.com/owlcms/replays/releases)
+
 - for Raspberry Pi : use the `replays` program
 - for Windows: use `replays.exe`
 
