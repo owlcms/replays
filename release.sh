@@ -51,7 +51,7 @@ git commit -am "$TAG"
 fyne-cross linux --arch arm64 -app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays 
 
 # Package the app for Windows
-fyne-cross windows --app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png fyne./cmd/replays
+fyne-cross windows --app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays
 
 # Determine if the release should be marked as a prereleasedo
 if [[ $TAG == *"-"* ]]; then
