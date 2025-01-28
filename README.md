@@ -20,18 +20,22 @@ This version is primarily targeted at national/regional/multi-national events wh
 - Start a session in owlcms
   - owlcms will automatically send timer and decision information to the replays app
 
-  ![replays41](https://github.com/user-attachments/assets/42c8e2eb-17e7-4cd7-90d3-9528d3126b3f)
+    ![replays41](https://github.com/user-attachments/assets/42c8e2eb-17e7-4cd7-90d3-9528d3126b3f)
 
   - The replays app will start recording when the clock starts, and stop once the decision has been shown
     
-  ![replays50](https://github.com/user-attachments/assets/79201b88-701e-4884-a4d2-2f64b5ffcd5d)
+    ![replays50](https://github.com/user-attachments/assets/79201b88-701e-4884-a4d2-2f64b5ffcd5d)
 
-  - The replays app will then trim the video down to a bit before the actual lift (when the clock was last stopped)
+  - The replays app will then trim the video down to a bit before the actual lift (when the clock was last stopped) and show that it is available.
 
-  ![replay60](https://github.com/user-attachments/assets/4090f9ba-7671-41a8-95ba-07f30496944c)
+    ![replay60](https://github.com/user-attachments/assets/4090f9ba-7671-41a8-95ba-07f30496944c)
 
-  - The replay app then makes the video available on a web page -- the web page can be opened from the replay app.
-  - The replay videos web page refreshes automatically when a video is made available.
+    ![replays60](https://github.com/user-attachments/assets/5bd06703-42cc-4b9b-bb54-f008a813db96)
+
+  - The replay app makes the video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
+    
+    ![replays70](https://github.com/user-attachments/assets/14a3467d-efb9-46a6-83a3-60b954ee5d1c)
+
 
 **owlcms Setup instructions:**
 
@@ -39,7 +43,7 @@ This version is primarily targeted at national/regional/multi-national events wh
 - In owlcms, set the `Language and System Settings` > `Connections` Video URL option to that value
 ![replays10](https://github.com/user-attachments/assets/7c8590b0-b477-4c12-bea3-925386d8e40a)
 
-** Raspberry Pi Initial Setup Instructions **
+**Raspberry Pi Initial Setup Instructions**
 
 - No further actions required.  By default your camera will be on /dev/video0. 
 
