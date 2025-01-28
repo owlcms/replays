@@ -72,11 +72,13 @@ Download the program from the [release area](https://github.com/owlcms/replays/r
     ![replays20](https://github.com/user-attachments/assets/27462fb6-3560-4324-a82a-33eafaec0c8d)
 
   - You can right-click on the `config.toml` file and edit it with Notepad
-  - Copy the name of your device you got from ffmpeg.  If the camera listed as `Logitech Webcam C930e` you **must** add `video=` before the name. So for example you would have
+  - Copy the name of your device you got from ffmpeg.
+    -  You **must** add `video=` before the name.
+    -  So for example, if the camera listed as `Logitech Webcam C930e` you would have
 
-    ```
-    ffmpegCamera = 'video=Logitech Webcam C930e'
-    ```
+        ```
+        ffmpegCamera = 'video=Logitech Webcam C930e'
+        ```
     ![replays30](https://github.com/user-attachments/assets/ef454765-8083-401a-b30d-8f9f6fa06e9e)
 
   
