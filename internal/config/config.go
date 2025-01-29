@@ -121,7 +121,11 @@ func (c *Config) ValidateCamera() error {
 // InitConfig processes command-line flags and loads the configuration
 func InitConfig() (*Config, error) {
 	configFile := flag.String("config", filepath.Join(GetInstallDir(), "config.toml"), "path to configuration file")
-	flag.StringVar(&InstallDir, "dir", "", "use alternate installation directory (overrides the default 'replays' directory)")
+	flag.StringVar(&InstallDir, "dir", "replays", fmt.Sprintf(
+		`Name of an alternate installation directory. Default is 'replays'.
+Value is relative to the platform-specific directory for applcation data (%s)
+Used for multiple installations on the same machine (e.g. 'replays2, replay3').
+An absolute path can be provded if needed.`, GetInstallDir()))
 	flag.BoolVar(&Verbose, "v", false, "enable verbose logging")
 	flag.BoolVar(&Verbose, "verbose", false, "enable verbose logging")
 	flag.BoolVar(&NoVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
