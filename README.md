@@ -21,7 +21,7 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
   - The jury simply switches tabs to go back to the jury console or jury scoreboard
   
   ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
-    
+  
 ## How to use
 
 (after doing the setup steps shown down this page)
@@ -58,10 +58,14 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
 ## Raspberry Pi Initial Setup Instructions
 
+Download the `replay` program from the Releases area.
+
 - Right-click on the program.  Set the execution permissions to "anyone"
 - No further actions required.  By default your camera will be on /dev/video0. 
 
 ## Windows Initial Setup Instructions
+
+Download the `replays.exe` program from the release area.
 
 - The ffmpeg program is used for the actual recording, and is a prerequisite.
 
