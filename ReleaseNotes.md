@@ -1,5 +1,6 @@
 **Change log**
 
+- new -dir option to allow running several instances on the same machine.
 - Added a confirmation before exiting.
 
 **Instructions**
