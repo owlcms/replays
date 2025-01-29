@@ -31,8 +31,9 @@ type PlatformConfig struct {
 }
 
 var (
-	Verbose bool
-	NoVideo bool
+	Verbose    bool
+	NoVideo    bool
+	InstallDir string // Add new variable for installation directory
 )
 
 // LoadConfig loads the configuration from the specified file
@@ -120,6 +121,7 @@ func (c *Config) ValidateCamera() error {
 // InitConfig processes command-line flags and loads the configuration
 func InitConfig() (*Config, error) {
 	configFile := flag.String("config", filepath.Join(GetInstallDir(), "config.toml"), "path to configuration file")
+	flag.StringVar(&InstallDir, "dir", "", "use alternate installation directory (overrides the default 'replays' directory)")
 	flag.BoolVar(&Verbose, "v", false, "enable verbose logging")
 	flag.BoolVar(&Verbose, "verbose", false, "enable verbose logging")
 	flag.BoolVar(&NoVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
@@ -148,16 +150,30 @@ func InitConfig() (*Config, error) {
 
 // getInstallDir returns the installation directory based on the environment
 func GetInstallDir() string {
+	// If InstallDir is set and is absolute, use it directly
+	if InstallDir != "" && filepath.IsAbs(InstallDir) {
+		return InstallDir
+	}
+
+	// Get the platform-specific base directory and app name
+	var baseDir string
+	appName := "replays"
+	if InstallDir != "" {
+		appName = InstallDir
+	}
+
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("APPDATA"), "replays")
+		baseDir = filepath.Join(os.Getenv("APPDATA"), appName)
 	case "darwin":
-		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "replays")
+		baseDir = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", appName)
 	case "linux":
-		return filepath.Join(os.Getenv("HOME"), ".local", "share", "replays")
+		baseDir = filepath.Join(os.Getenv("HOME"), ".local", "share", appName)
 	default:
-		return "./replays"
+		baseDir = "./" + appName
 	}
+
+	return baseDir
 }
 
 // isWSL checks if we're running under Windows Subsystem for Linux
