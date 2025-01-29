@@ -2,14 +2,15 @@
 
 This application records jury replay videos automatically, using the clock and decision information sent by owlcms.  The jury can immediately watch the replays using a web browser.  The replays are trimmed to remove idle time before the actual lift.
 
-The current version targets regional, national or multi-national events that use a **single replay camera** per platform. Future versions may eventually support multiple cameras, but no commitment is made.
+The current version targets regional, national or multi-national events that use a single replay camera per platform. 
+Future versions are planned to support multiple cameras.
 
 As an additional benefit, this creates a full video archive of all the lifts in the competition, correctly labelled with the athlete, time of day, lift type and attempt number.
 
 ## Supported platforms
 
 - Raspberry Pi 5 or 500
-- Windows 10/11 on a recent laptop
+- Windows 10/11 on a recent laptop (likely required for multiple cameras in the future)
 
 See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
