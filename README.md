@@ -13,10 +13,16 @@ As an additional benefit, this creates a full video archive of all the lifts in 
 
 See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
+## Overview
+
+- The replay app makes the replay video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
+  - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
+  
+  ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
+    
 ## How to use
 
 (after doing the setup steps shown down this page)
-
 
 - Start the replay application
   
@@ -41,8 +47,6 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
   - The replay app makes the video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
     - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
-    
-    ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
 
 ## owlcms Setup instructions
 
