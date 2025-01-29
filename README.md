@@ -5,7 +5,8 @@ The jury can, on their own, without external intervention, watch the replays usi
 
 As an additional benefit, this creates a full video archive of all the lifts in the competition, correctly labeled with the athlete,  attempt number and time of day.
 
-This version is primarily targeted at national/regional/multi-national events with a single replay camera.
+This version is targeted at national/regional/multi-national events that use a single replay camera.
+Future versions may eventually support multiple cameras, but no commitment is made.
 
 ## Supported platforms
 
