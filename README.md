@@ -20,6 +20,9 @@ Download the program from the [release area](https://github.com/owlcms/replays/r
 ## How to use
 (after doing the setup steps shown down this page)
 
+The replay application is designed to be used on the jury laptop. A camera is connected directly to the laptop's USB port (either a good quality USB webcam or a regular camera with an HDMI-to-USB capture adapter). Longer USB cables known as Active Cables can be used.
+
+
 - Start the replay application
   
   ![replays40](https://github.com/user-attachments/assets/ac498325-30a4-4d97-8195-7e02fab7bf06)
