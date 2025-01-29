@@ -10,7 +10,7 @@ As an additional benefit, this creates a full video archive of all the lifts in 
 ## Supported platforms
 
 - Raspberry Pi 5 or 500
-- Windows 10/11 on a recent laptop (likely required for multiple cameras in the future)
+- Windows 10/11 on a recent laptop (a good GPU will be required for multiple cameras)
 
 See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
