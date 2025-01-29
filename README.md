@@ -1,26 +1,21 @@
-# Self-service Jury Replays for owlcms
+# Simple Self-Service Jury Replays for owlcms
 
-This project aims to capture jury replay videos as instructed by the owlcms software.
-The jury can, on their own, without external intervention, watch the replays using a web browser.
+This application records jury replay videos automatically, using the clock and decision information sent by owlcms.  The jury can immediately watch the replays using a web browser.  The replays are trimmed to remove idle time before the actual lift.
 
-The current is targeted at national/regional/multi-national events that use a **single replay camera**.
-Future versions may eventually support multiple cameras, but no commitment is made.
+The current version targets regional, national or multi-national events that use a **single replay camera** per platform. Future versions may eventually support multiple cameras, but no commitment is made.
 
-As an additional benefit, this creates a full video archive of all the lifts in the competition, correctly labeled with the athlete,  attempt number and time of day.
-
-
+As an additional benefit, this creates a full video archive of all the lifts in the competition, correctly labelled with the athlete, time of day, lift type and attempt number.
 
 ## Supported platforms
 
-Download the program from the [release area](https://github.com/owlcms/replays/releases)
+- Raspberry Pi 5 or 500
+- Windows 10/11 on a recent laptop
 
-- for Raspberry Pi : use the `replays` program
-- for Windows: use `replays.exe`
+See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
 ## How to use
-(after doing the setup steps shown down this page)
 
-The replay application is designed to be used on the jury laptop. A camera is connected directly to the laptop's USB port (either a good quality USB webcam or a regular camera with an HDMI-to-USB capture adapter). Longer USB cables known as Active Cables can be used.
+(after doing the setup steps shown down this page)
 
 
 - Start the replay application
@@ -39,7 +34,7 @@ The replay application is designed to be used on the jury laptop. A camera is co
   - After the decision is shown, the app trims the video down to remove the wait time before the actual lift (when the clock was last stopped).
 
     ![replay60](https://github.com/user-attachments/assets/4090f9ba-7671-41a8-95ba-07f30496944c)
- 
+
   - The video is shown as being available
 
     ![image](https://github.com/user-attachments/assets/0e15e9d0-2b7a-49f8-bd21-66307c4f1437)
@@ -93,5 +88,11 @@ The replay application is designed to be used on the jury laptop. A camera is co
 
   
 
+## Equipment Setup
 
+The replay application is designed to be usable on the jury laptop.  Typical setups:
+
+- A dedicated good quality USB webcam is connected using an Active USB cable (to account for the distance)
+- A regular camera with HDMI output is connected using a HDMI-to-USB capture adapter.  If this camera is also used for streaming, then a splitter or a pass-through adapter is used.
+- Professional SDI feeds are used from the cameras.  The SDI to USB conversion would take place in the video control room, and the jury would access the replays using a browser.  Multiple instances of the application would run on a a single computer if needed.
 
