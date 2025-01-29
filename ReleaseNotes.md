@@ -1,3 +1,7 @@
+**Change log**
+
+- Added a confirmation before exiting.
+
 **Instructions**
 
 For installation and usage instructions, see the main [README.md](https://github.com/owlcms/replays/blob/main/README.md) 

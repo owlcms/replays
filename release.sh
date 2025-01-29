@@ -1,5 +1,5 @@
 #!/bin/bash
-TAG=0.9.3
+TAG=0.9.4
 
 # Extract the first two parts and the third number from the tag
 FIRST_TWO_PARTS=$(echo $TAG | awk -F. '{print $1"."$2}')
