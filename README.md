@@ -2,21 +2,29 @@
 
 This application records jury replay videos automatically, using the clock and decision information sent by owlcms.  The jury can immediately watch the replays using a web browser.  The replays are trimmed to remove idle time before the actual lift.
 
-The current version targets regional, national or multi-national events that use a **single replay camera** per platform. Future versions may eventually support multiple cameras, but no commitment is made.
+The current version targets regional, national or multi-national events that use a single replay camera per platform. 
+Future versions are planned to support multiple cameras.
 
 As an additional benefit, this creates a full video archive of all the lifts in the competition, correctly labelled with the athlete, time of day, lift type and attempt number.
 
 ## Supported platforms
 
-- Raspberry Pi 5 or 500
-- Windows 10/11 on a recent laptop
+- Raspberry Pi 5 with SSD or Raspberry Pi 500 with a large-enough SD card/an external SSD
+- Windows 10/11 on a recent laptop (a good GPU will be required for multiple cameras)
 
 See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
+## Overview
+
+- The replay app makes the replay video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
+  - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
+  - The jury simply switches tabs to go back to the jury console or jury scoreboard
+  
+  ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
+    
 ## How to use
 
 (after doing the setup steps shown down this page)
-
 
 - Start the replay application
   
@@ -41,8 +49,6 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
   - The replay app makes the video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
     - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
-    
-    ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
 
 ## owlcms Setup instructions
 
