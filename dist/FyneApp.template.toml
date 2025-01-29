@@ -1,0 +1,7 @@
+[Details]
+  Icon = "Icon.png"
+  Name = "replays"
+  ID = "app.owlcms.replays"
+  Version = "_TAG_"
+  Build = _BUILD_
+

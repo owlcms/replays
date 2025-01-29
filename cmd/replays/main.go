@@ -53,6 +53,23 @@ func main() {
 	myApp := app.New()
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
+	window.SetCloseIntercept(func() {
+		confirmDialog := dialog.NewConfirm(
+			"Confirm Exit",
+			"The replays recorder is running. This will stop jury recordings. Are you sure you want to exit?",
+			func(confirm bool) {
+				if !confirm {
+					logging.ErrorLogger.Println("Closing replays recorder")
+					window.Close()
+				}
+			},
+			window,
+		)
+		confirmDialog.SetConfirmText("Don't Stop Recorder")
+		confirmDialog.SetDismissText("Stop Recorder and Exit")
+		confirmDialog.Show()
+	})
+
 	label := widget.NewLabel("OWLCMS Jury Replays")
 	label.TextStyle = fyne.TextStyle{Bold: true}
 
