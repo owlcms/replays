@@ -18,6 +18,7 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
 
 - The replay app makes the replay video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
   - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
+  - The jury simply switches tabs to go back to the jury console or jury scoreboard
   
   ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
     
