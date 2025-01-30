@@ -21,6 +21,7 @@ type Config struct {
 	Height   int    `toml:"height"`
 	Fps      int    `toml:"fps"`
 	Recode   bool   `toml:"recode"`
+	OwlCMS   string `toml:"owlcms"`
 }
 
 // PlatformConfig represents platform-specific configurations
@@ -38,6 +39,11 @@ var (
 
 // LoadConfig loads the configuration from the specified file
 func LoadConfig(configFile string) (*Config, error) {
+	// Ensure InstallDir is initialized
+	if InstallDir == "" {
+		InstallDir = GetInstallDir()
+	}
+
 	// Extract default config if no config file exists
 	if err := ExtractDefaultConfig(configFile); err != nil {
 		return nil, fmt.Errorf("failed to extract default config: %w", err)

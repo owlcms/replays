@@ -1,6 +1,9 @@
 # HTTP server port
 port = 8091
 
+# address of owlcms.  a scan of the 192.168.x will be done if undefined.
+# owlcms = "192.168.1.174"
+
 # Directory to store video files
 videoDir = 'videos'
 
