@@ -5,6 +5,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/owlcms/replays/internal/logging"
 )
 
 var (
@@ -13,9 +15,10 @@ var (
 	LastDecisionTime  int64
 
 	// New state variables
-	CurrentAthlete  string
-	CurrentLiftType string
-	CurrentAttempt  int
+	CurrentAthlete   string
+	CurrentLiftType  string
+	CurrentAttempt   int
+	StopRequestCount int
 )
 
 type StartMessage struct {
@@ -50,14 +53,20 @@ func UpdateStateFromStartMessage(message string) {
 	CurrentAttempt = startMsg.AttemptNumber
 	CurrentLiftType = startMsg.LiftType
 	LastStartTime = parseTime(timePart)
-}
-
-func parseTime(timeStr string) int64 {
-	// Implement the time parsing logic here
-	// For now, let's assume it returns a dummy value
-	return time.Now().UnixNano() / int64(time.Millisecond)
+	StopRequestCount = 0
 }
 
 func UpdateStateFromStopMessage(message string) {
-	LastTimerStopTime = time.Now().UnixNano() / int64(time.Millisecond)
+	StopRequestCount++
+	if StopRequestCount == 1 {
+		LastTimerStopTime = time.Now().UnixNano() / int64(time.Millisecond)
+		logging.InfoLogger.Println("Stop time recorded")
+	}
+
+}
+
+func parseTime(_ string) int64 {
+	// Implement the time parsing logic here
+	// For now, let's assume it returns a dummy value
+	return time.Now().UnixNano() / int64(time.Millisecond)
 }

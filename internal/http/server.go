@@ -113,7 +113,7 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Regex to extract date, hour, name, lift type, and attempt
-	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CJ|Snatch)_attempt(\d+)(?:_\d+)?\.mp4$`)
+	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)(?:_\d+)?\.mp4$`)
 
 	videos := make([]VideoInfo, 0)
 	for _, file := range validFiles {

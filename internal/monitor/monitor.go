@@ -42,13 +42,13 @@ func Monitor(cfg *config.Config) {
 func messageHandler() mqtt.MessageHandler {
 	return func(client mqtt.Client, msg mqtt.Message) {
 		payload := string(msg.Payload())
-		logging.InfoLogger.Printf("Received message: %s", payload)
+		logging.InfoLogger.Printf("Received message: %s %s", msg.Topic(), msg.Payload())
+
 		topicParts := strings.Split(msg.Topic(), "/")
 		if len(topicParts) < 3 {
 			return
 		}
 		topic := strings.Join(topicParts[:3], "/")
-		logging.InfoLogger.Printf("Received message on topic: %s", topic)
 
 		switch topic {
 		case "owlcms/fop/start":
@@ -69,14 +69,12 @@ func handleStart(payload string) {
 		logging.ErrorLogger.Printf("Failed to start recording: %v", err)
 		return
 	}
-	logging.InfoLogger.Println("Recording started")
 }
 
 func handleStop(payload string) {
 	// Handle stop message
 	logging.InfoLogger.Printf("Handling stop message: %s", payload)
 	state.UpdateStateFromStopMessage(payload)
-	logging.InfoLogger.Println("Stop time recorded")
 }
 
 func handleRefereesDecision() {
