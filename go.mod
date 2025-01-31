@@ -7,8 +7,8 @@ require (
 	fyne.io/fyne/v2 v2.5.3
 	github.com/BurntSushi/toml v1.4.0
 	github.com/gorilla/mux v1.8.1
-	github.com/gorilla/websocket v1.5.1
-	golang.org/x/sys v0.20.0
+	github.com/gorilla/websocket v1.5.3
+	golang.org/x/sys v0.22.0
 )
 
 // Indirect dependencies
@@ -33,14 +33,17 @@ require (
 	github.com/yuin/goldmark v1.7.1 // indirect
 	golang.org/x/image v0.18.0 // indirect
 	golang.org/x/mobile v0.0.0-20240213143359-d1f7d3436075 // indirect
-	golang.org/x/net v0.25.0 // indirect
+	golang.org/x/net v0.27.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (
+	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/jeandeaual/go-locale v0.0.0-20240223122105-ce5225dcaa49 // indirect
 	github.com/nicksnyder/go-i18n/v2 v2.4.0 // indirect
 	github.com/rymdport/portal v0.3.0 // indirect
 	github.com/stretchr/testify v1.8.4 // indirect
 )
+
+require golang.org/x/sync v0.7.0 // indirect

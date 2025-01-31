@@ -62,16 +62,18 @@ func StartServer(port int, verboseLogging bool) {
 
 	router.HandleFunc("/", listFilesHandler)
 	router.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
-		timerHandler(w, r, verbose)
+		w.WriteHeader(http.StatusOK)
+		// timerHandler(w, r, verbose)
 	})
-	router.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) { // Fix the undefined Request error
-		decisionHandler(w, r, verbose)
+	router.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// decisionHandler(w, r, verbose)
 	})
 	router.HandleFunc("/update", updateHandler)
 	router.HandleFunc("/ws", handleWebSocket)
 
 	addr := fmt.Sprintf(":%d", port)
-	Server = &http.Server{ // Use Server instead of server
+	Server = &http.Server{
 		Addr:    addr,
 		Handler: router,
 	}

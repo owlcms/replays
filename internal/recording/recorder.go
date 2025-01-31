@@ -22,10 +22,6 @@ var (
 
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
-	// Update state
-	state.CurrentAthlete = fullName
-	state.CurrentLiftType = liftTypeKey
-	state.CurrentAttempt = attemptNumber
 
 	// Ensure the video directory exists
 	if err := os.MkdirAll(videoDir, os.ModePerm); err != nil {

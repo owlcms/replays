@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	"github.com/owlcms/replays/internal/http"
 	"github.com/owlcms/replays/internal/iputils"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/status"
 )
 
@@ -36,6 +38,17 @@ func main() {
 	if err != nil {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
+
+	// Discover or verify MQTT broker
+	broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
+	} else {
+		cfg.OwlCMS = broker
+	}
+
+	// Start MQTT monitor
+	go monitor.Monitor(cfg)
 
 	// Validate camera configuration and set initial status
 	var initialStatus string

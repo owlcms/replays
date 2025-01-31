@@ -22,6 +22,7 @@ type Config struct {
 	Fps      int    `toml:"fps"`
 	Recode   bool   `toml:"recode"`
 	OwlCMS   string `toml:"owlcms"`
+	Platform string `toml:"platform"` // Add platform parameter
 }
 
 // PlatformConfig represents platform-specific configurations
