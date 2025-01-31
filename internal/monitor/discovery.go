@@ -94,6 +94,9 @@ func UpdateOwlcmsAddress(cfg *config.Config, configFile string) (string, error) 
 			return broker, err
 		}
 		logging.InfoLogger.Printf("Broker found: %s\n", broker)
+		// remove the port number
+		broker = strings.Split(broker, ":")[0]
+		cfg.OwlCMS = broker
 		if err := config.UpdateConfigFile(configFile, broker); err != nil {
 			fmt.Printf("Error updating config file: %v\n", err)
 		}

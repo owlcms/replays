@@ -21,7 +21,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/http"
-	"github.com/owlcms/replays/internal/iputils"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/status"
@@ -39,23 +38,12 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
-	// Discover or verify MQTT broker
-	broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
-	} else {
-		cfg.OwlCMS = broker
-	}
-
-	// Start MQTT monitor
-	go monitor.Monitor(cfg)
-
-	// Validate camera configuration and set initial status
+	// Initialize with an empty status
 	var initialStatus string
 	if err := cfg.ValidateCamera(); err != nil {
 		initialStatus = "Error: " + err.Error()
 	} else {
-		initialStatus = "Ready"
+		initialStatus = "Scanning for owlcms server..."
 	}
 
 	// Start HTTP server
@@ -114,17 +102,14 @@ func main() {
 	// Create main menu
 	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("Files",
+			fyne.NewMenuItem("owlcms Server Address", func() {
+				showOwlCMSServerAddress(cfg, window)
+			}),
 			fyne.NewMenuItem("Open Application Directory", func() {
 				openApplicationDirectory()
 			}),
 		),
 		fyne.NewMenu("Help",
-			// fyne.NewMenuItem("owlcms Configuration Settings", func() {
-			// 	showConfigSettingsDialog(window, cfg.Port)
-			// }),
-			fyne.NewMenuItem("owlcms Server Address", func() {
-				showOwlCMSServerAddress(cfg, window)
-			}),
 			fyne.NewMenuItem("About", func() {
 				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
 			}),
@@ -161,6 +146,25 @@ func main() {
 	// Show the window before running the application
 	window.Show()
 
+	// Discover or verify MQTT broker after window is shown
+	go func() {
+		broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
+			statusLabel.SetText(fmt.Sprintf("Error: Could not find owlcms server - %v", err))
+			statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+			statusLabel.Refresh()
+		} else {
+			cfg.OwlCMS = broker
+			statusLabel.SetText("Ready")
+			statusLabel.TextStyle = fyne.TextStyle{Bold: false}
+			statusLabel.Refresh()
+
+			// Start MQTT monitor only after successful discovery
+			go monitor.Monitor(cfg)
+		}
+	}()
+
 	// Initialize signal handling
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -195,32 +199,53 @@ func openApplicationDirectory() {
 	}
 }
 
-// showConfigSettingsDialog shows a dialog with the configuration settings and local URLs
-func showConfigSettingsDialog(window fyne.Window, port int) {
-	// Get local IPv4 addresses
-	ipAddresses, err := iputils.GetLocalIPv4Addresses()
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get local IP addresses: %v", err)
-	}
-
-	// Create a list of URLs for each local IP address
-	var urlLabels []fyne.CanvasObject
-	for _, ip := range ipAddresses {
-		urlStr := fmt.Sprintf("http://%s:%d", ip, port)
-		parsedURL, _ := url.Parse(urlStr)
-		urlLabels = append(urlLabels, widget.NewHyperlink(urlStr, parsedURL))
-	}
-
-	// Add instruction label
-	instructionLabel := widget.NewLabel("In the Language and System Settings > Connections page, set the Video URL to:")
-
-	content := container.NewVBox(instructionLabel, container.NewVBox(urlLabels...))
-	dialog.ShowCustom("owlcms Configuration Settings", "Close", content, window)
-}
-
 // showOwlCMSServerAddress shows a dialog with the OwlCMS server address
 func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
-	owlcmsAddress := fmt.Sprintf("tcp://%s:1883", cfg.OwlCMS)
-	message := fmt.Sprintf("owlcms Server Address:\n%s", owlcmsAddress)
-	dialog.ShowInformation("owlcms Server Address", message, window)
+	var message string
+	if cfg.OwlCMS == "" {
+		message = "No server located."
+	} else {
+		message = fmt.Sprintf("Current owlcms Server Address:\n%s", cfg.OwlCMS)
+	}
+
+	entry := widget.NewEntry()
+	entry.SetPlaceHolder("Enter new server address")
+
+	updateFunc := func() {
+		newAddress := entry.Text
+		if newAddress != "" {
+			cfg.OwlCMS = newAddress
+			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+			if err := config.UpdateConfigFile(configFilePath, newAddress); err != nil {
+				fmt.Printf("Error updating config file: %v\n", err)
+				dialog.ShowError(err, window)
+				return
+			}
+			successDialog := dialog.NewInformation("Success", "OwlCMS server address updated. Restart the application.", window)
+			successDialog.SetOnClosed(func() {
+				window.Close()
+				os.Exit(0)
+			})
+			successDialog.Show()
+		}
+	}
+
+	// Set the entry's OnSubmitted handler
+	entry.OnSubmitted = func(string) { updateFunc() }
+
+	form := container.NewBorder(
+		nil,
+		nil,
+		nil,
+		widget.NewButton("Update", updateFunc),
+		entry,
+	)
+
+	content := container.NewVBox(
+		widget.NewLabel(message),
+		form,
+	)
+	dialog := dialog.NewCustom("OwlCMS Server Address", "Close", content, window)
+	dialog.Resize(fyne.NewSize(400, 0))
+	dialog.Show()
 }
