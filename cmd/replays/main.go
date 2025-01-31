@@ -119,8 +119,11 @@ func main() {
 			}),
 		),
 		fyne.NewMenu("Help",
-			fyne.NewMenuItem("owlcms Configuration Settings", func() {
-				showConfigSettingsDialog(window, cfg.Port)
+			// fyne.NewMenuItem("owlcms Configuration Settings", func() {
+			// 	showConfigSettingsDialog(window, cfg.Port)
+			// }),
+			fyne.NewMenuItem("owlcms Server Address", func() {
+				showOwlCMSServerAddress(cfg, window)
 			}),
 			fyne.NewMenuItem("About", func() {
 				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
@@ -213,4 +216,11 @@ func showConfigSettingsDialog(window fyne.Window, port int) {
 
 	content := container.NewVBox(instructionLabel, container.NewVBox(urlLabels...))
 	dialog.ShowCustom("owlcms Configuration Settings", "Close", content, window)
+}
+
+// showOwlCMSServerAddress shows a dialog with the OwlCMS server address
+func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
+	owlcmsAddress := fmt.Sprintf("tcp://%s:1883", cfg.OwlCMS)
+	message := fmt.Sprintf("owlcms Server Address:\n%s", owlcmsAddress)
+	dialog.ShowInformation("owlcms Server Address", message, window)
 }

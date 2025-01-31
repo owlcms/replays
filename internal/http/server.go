@@ -4,25 +4,21 @@ import (
 	"context"
 	"fmt"
 	"html/template"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/recording"
-	"github.com/owlcms/replays/internal/state"
 	"github.com/owlcms/replays/internal/websocket"
 )
 
 var (
 	Server    *http.Server // Make server public
-	verbose   bool
 	templates *template.Template
 )
 
@@ -47,8 +43,7 @@ func init() {
 }
 
 // StartServer starts the HTTP server on the specified port
-func StartServer(port int, verboseLogging bool) {
-	verbose = verboseLogging
+func StartServer(port int, _ bool) {
 	router := mux.NewRouter()
 
 	// Serve static files from embedded filesystem
@@ -61,15 +56,7 @@ func StartServer(port int, verboseLogging bool) {
 	router.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir(x))))
 
 	router.HandleFunc("/", listFilesHandler)
-	router.HandleFunc("/timer", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		// timerHandler(w, r, verbose)
-	})
-	router.HandleFunc("/decision", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		// decisionHandler(w, r, verbose)
-	})
-	router.HandleFunc("/update", updateHandler)
+
 	router.HandleFunc("/ws", handleWebSocket)
 
 	addr := fmt.Sprintf(":%d", port)
@@ -147,156 +134,6 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	if err := templates.ExecuteTemplate(w, "videolist.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-// timerHandler handles the /timer endpoint
-func timerHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	err := r.ParseForm()
-	if err != nil {
-		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
-		return
-	}
-
-	athleteTimerEventType := r.FormValue("athleteTimerEventType")
-	if athleteTimerEventType != "StopTime" && athleteTimerEventType != "StartTime" {
-		http.Error(w, "Invalid athleteTimerEventType", http.StatusBadRequest)
-		return
-	}
-
-	fopName := r.FormValue("fopName")
-	fopState := r.FormValue("fopState")
-	mode := r.FormValue("mode")
-	athleteStartTimeMillis := r.FormValue("athleteStartTimeMillis")
-	athleteMillisRemaining := r.FormValue("athleteMillisRemaining")
-	fullName := r.FormValue("fullName")
-	attemptNumberStr := r.FormValue("attemptNumber")
-	liftTypeKey := r.FormValue("liftTypeKey")
-
-	attemptNumber, err := strconv.Atoi(attemptNumberStr)
-	if err != nil {
-		http.Error(w, "Invalid attemptNumber", http.StatusBadRequest)
-		return
-	}
-
-	if verbose {
-		logging.InfoLogger.Printf("Received /timer request:\n"+
-			"    fullName=%s\n"+
-			"    attemptNumber=%d\n"+
-			"    liftTypeKey=%s\n"+
-			"    fopName=%s\n"+
-			"    fopState=%s\n"+
-			"    mode=%s\n"+
-			"    athleteTimerEventType=%s\n"+
-			"    athleteStartTimeMillis=%s\n"+
-			"    athleteMillisRemaining=%s\n",
-			fullName, attemptNumber, liftTypeKey, fopName, fopState, mode, athleteTimerEventType, athleteStartTimeMillis, athleteMillisRemaining)
-	}
-
-	if athleteTimerEventType == "StopTime" && state.LastTimerStopTime == 0 {
-		logging.InfoLogger.Printf("Received StopTime event for %s, attempt %d", fullName, attemptNumber)
-		state.LastTimerStopTime = time.Now().UnixNano() / int64(time.Millisecond)
-	}
-
-	if athleteTimerEventType == "StartTime" {
-		state.LastStartTime = time.Now().UnixNano() / int64(time.Millisecond)
-		if err := recording.StartRecording(fullName, liftTypeKey, attemptNumber); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to start recording: %v", err), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	fmt.Fprintf(w, "Timer endpoint received")
-}
-
-// decisionHandler handles the /decision endpoint
-func decisionHandler(w http.ResponseWriter, r *http.Request, verbose bool) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	err := r.ParseForm()
-	if err != nil {
-		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
-		return
-	}
-
-	decisionEventType := r.FormValue("decisionEventType")
-	fopState := r.FormValue("fopState")
-	if fopState != "DECISION_VISIBLE" || decisionEventType == "RESET" {
-		if verbose {
-			logging.InfoLogger.Printf("Ignoring decision: fopState=%s, decisionEventType=%s", fopState, decisionEventType)
-		}
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "Decision endpoint received")
-		return
-	}
-
-	mode := r.FormValue("mode")
-	competitionName := r.FormValue("competitionName")
-	fop := r.FormValue("fop")
-	breakValue := r.FormValue("break")
-	d1 := r.FormValue("d1")
-	d2 := r.FormValue("d2")
-	d3 := r.FormValue("d3")
-	decisionsVisible := r.FormValue("decisionsVisible")
-	down := r.FormValue("down")
-	recordKind := r.FormValue("recordKind")
-	fullName := r.FormValue("fullName")
-	attemptNumberStr := r.FormValue("attemptNumber")
-	liftTypeKey := r.FormValue("liftTypeKey")
-
-	attemptNumber, err := strconv.Atoi(attemptNumberStr)
-	if err != nil {
-		http.Error(w, "Invalid attemptNumber", http.StatusBadRequest)
-		return
-	}
-
-	if verbose {
-		logging.InfoLogger.Printf("Received /decision request:\n"+
-			"    decisionEventType=%s\n"+
-			"    mode=%s\n"+
-			"    competitionName=%s\n"+
-			"    fop=%s\n"+
-			"    fopState=%s\n"+
-			"    break=%s\n"+
-			"    d1=%s\n"+
-			"    d2=%s\n"+
-			"    d3=%s\n"+
-			"    decisionsVisible=%s\n"+
-			"    down=%s\n"+
-			"    recordKind=%s\n"+
-			"    fullName=%s\n"+
-			"    attemptNumber=%d\n"+
-			"    liftTypeKey=%s",
-			decisionEventType, mode, competitionName, fop, fopState, breakValue, d1, d2, d3, decisionsVisible, down, recordKind, fullName, attemptNumber, liftTypeKey)
-	}
-
-	// Stop recording 2 seconds after receiving a decision
-	state.LastDecisionTime = time.Now().UnixNano() / int64(time.Millisecond)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("Recovered from panic in decision handler: %v", r)
-			}
-		}()
-
-		time.Sleep(2 * time.Second)
-		if err := recording.StopRecording(state.LastDecisionTime); err != nil {
-			logging.ErrorLogger.Printf("%v", err)
-		}
-		// Remove NotifyClients() from here - it will be called by SendStatus when video is ready
-	}()
-}
-
-// updateHandler handles the /update endpoint and always returns 200 success
-func updateHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
 }
 
 // StopServer gracefully shuts down the HTTP server
