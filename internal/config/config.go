@@ -208,3 +208,49 @@ func getPlatformName() string {
 	}
 	return runtime.GOOS
 }
+
+func UpdateConfigFile(configFile, owlcmsAddress string) error {
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	foundOwlcms := false
+	portLineIndex := -1
+
+	// Find and replace the owlcms line, preserving comments and structure
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# owlcms =") ||
+			strings.HasPrefix(trimmed, "owlcms =") ||
+			trimmed == "# owlcms" {
+			// Remove port from address if present
+			address := owlcmsAddress
+			if strings.Contains(address, ":") {
+				address = strings.Split(address, ":")[0]
+			}
+			// Preserve any leading whitespace
+			leadingSpace := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = fmt.Sprintf("%sowlcms = \"%s\"", leadingSpace, address)
+			foundOwlcms = true
+			break
+		}
+		if strings.HasPrefix(trimmed, "port") {
+			portLineIndex = i
+		}
+	}
+
+	// If owlcms line not found, add it after the port line
+	if !foundOwlcms && portLineIndex >= 0 {
+		address := owlcmsAddress
+		if strings.Contains(address, ":") {
+			address = strings.Split(address, ":")[0]
+		}
+		leadingSpace := lines[portLineIndex][:len(lines[portLineIndex])-len(strings.TrimLeft(lines[portLineIndex], " \t"))]
+		newLine := fmt.Sprintf("%sowlcms = \"%s\"", leadingSpace, address)
+		lines = append(lines[:portLineIndex+1], append([]string{newLine}, lines[portLineIndex+1:]...)...)
+	}
+
+	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+}

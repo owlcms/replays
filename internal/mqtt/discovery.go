@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging" // Adjust the import path as necessary
 )
 
@@ -35,7 +36,7 @@ func DiscoverBroker() (string, error) {
 	for i := 1; i < 255; i++ {
 		target := fmt.Sprintf("%s.%d:1883", subnet, i)
 		logging.InfoLogger.Printf("Scanning %s", target) // Use internal logging for logging
-		if isPortOpen(target) {
+		if IsPortOpen(target) {
 			return target, nil // Return the first broker found
 		}
 	}
@@ -69,7 +70,7 @@ func getLocalIPAndMask() (string, net.IPMask, error) {
 }
 
 // isPortOpen tests if a port is open by attempting to connect
-func isPortOpen(address string) bool {
+func IsPortOpen(address string) bool {
 	timeout := 100 * time.Millisecond
 	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
@@ -77,4 +78,25 @@ func isPortOpen(address string) bool {
 	}
 	defer conn.Close()
 	return true
+}
+
+func UpdateOwlcmsAddress(cfg *config.Config, configFile string) (string, error) {
+	broker := cfg.OwlCMS
+	owlcmsAddress := fmt.Sprintf("%s:1883", broker)
+	if cfg.OwlCMS != "" && IsPortOpen(owlcmsAddress) {
+		logging.InfoLogger.Printf("OwlCMS broker is reachable at %s\n", owlcmsAddress)
+	} else {
+		logging.InfoLogger.Printf("OwlCMS broker is not reachable at %s, scanning for brokers...\n", owlcmsAddress)
+		var err error
+		broker, err = DiscoverBroker()
+		if err != nil {
+			fmt.Printf("Error discovering broker: %v\n", err)
+			return "", err
+		}
+		logging.InfoLogger.Printf("Broker found: %s\n", broker)
+		if err := config.UpdateConfigFile(configFile, broker); err != nil {
+			fmt.Printf("Error updating config file: %v\n", err)
+		}
+	}
+	return broker, nil
 }
