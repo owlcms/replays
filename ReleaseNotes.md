@@ -1,8 +1,10 @@
 **Change log**
 
-> This version requires 55.3.0-beta or newer
+> This version requires owlcms 55.3.0-beta or newer (use "additional versions" "show prereleases" to get)
 
-- Inverted the logic: replays now talks to owlcms using MQTT
+- 1.0.1: new ffmpegParams entry for additional parameters (loglevel, codec, etc.)
+
+- replays now interacts with owlcms using MQTT
   - No longer necessary to configure owlcms
   - At startup, if the server location is not set or wrong, replays will scan the local 192.168.x network to find owlcms
   - If the local area network is not a 192.168.x network, of if the scan is done when owlcms is not running, a dialog
