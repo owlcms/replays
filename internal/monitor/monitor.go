@@ -12,31 +12,56 @@ import (
 	"github.com/owlcms/replays/internal/state"
 )
 
+var mqttClient mqtt.Client
+
 // Monitor listens to the owlcms broker for specific messages
 func Monitor(cfg *config.Config) {
-	// logging.InfoLogger.Println("starting monitor")
 	mqttAddress := fmt.Sprintf("tcp://%s:1883", cfg.OwlCMS)
 	opts := mqtt.NewClientOptions().AddBroker(mqttAddress)
 	opts.SetClientID("replays-monitor")
 	opts.SetDefaultPublishHandler(messageHandler())
 
-	// logging.InfoLogger.Println("creating mqtt client")
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
+	mqttClient = mqtt.NewClient(opts)
+	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
 		logging.ErrorLogger.Printf("Failed to connect to MQTT broker: %v", token.Error())
 		return
 	}
 
-	// logging.InfoLogger.Println("subscribing to topics")
-	topics := []string{"owlcms/fop/start", "owlcms/fop/stop", "owlcms/fop/refereesDecision"}
-	for _, topic := range topics {
-		logging.InfoLogger.Printf("Subscribing to topic %s", topic+"/"+cfg.Platform)
-		if token := client.Subscribe(topic+"/"+cfg.Platform, 0, nil); token.Wait() && token.Error() != nil {
-			logging.ErrorLogger.Printf("Failed to subscribe to topic %s: %v", topic, token.Error())
+	// Define topics and subscribe
+	platformTopics := []string{
+		"owlcms/fop/start",
+		"owlcms/fop/stop",
+		"owlcms/fop/refereesDecision",
+	}
+
+	// Subscribe to platform-specific topics
+	for _, topic := range platformTopics {
+		fullTopic := topic + "/" + cfg.Platform
+		logging.InfoLogger.Printf("Subscribing to topic %s", fullTopic)
+		if token := mqttClient.Subscribe(fullTopic, 0, nil); token.Wait() && token.Error() != nil {
+			logging.ErrorLogger.Printf("Failed to subscribe to topic %s: %v", fullTopic, token.Error())
 		}
 	}
 
+	// Subscribe to global config topic
+	configTopic := "owlcms/fop/config"
+	logging.InfoLogger.Printf("Subscribing to topic %s", configTopic)
+	if token := mqttClient.Subscribe(configTopic, 0, nil); token.Wait() && token.Error() != nil {
+		logging.ErrorLogger.Printf("Failed to subscribe to topic %s: %v", configTopic, token.Error())
+	}
+
 	logging.InfoLogger.Printf("MQTT monitoring started on %s", mqttAddress)
+
+	// Publish config request after successful connection
+	PublishConfig(cfg.Platform)
+}
+
+func PublishConfig(platform string) {
+	topic := fmt.Sprintf("owlcms/config/%s", platform)
+	token := mqttClient.Publish(topic, 0, false, "requesting configuration")
+	if token.Wait() && token.Error() != nil {
+		logging.ErrorLogger.Printf("Failed to publish config request: %v", token.Error())
+	}
 }
 
 func messageHandler() mqtt.MessageHandler {
@@ -57,8 +82,16 @@ func messageHandler() mqtt.MessageHandler {
 			handleStop(payload)
 		case "owlcms/fop/refereesDecision":
 			handleRefereesDecision()
+		case "owlcms/fop/config":
+			handleConfig(payload)
 		}
 	}
+}
+
+func handleConfig(payload string) {
+	logging.InfoLogger.Printf("Received config reply: %s", payload)
+	// Handle configuration data from owlcms
+	// TODO: Process configuration data as needed
 }
 
 func handleStart(payload string) {
