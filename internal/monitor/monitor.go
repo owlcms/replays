@@ -85,7 +85,7 @@ func PublishConfig(platform string) {
 func messageHandler() mqtt.MessageHandler {
 	return func(client mqtt.Client, msg mqtt.Message) {
 		payload := string(msg.Payload())
-		logging.InfoLogger.Printf("Received message: %s %s", msg.Topic(), msg.Payload())
+		// logging.InfoLogger.Printf("Received message: %s %s", msg.Topic(), msg.Payload())
 
 		topicParts := strings.Split(msg.Topic(), "/")
 		if len(topicParts) < 3 {
@@ -107,14 +107,14 @@ func messageHandler() mqtt.MessageHandler {
 }
 
 func handleConfig(payload string) {
-	logging.InfoLogger.Printf("Received config reply: %s", payload)
+	// logging.InfoLogger.Printf("Received config reply: %s", payload)
 	var config ConfigMessage
 	if err := json.Unmarshal([]byte(payload), &config); err != nil {
 		logging.ErrorLogger.Printf("Error parsing config message: %v", err)
 		return
 	}
-	logging.InfoLogger.Printf("Parsed config: jury=%d, platforms=%v, version=%s",
-		config.JurySize, config.Platforms, config.Version)
+	// logging.InfoLogger.Printf("Parsed config: jury=%d, platforms=%v, version=%s",
+	// 	config.JurySize, config.Platforms, config.Version)
 
 	// Send platform list to channel
 	PlatformListChan <- config.Platforms

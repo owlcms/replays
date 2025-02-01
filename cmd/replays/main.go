@@ -19,9 +19,9 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
+	"github.com.owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/http"
-	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/status"
 )
@@ -101,13 +101,14 @@ func main() {
 
 	// Create main menu
 	mainMenu := fyne.NewMainMenu(
-		fyne.NewMenu("Files",
+		fyne.NewMenu("File",
 			fyne.NewMenuItem("Platform Selection", func() {
 				showPlatformSelection(cfg, window)
 			}),
 			fyne.NewMenuItem("owlcms Server Address", func() {
 				showOwlCMSServerAddress(cfg, window)
 			}),
+			fyne.NewSeparatorMenuItem(),
 			fyne.NewMenuItem("Open Application Directory", func() {
 				openApplicationDirectory()
 			}),
