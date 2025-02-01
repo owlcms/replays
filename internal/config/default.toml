@@ -26,6 +26,7 @@ recode = true     # true = recode using libx264, false = copy streams without re
 ffmpegPath = '/usr/bin/ffmpeg'
 ffmpegCamera = '/dev/video0'
 ffmpegFormat = 'v4l2'
+ffmpegParams = "-loglevel quiet"
 
 [windows]
 # To find the camera name use:
@@ -35,6 +36,7 @@ ffmpegCamera = 'video=Logitech Webcam C930e'
 #ffmpegCamera = 'video=OV01A'
 ffmpegPath = 'ffmpeg.exe'
 ffmpegFormat = 'dshow'
+ffmpegParams = "-loglevel quiet"
 
 [wsl]
 # To find the camera name use:
@@ -43,3 +45,4 @@ ffmpegFormat = 'dshow'
 ffmpegCamera = 'video=OV01A'
 ffmpegPath = '/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe'
 ffmpegFormat = 'dshow'
+ffmpegParams = "-loglevel quiet"

@@ -20,6 +20,60 @@ var (
 	currentFileName  string
 )
 
+// buildRecordingArgs builds the ffmpeg arguments for recording
+func buildRecordingArgs(fileName string) []string {
+	args := []string{
+		"-y",               // Overwrite output files
+		"-f", FfmpegFormat, // Format
+		"-video_size", fmt.Sprintf("%dx%d", Width, Height),
+		"-framerate", fmt.Sprintf("%d", Fps),
+		"-i", FfmpegCamera,
+	}
+
+	// Add extra parameters if specified
+	if FfmpegParams != "" {
+		args = append(args, strings.Fields(FfmpegParams)...)
+	}
+
+	args = append(args, fileName)
+	return args
+}
+
+// buildTrimmingArgs builds the ffmpeg arguments for trimming
+func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string) []string {
+	args := []string{"-y"}
+	if recode {
+		if trimDuration > 0 {
+			args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
+		}
+		args = append(args,
+			"-i", currentFileName,
+			"-c:v", "libx264",
+			"-crf", "18",
+			"-preset", "medium",
+			"-profile:v", "main",
+			"-pix_fmt", "yuv420p",
+		)
+	} else {
+		// Put -ss before -i for better seeking
+		if trimDuration > 0 {
+			args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
+		}
+		args = append(args,
+			"-i", currentFileName,
+			"-c", "copy",
+		)
+	}
+
+	// Add extra parameters if specified
+	if FfmpegParams != "" {
+		args = append(args, strings.Fields(FfmpegParams)...)
+	}
+
+	args = append(args, finalFileName)
+	return args
+}
+
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 
@@ -45,20 +99,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	}
 
 	var cmd *exec.Cmd
-	args := []string{
-		"-y",               // Overwrite output files
-		"-f", FfmpegFormat, // Format
-		"-video_size", fmt.Sprintf("%dx%d", Width, Height),
-		"-framerate", fmt.Sprintf("%d", Fps),
-		"-i", FfmpegCamera,
-	}
-
-	// Add extra parameters if specified
-	if FfmpegParams != "" {
-		args = append(args, strings.Fields(FfmpegParams)...)
-	}
-
-	args = append(args, fileName)
+	args := buildRecordingArgs(fileName)
 
 	if NoVideo {
 		cmd = createFfmpegCmd(args)
@@ -178,37 +219,9 @@ func StopRecording(decisionTime int64) error {
 	} else {
 		// 5 attempts -- ffmpeg will fail if the input file has not been closed by the previous command
 		for i := 0; i < 5; i++ {
-			var cmd *exec.Cmd
-			args := []string{"-y"}
-			if recode {
-				if trimDuration > 0 {
-					args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
-				}
-				args = append(args, "-i", currentFileName,
-					"-c:v", "libx264",
-					"-crf", "18",
-					"-preset", "medium",
-					"-profile:v", "main",
-					"-pix_fmt", "yuv420p",
-				)
-			} else {
-				// Put -ss before -i for better seeking
-				if trimDuration > 0 {
-					args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
-				}
-				args = append(args, "-i", currentFileName,
-					"-c", "copy",
-				)
-			}
+			args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName)
+			cmd := createFfmpegCmd(args)
 
-			// Add extra parameters if specified
-			if FfmpegParams != "" {
-				args = append(args, strings.Fields(FfmpegParams)...)
-			}
-
-			args = append(args, finalFileName)
-
-			cmd = createFfmpegCmd(args)
 			if i == 0 {
 				logging.InfoLogger.Printf("Executing trim command: %s", strings.Join(args, " "))
 			}
