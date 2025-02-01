@@ -41,7 +41,8 @@ func DiscoverBroker() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no brokers found")
+	logging.InfoLogger.Printf("no owlcms found in subnet %s", subnet)
+	return "", fmt.Errorf("owlcms not found")
 }
 
 // getLocalIPAndMask returns the non-loopback local IP and netmask of the host
