@@ -255,3 +255,44 @@ func UpdateConfigFile(configFile, owlcmsAddress string) error {
 
 	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
 }
+
+// UpdatePlatform updates the platform in the config file while preserving comments and ordering
+func UpdatePlatform(configFile, platform string) error {
+	input, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %v", err)
+	}
+
+	lines := strings.Split(string(input), "\n")
+	platformFound := false
+
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "platform") {
+			lines[i] = fmt.Sprintf("platform = \"%s\"", platform)
+			platformFound = true
+			break
+		}
+	}
+
+	if !platformFound {
+		// If platform line doesn't exist, add it after owlcms line
+		for i, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "owlcms") {
+				// Insert platform after owlcms line
+				newLines := make([]string, 0, len(lines)+1)
+				newLines = append(newLines, lines[:i+1]...)
+				newLines = append(newLines, fmt.Sprintf("platform = \"%s\"", platform))
+				newLines = append(newLines, lines[i+1:]...)
+				lines = newLines
+				break
+			}
+		}
+	}
+
+	output := strings.Join(lines, "\n")
+	if err := os.WriteFile(configFile, []byte(output), 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %v", err)
+	}
+
+	return nil
+}

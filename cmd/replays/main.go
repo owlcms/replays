@@ -102,6 +102,9 @@ func main() {
 	// Create main menu
 	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("Files",
+			fyne.NewMenuItem("Platform Selection", func() {
+				showPlatformSelection(cfg, window)
+			}),
 			fyne.NewMenuItem("owlcms Server Address", func() {
 				showOwlCMSServerAddress(cfg, window)
 			}),
@@ -247,5 +250,60 @@ func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
 	)
 	dialog := dialog.NewCustom("OwlCMS Server Address", "Close", content, window)
 	dialog.Resize(fyne.NewSize(400, 0))
+	dialog.Show()
+}
+
+// showPlatformSelection shows a dialog with platform selection dropdown
+func showPlatformSelection(cfg *config.Config, window fyne.Window) {
+	// Request fresh platform list
+	monitor.PublishConfig(cfg.Platform)
+
+	// Wait up to 2 seconds for response
+	var platforms []string
+	select {
+	case platforms = <-monitor.PlatformListChan:
+		// got platforms
+	case <-time.After(2 * time.Second):
+		dialog.ShowInformation("Not Available", "No response from owlcms server", window)
+		return
+	}
+
+	if len(platforms) == 0 {
+		dialog.ShowInformation("No Platforms", "No platforms configured on owlcms server", window)
+		return
+	}
+
+	combo := widget.NewSelect(platforms, nil)
+	// Only set the current platform if it exists in the list
+	for _, p := range platforms {
+		if p == cfg.Platform {
+			combo.SetSelected(cfg.Platform)
+			break
+		}
+	}
+
+	content := container.NewVBox(
+		widget.NewLabel("Select Platform:"),
+		combo,
+	)
+
+	dialog := dialog.NewCustomConfirm("Platform Selection", "Update", "Cancel", content,
+		func(update bool) {
+			if update && combo.Selected != "" {
+				cfg.Platform = combo.Selected
+				configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+				if err := config.UpdatePlatform(configFilePath, combo.Selected); err != nil {
+					dialog.ShowError(err, window)
+					return
+				}
+				successDialog := dialog.NewInformation("Success", "Platform updated. Restart the application.", window)
+				successDialog.SetOnClosed(func() {
+					window.Close()
+					os.Exit(0)
+				})
+				successDialog.Show()
+			}
+		}, window)
+	dialog.Resize(fyne.NewSize(300, 0))
 	dialog.Show()
 }

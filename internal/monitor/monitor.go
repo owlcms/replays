@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -12,7 +13,18 @@ import (
 	"github.com/owlcms/replays/internal/state"
 )
 
-var mqttClient mqtt.Client
+// ConfigMessage represents the configuration data from owlcms
+type ConfigMessage struct {
+	JurySize  int      `json:"jurySize"`
+	Platforms []string `json:"platforms"`
+	Version   string   `json:"version"`
+}
+
+var (
+	mqttClient mqtt.Client
+	// Channel to notify when platform list is updated
+	PlatformListChan = make(chan []string, 1)
+)
 
 // Monitor listens to the owlcms broker for specific messages
 func Monitor(cfg *config.Config) {
@@ -57,7 +69,13 @@ func Monitor(cfg *config.Config) {
 }
 
 func PublishConfig(platform string) {
-	topic := fmt.Sprintf("owlcms/config/%s", platform)
+	// Drain any pending messages from channel
+	select {
+	case <-PlatformListChan:
+	default:
+	}
+
+	topic := "owlcms/config"
 	token := mqttClient.Publish(topic, 0, false, "requesting configuration")
 	if token.Wait() && token.Error() != nil {
 		logging.ErrorLogger.Printf("Failed to publish config request: %v", token.Error())
@@ -90,8 +108,16 @@ func messageHandler() mqtt.MessageHandler {
 
 func handleConfig(payload string) {
 	logging.InfoLogger.Printf("Received config reply: %s", payload)
-	// Handle configuration data from owlcms
-	// TODO: Process configuration data as needed
+	var config ConfigMessage
+	if err := json.Unmarshal([]byte(payload), &config); err != nil {
+		logging.ErrorLogger.Printf("Error parsing config message: %v", err)
+		return
+	}
+	logging.InfoLogger.Printf("Parsed config: jury=%d, platforms=%v, version=%s",
+		config.JurySize, config.Platforms, config.Version)
+
+	// Send platform list to channel
+	PlatformListChan <- config.Platforms
 }
 
 func handleStart(payload string) {
