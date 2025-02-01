@@ -1,4 +1,4 @@
-package mqtt
+package monitor
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/owlcms/replays/internal/config"
-	"github.com/owlcms/replays/internal/logging" // Adjust the import path as necessary
+	"github.com/owlcms/replays/internal/logging"
 )
 
 // DiscoverBroker scans local network for an MQTT broker on port 1883
@@ -35,9 +35,9 @@ func DiscoverBroker() (string, error) {
 	// Scan addresses in subnet
 	for i := 1; i < 255; i++ {
 		target := fmt.Sprintf("%s.%d:1883", subnet, i)
-		logging.InfoLogger.Printf("Scanning %s", target) // Use internal logging for logging
+		logging.InfoLogger.Printf("Scanning %s", target)
 		if IsPortOpen(target) {
-			return target, nil // Return the first broker found
+			return target, nil
 		}
 	}
 
@@ -69,7 +69,7 @@ func getLocalIPAndMask() (string, net.IPMask, error) {
 	return "", nil, fmt.Errorf("no suitable local IP address found")
 }
 
-// isPortOpen tests if a port is open by attempting to connect
+// IsPortOpen tests if a port is open by attempting to connect
 func IsPortOpen(address string) bool {
 	timeout := 100 * time.Millisecond
 	conn, err := net.DialTimeout("tcp", address, timeout)
@@ -91,9 +91,12 @@ func UpdateOwlcmsAddress(cfg *config.Config, configFile string) (string, error) 
 		broker, err = DiscoverBroker()
 		if err != nil {
 			fmt.Printf("Error discovering broker: %v\n", err)
-			return "", err
+			return broker, err
 		}
 		logging.InfoLogger.Printf("Broker found: %s\n", broker)
+		// remove the port number
+		broker = strings.Split(broker, ":")[0]
+		cfg.OwlCMS = broker
 		if err := config.UpdateConfigFile(configFile, broker); err != nil {
 			fmt.Printf("Error updating config file: %v\n", err)
 		}

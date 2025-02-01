@@ -4,16 +4,12 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/owlcms/replays/internal/config"  // Adjust the import path as necessary
-	"github.com/owlcms/replays/internal/logging" // Adjust the import path as necessary
-	"github.com/owlcms/replays/internal/mqtt"    // Adjust the import path as necessary
+	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/monitor"
 )
 
 func main() {
-	// Define a command-line flag
-	// scan := flag.Bool("scan", false, "Scan the local network for MQTT brokers")
-	// flag.Parse()
-
 	// Ensure logging directory is absolute
 	logDir := filepath.Join(config.GetInstallDir(), "logs")
 
@@ -30,5 +26,5 @@ func main() {
 		return
 	}
 
-	mqtt.UpdateOwlcmsAddress(cfg, configFile)
+	monitor.UpdateOwlcmsAddress(cfg, configFile)
 }

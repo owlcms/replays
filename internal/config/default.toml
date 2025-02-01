@@ -4,6 +4,9 @@ port = 8091
 # address of owlcms.  a scan of the 192.168.x will be done if undefined.
 # owlcms = "192.168.1.174"
 
+# Platform identifier if more than one platform detected 
+platform = "A"
+
 # Directory to store video files
 videoDir = 'videos'
 

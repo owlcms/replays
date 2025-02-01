@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -20,8 +21,8 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/http"
-	"github.com/owlcms/replays/internal/iputils"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/status"
 )
 
@@ -37,12 +38,12 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
-	// Validate camera configuration and set initial status
+	// Initialize with an empty status
 	var initialStatus string
 	if err := cfg.ValidateCamera(); err != nil {
 		initialStatus = "Error: " + err.Error()
 	} else {
-		initialStatus = "Ready"
+		initialStatus = "Scanning for owlcms server..."
 	}
 
 	// Start HTTP server
@@ -100,15 +101,23 @@ func main() {
 
 	// Create main menu
 	mainMenu := fyne.NewMainMenu(
-		fyne.NewMenu("Files",
+		fyne.NewMenu("File",
+			fyne.NewMenuItem("Platform Selection", func() {
+				showPlatformSelection(cfg, window)
+			}),
+			fyne.NewMenuItem("owlcms Server Address", func() {
+				showOwlCMSServerAddress(cfg, window)
+			}),
+			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Open Application Directory", func() {
 				openApplicationDirectory()
 			}),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Quit", func() {
+				window.Close()
+			}),
 		),
 		fyne.NewMenu("Help",
-			fyne.NewMenuItem("owlcms Configuration Settings", func() {
-				showConfigSettingsDialog(window, cfg.Port)
-			}),
 			fyne.NewMenuItem("About", func() {
 				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
 			}),
@@ -145,6 +154,25 @@ func main() {
 	// Show the window before running the application
 	window.Show()
 
+	// Discover or verify MQTT broker after window is shown
+	go func() {
+		broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
+			statusLabel.SetText(fmt.Sprintf("Error: Could not find owlcms server - %v", err))
+			statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+			statusLabel.Refresh()
+		} else {
+			cfg.OwlCMS = broker
+			statusLabel.SetText("Ready")
+			statusLabel.TextStyle = fyne.TextStyle{Bold: false}
+			statusLabel.Refresh()
+
+			// Start MQTT monitor only after successful discovery
+			go monitor.Monitor(cfg)
+		}
+	}()
+
 	// Initialize signal handling
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -179,25 +207,108 @@ func openApplicationDirectory() {
 	}
 }
 
-// showConfigSettingsDialog shows a dialog with the configuration settings and local URLs
-func showConfigSettingsDialog(window fyne.Window, port int) {
-	// Get local IPv4 addresses
-	ipAddresses, err := iputils.GetLocalIPv4Addresses()
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get local IP addresses: %v", err)
+// showOwlCMSServerAddress shows a dialog with the OwlCMS server address
+func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
+	var message string
+	if cfg.OwlCMS == "" {
+		message = "No server located."
+	} else {
+		message = fmt.Sprintf("Current owlcms Server Address:\n%s", cfg.OwlCMS)
 	}
 
-	// Create a list of URLs for each local IP address
-	var urlLabels []fyne.CanvasObject
-	for _, ip := range ipAddresses {
-		urlStr := fmt.Sprintf("http://%s:%d", ip, port)
-		parsedURL, _ := url.Parse(urlStr)
-		urlLabels = append(urlLabels, widget.NewHyperlink(urlStr, parsedURL))
+	entry := widget.NewEntry()
+	entry.SetPlaceHolder("Enter new server address")
+
+	updateFunc := func() {
+		newAddress := entry.Text
+		if newAddress != "" {
+			cfg.OwlCMS = newAddress
+			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+			if err := config.UpdateConfigFile(configFilePath, newAddress); err != nil {
+				fmt.Printf("Error updating config file: %v\n", err)
+				dialog.ShowError(err, window)
+				return
+			}
+			successDialog := dialog.NewInformation("Success", "OwlCMS server address updated. Restart the application.", window)
+			successDialog.SetOnClosed(func() {
+				window.Close()
+				os.Exit(0)
+			})
+			successDialog.Show()
+		}
 	}
 
-	// Add instruction label
-	instructionLabel := widget.NewLabel("In the Language and System Settings > Connections page, set the Video URL to:")
+	// Set the entry's OnSubmitted handler
+	entry.OnSubmitted = func(string) { updateFunc() }
 
-	content := container.NewVBox(instructionLabel, container.NewVBox(urlLabels...))
-	dialog.ShowCustom("owlcms Configuration Settings", "Close", content, window)
+	form := container.NewBorder(
+		nil,
+		nil,
+		nil,
+		widget.NewButton("Update", updateFunc),
+		entry,
+	)
+
+	content := container.NewVBox(
+		widget.NewLabel(message),
+		form,
+	)
+	dialog := dialog.NewCustom("OwlCMS Server Address", "Close", content, window)
+	dialog.Resize(fyne.NewSize(400, 0))
+	dialog.Show()
+}
+
+// showPlatformSelection shows a dialog with platform selection dropdown
+func showPlatformSelection(cfg *config.Config, window fyne.Window) {
+	// Request fresh platform list
+	monitor.PublishConfig(cfg.Platform)
+
+	// Wait up to 2 seconds for response
+	var platforms []string
+	select {
+	case platforms = <-monitor.PlatformListChan:
+		// got platforms
+	case <-time.After(2 * time.Second):
+		dialog.ShowInformation("Not Available", "No response from owlcms server", window)
+		return
+	}
+
+	if len(platforms) == 0 {
+		dialog.ShowInformation("No Platforms", "No platforms configured on owlcms server", window)
+		return
+	}
+
+	combo := widget.NewSelect(platforms, nil)
+	// Only set the current platform if it exists in the list
+	for _, p := range platforms {
+		if p == cfg.Platform {
+			combo.SetSelected(cfg.Platform)
+			break
+		}
+	}
+
+	content := container.NewVBox(
+		widget.NewLabel("Select Platform:"),
+		combo,
+	)
+
+	dialog := dialog.NewCustomConfirm("Platform Selection", "Update", "Cancel", content,
+		func(update bool) {
+			if update && combo.Selected != "" {
+				cfg.Platform = combo.Selected
+				configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+				if err := config.UpdatePlatform(configFilePath, combo.Selected); err != nil {
+					dialog.ShowError(err, window)
+					return
+				}
+				successDialog := dialog.NewInformation("Success", "Platform updated. Restart the application.", window)
+				successDialog.SetOnClosed(func() {
+					window.Close()
+					os.Exit(0)
+				})
+				successDialog.Show()
+			}
+		}, window)
+	dialog.Resize(fyne.NewSize(300, 0))
+	dialog.Show()
 }
