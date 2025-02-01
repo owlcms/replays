@@ -9,6 +9,8 @@ As an additional benefit, this creates a full video archive of all the lifts in 
 
 ## Supported platforms
 
+> Note: this version requires owlcms version 55.3.0-beta or newer.  Use "Install Additional Versions" and "Show Prereleases" to get it.
+
 - Raspberry Pi 5 with SSD or Raspberry Pi 500 with a large-enough SD card/an external SSD
 - Windows 10/11 on a recent laptop (a good GPU will be required for multiple cameras)
 
