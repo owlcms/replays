@@ -50,20 +50,29 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
   - The replay app makes the video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
     - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
 
-## owlcms Setup instructions
+## Settings
 
-- Start the replay program and open the `Help` > `owlcms Configuration Settings` menu
-- In owlcms, set the `Language and System Settings` > `Connections` Video URL option to that value
-![replays10](https://github.com/user-attachments/assets/7c8590b0-b477-4c12-bea3-925386d8e40a)
+### owlcms Location
 
-## Raspberry Pi Initial Setup Instructions
+- Typical local area networks use a 192.168.x addressing scheme.  If that is the case, replays will scan the local area network to locate owlcms and you have nothing to do.
+- If owlcms is not started, or the network is not 192.168, use the `File` > `owlcms Server Address` menu to enter it.  The application will then restart.
+- This setting is remembered.  If on the next startup the owlcms server is not found at the configured address, the detection is redone.
+
+### Platform selection
+
+- The list of platforms is retrieved from owlcms.
+- You can select the platform using the `File` > `Platform Selection` dialog.  The application will then restart.
+- The setting is remembered so that if you restart replays it will use the same platform until you change it.
+
+
+## Raspberry Pi Installation Instructions
 
 Download the `replay` program from the Releases area.
 
 - Right-click on the program.  Set the execution permissions to "anyone"
 - No further actions required.  By default your camera will be on /dev/video0. 
 
-## Windows Initial Setup Instructions
+## Windows Installation Instructions
 
 Download the `replays.exe` program from the release area.
 
