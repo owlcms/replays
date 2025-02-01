@@ -1,7 +1,13 @@
 **Change log**
 
-- new -dir option to allow running several instances on the same machine.
-- Added a confirmation before exiting.
+> This version requires 55.3.0-beta or newer
+
+- Inverted the logic: replays now talks to owlcms using MQTT
+  - No longer necessary to configure owlcms
+  - At startup, if the server location is not set or wrong, replays will scan the local 192.168.x network to find owlcms
+  - If the local area network is not a 192.168.x network, of if the scan is done when owlcms is not running, a dialog
+    allows setting the address
+- replays gets the list of platforms from owlcms and allows selecting which one
 
 **Instructions**
 

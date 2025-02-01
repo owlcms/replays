@@ -19,9 +19,9 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
-	"github.com.owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/http"
+	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/status"
 )
@@ -108,9 +108,13 @@ func main() {
 			fyne.NewMenuItem("owlcms Server Address", func() {
 				showOwlCMSServerAddress(cfg, window)
 			}),
-			fyne.NewSeparatorMenuItem(),
+			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Open Application Directory", func() {
 				openApplicationDirectory()
+			}),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Quit", func() {
+				window.Close()
 			}),
 		),
 		fyne.NewMenu("Help",
