@@ -9,6 +9,7 @@ var (
 	FfmpegPath   string
 	FfmpegCamera string
 	FfmpegFormat string
+	FfmpegParams string
 	NoVideo      bool
 	VideoDir     string
 	Width        int
@@ -46,7 +47,7 @@ func SetVideoConfig(w, h, f int) {
 }
 
 // SetFfmpegConfig sets the ffmpeg configuration parameters
-func SetFfmpegConfig(path, camera, format string) {
+func SetFfmpegConfig(path, camera, format string, params string) {
 	if path == "" {
 		if runtime.GOOS == "windows" {
 			FfmpegPath = "ffmpeg.exe"
@@ -58,4 +59,5 @@ func SetFfmpegConfig(path, camera, format string) {
 	}
 	FfmpegCamera = camera
 	FfmpegFormat = format
+	FfmpegParams = params
 }

@@ -30,6 +30,7 @@ type PlatformConfig struct {
 	FfmpegPath   string `toml:"ffmpegPath"`
 	FfmpegCamera string `toml:"ffmpegCamera"`
 	FfmpegFormat string `toml:"ffmpegFormat"`
+	FfmpegParams string `toml:"ffmpegParams"` // Add new field for ffmpeg parameters
 }
 
 var (
@@ -85,11 +86,26 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	switch platform {
 	case "windows":
-		recording.SetFfmpegConfig(platformConfig.Windows.FfmpegPath, platformConfig.Windows.FfmpegCamera, platformConfig.Windows.FfmpegFormat)
+		recording.SetFfmpegConfig(
+			platformConfig.Windows.FfmpegPath,
+			platformConfig.Windows.FfmpegCamera,
+			platformConfig.Windows.FfmpegFormat,
+			platformConfig.Windows.FfmpegParams,
+		)
 	case "linux":
-		recording.SetFfmpegConfig(platformConfig.Linux.FfmpegPath, platformConfig.Linux.FfmpegCamera, platformConfig.Linux.FfmpegFormat)
+		recording.SetFfmpegConfig(
+			platformConfig.Linux.FfmpegPath,
+			platformConfig.Linux.FfmpegCamera,
+			platformConfig.Linux.FfmpegFormat,
+			platformConfig.Linux.FfmpegParams,
+		)
 	case "WSL":
-		recording.SetFfmpegConfig(platformConfig.WSL.FfmpegPath, platformConfig.WSL.FfmpegCamera, platformConfig.WSL.FfmpegFormat)
+		recording.SetFfmpegConfig(
+			platformConfig.WSL.FfmpegPath,
+			platformConfig.WSL.FfmpegCamera,
+			platformConfig.WSL.FfmpegFormat,
+			platformConfig.WSL.FfmpegParams,
+		)
 	}
 
 	// Set all recording package configuration

@@ -51,8 +51,14 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		"-video_size", fmt.Sprintf("%dx%d", Width, Height),
 		"-framerate", fmt.Sprintf("%d", Fps),
 		"-i", FfmpegCamera,
-		fileName,
 	}
+
+	// Add extra parameters if specified
+	if FfmpegParams != "" {
+		args = append(args, strings.Fields(FfmpegParams)...)
+	}
+
+	args = append(args, fileName)
 
 	if NoVideo {
 		cmd = createFfmpegCmd(args)
@@ -184,7 +190,7 @@ func StopRecording(decisionTime int64) error {
 					"-preset", "medium",
 					"-profile:v", "main",
 					"-pix_fmt", "yuv420p",
-					finalFileName)
+				)
 			} else {
 				// Put -ss before -i for better seeking
 				if trimDuration > 0 {
@@ -192,8 +198,15 @@ func StopRecording(decisionTime int64) error {
 				}
 				args = append(args, "-i", currentFileName,
 					"-c", "copy",
-					finalFileName)
+				)
 			}
+
+			// Add extra parameters if specified
+			if FfmpegParams != "" {
+				args = append(args, strings.Fields(FfmpegParams)...)
+			}
+
+			args = append(args, finalFileName)
 
 			cmd = createFfmpegCmd(args)
 			if i == 0 {
