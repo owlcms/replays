@@ -21,7 +21,7 @@ recode = true # true = recode using libx264, false = copy streams without recomp
     format = 'v4l2'
     size = "1280x720"
     fps = 30
-    params = '-vf "format=yuv420p" -preset ultrafast output.mp4 -loglevel quiet'
+    params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
 
 
 # On Windows and WSL, to find the camera name use:
@@ -34,7 +34,7 @@ recode = true # true = recode using libx264, false = copy streams without recomp
     format = 'dshow'
     size = "1280x720"
     fps = 30
-    params = '-vf "format=yuv420p" -preset ultrafast output.mp4 -loglevel quiet'
+    params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
 
 # for additional cameras, add a new section, add 1 to the section name.
 # [windows2]
