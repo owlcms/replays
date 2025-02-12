@@ -32,5 +32,6 @@ func createFfmpegCmd(args []string) *exec.Cmd {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: windows.CREATE_NO_WINDOW,
 	}
+
 	return cmd
 }

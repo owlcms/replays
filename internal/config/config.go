@@ -37,14 +37,15 @@ type Config struct {
 }
 
 var (
-	Verbose    bool
-	NoVideo    bool
-	InstallDir string
-	videoDir   string
-	Width      int
-	Height     int
-	Fps        int
-	Recode     bool
+	Verbose       bool
+	NoVideo       bool
+	InstallDir    string
+	videoDir      string
+	Width         int
+	Height        int
+	Fps           int
+	Recode        bool
+	CameraConfigs []CameraConfiguration
 )
 
 // LoadConfig loads the configuration from the specified file
@@ -126,7 +127,15 @@ func LoadConfig(configFile string) (*Config, error) {
 		}
 		confRaw, exists := raw[key]
 		if !exists {
-			break
+			// Check for aliases
+			if platformKey == "windows" && i == 1 {
+				confRaw, exists = raw["windows1"]
+			} else if platformKey == "linux" && i == 1 {
+				confRaw, exists = raw["linux1"]
+			}
+			if !exists {
+				break
+			}
 		}
 		pc, err := decodePlatformConfig(confRaw)
 		if err != nil {
@@ -210,7 +219,15 @@ An absolute path can be provded if needed.`, GetInstallDir()))
 		return nil, fmt.Errorf("error loading configuration: %w", err)
 	}
 
+	// Set camera configurations in the config package
+	SetCameraConfigs(cfg.Cameras)
+
 	return cfg, nil
+}
+
+// SetCameraConfigs sets the available camera configurations.
+func SetCameraConfigs(configs []CameraConfiguration) {
+	CameraConfigs = configs
 }
 
 // getInstallDir returns the installation directory based on the environment

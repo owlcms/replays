@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/owlcms/replays/internal/config"
@@ -16,45 +17,32 @@ import (
 )
 
 var (
-	currentRecording *exec.Cmd
-	currentStdin     *os.File
-	currentFileName  string
+	currentRecordings []*exec.Cmd
+	currentStdin      []*os.File
+	currentFileNames  []string
+	CameraConfigs     []config.CameraConfiguration
 )
 
-// New global variable to hold multiple camera configs.
-var CameraConfigs []config.CameraConfiguration
-
-// SetCameraConfigs sets the available camera configurations.
-// It also calls SetFfmpegConfig to set the first camera as the default.
-func SetCameraConfigs(configs []config.CameraConfiguration) {
-	CameraConfigs = configs
-	if len(configs) > 0 {
-		SetFfmpegConfig(configs[0].FfmpegPath, configs[0].FfmpegCamera, configs[0].Format, configs[0].Params)
-	}
-}
-
 // buildRecordingArgs builds the ffmpeg arguments for recording
-func buildRecordingArgs(fileName string) []string {
+func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []string {
 	args := []string{
-		"-y",               // Overwrite output files
-		"-f", FfmpegFormat, // Format
-		"-i", FfmpegCamera,
+		"-y",                // Overwrite output files
+		"-f", camera.Format, // Format
+		"-i", camera.FfmpegCamera,
 	}
 
 	// Add camera-specific resolution and FPS parameters
-	if len(CameraConfigs) > 0 {
-		camera := CameraConfigs[0] // Use the first camera's settings
-		if camera.Size != "" {
-			args = append(args, "-s", camera.Size) // Use -s for resolution
-		}
-		if camera.Fps > 0 {
-			args = append(args, "-r", fmt.Sprintf("%d", camera.Fps)) // Use -r for framerate
-		}
+	if camera.Size != "" {
+		args = append(args, "-s", camera.Size) // Use -s for resolution
+	}
+	if camera.Fps > 0 {
+		args = append(args, "-r", fmt.Sprintf("%d", camera.Fps)) // Use -r for framerate
 	}
 
 	// Add extra parameters if specified
-	if FfmpegParams != "" {
-		args = append(args, strings.Fields(FfmpegParams)...)
+	if camera.Params != "" {
+		params := strings.Fields(camera.Params)
+		args = append(args, params...)
 	}
 
 	args = append(args, fileName)
@@ -86,65 +74,67 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 		)
 	}
 
-	if FfmpegParams != "" {
-		args = append(args, strings.Fields(FfmpegParams)...)
+	// Add extra parameters if specified
+	for _, camera := range CameraConfigs {
+		if camera.Params != "" {
+			params := strings.Fields(camera.Params)
+			args = append(args, params...)
+		}
 	}
 
 	args = append(args, finalFileName)
 	return args
 }
 
-// StartRecording starts recording a video using ffmpeg
+// StartRecording starts recording videos using ffmpeg for all configured cameras
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
+	if len(CameraConfigs) == 0 {
+		return fmt.Errorf("no camera configurations available")
+	}
+
 	if err := os.MkdirAll(config.GetVideoDir(), os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create video directory: %w", err)
 	}
 
 	fullName = strings.ReplaceAll(fullName, " ", "_")
 
-	fileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
+	var cmds []*exec.Cmd
+	var stdins []*os.File
+	var fileNames []string
 
-	if currentRecording != nil {
-		if err := currentRecording.Process.Kill(); err != nil {
-			return fmt.Errorf("failed to stop previous recording: %w", err)
+	for i, camera := range CameraConfigs {
+		fileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_attempt%d_Camera%d_%d.mp4", fullName, liftTypeKey, attemptNumber, i+1, state.LastStartTime))
+		args := buildRecordingArgs(fileName, camera)
+
+		if config.NoVideo {
+			cmd := createFfmpegCmd(args)
+			logging.InfoLogger.Printf("Simulating start recording video for Camera %d: %s", i+1, cmd.String())
+			logging.InfoLogger.Printf("ffmpeg command for Camera %d: %s", i+1, cmd.String())
+			fileNames = append(fileNames, fileName)
+			state.LastTimerStopTime = 0
+			continue
 		}
-		if err := os.Remove(currentFileName); err != nil {
-			return fmt.Errorf("failed to remove previous recording file: %w", err)
+
+		cmd := createFfmpegCmd(args)
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("failed to create stdin pipe for Camera %d: %w", i+1, err)
 		}
-		logging.InfoLogger.Printf("Stopped and removed previous recording: %s", currentFileName)
+
+		logging.InfoLogger.Printf("Executing command for Camera %d: %s", i+1, cmd.String())
+		if err := cmd.Start(); err != nil {
+			stdin.Close()
+			return fmt.Errorf("failed to start ffmpeg for Camera %d: %w", i+1, err)
+		}
+
+		cmds = append(cmds, cmd)
+		stdins = append(stdins, stdin.(*os.File))
+		fileNames = append(fileNames, fileName)
 	}
 
-	var cmd *exec.Cmd
-	args := buildRecordingArgs(fileName)
-
-	if config.NoVideo {
-		cmd = createFfmpegCmd(args)
-		logging.InfoLogger.Printf("Simulating start recording video: %s", fileName)
-	} else {
-		cmd = createFfmpegCmd(args)
-		logging.InfoLogger.Printf("Executing command: %s %s", FfmpegPath, strings.Join(args, " "))
-	}
-
-	if config.NoVideo {
-		logging.InfoLogger.Printf("ffmpeg command: %s", cmd.String())
-		currentFileName = fileName
-		state.LastTimerStopTime = 0
-		return nil
-	}
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		stdin.Close()
-		return fmt.Errorf("failed to start ffmpeg: %w", err)
-	}
-
-	currentRecording = cmd
-	currentStdin = stdin.(*os.File)
-	currentFileName = fileName
+	currentRecordings = cmds
+	currentStdin = stdins
+	currentFileNames = fileNames
 	state.LastTimerStopTime = 0
 
 	SendStatus(status.Recording, fmt.Sprintf("Recording: %s - %s attempt %d",
@@ -152,50 +142,50 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		liftTypeKey,
 		attemptNumber))
 
-	logging.InfoLogger.Printf("Started recording video: %s", fileName)
+	logging.InfoLogger.Printf("Started recording videos: %v", fileNames)
 	return nil
 }
 
-// StopRecording stops the current recording and trims the video
+// StopRecording stops the current recordings and trims the videos
 func StopRecording(decisionTime int64) error {
-	if currentRecording == nil && !config.NoVideo {
-		return fmt.Errorf("no ongoing recording to stop")
+	if len(currentRecordings) == 0 && !config.NoVideo {
+		return fmt.Errorf("no ongoing recordings to stop")
 	}
 
 	if config.NoVideo {
-		logging.InfoLogger.Printf("Simulating stop recording video: %s", currentFileName)
+		for i, fileName := range currentFileNames {
+			logging.InfoLogger.Printf("Simulating stop recording video for Camera %d: %s", i+1, fileName)
+		}
 	} else {
 		logging.InfoLogger.Println("Attempting to stop ffmpeg gracefully...")
-		if _, err := currentStdin.Write([]byte("q\n")); err != nil {
-			logging.InfoLogger.Printf("Could not write 'q' to ffmpeg (this is normal if process exited): %v", err)
+		for i, stdin := range currentStdin {
+			if _, err := stdin.Write([]byte("q\n")); err != nil {
+				logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
+			}
 		}
 
 		time.Sleep(100 * time.Millisecond)
 
-		if err := currentStdin.Close(); err != nil {
-			logging.InfoLogger.Printf("Could not close stdin (this is normal if process exited): %v", err)
+		for i, stdin := range currentStdin {
+			if err := stdin.Close(); err != nil {
+				logging.InfoLogger.Printf("Could not close stdin for Camera %d (this is normal if process exited): %v", i+1, err)
+			}
 		}
 
-		done := make(chan error, 1)
-		go func() {
-			done <- currentRecording.Wait()
-		}()
-
-		select {
-		case err := <-done:
-			if err != nil {
-				logging.InfoLogger.Printf("ffmpeg exited with error (this is normal): %v", err)
-			} else {
-				logging.InfoLogger.Println("ffmpeg stopped gracefully")
-			}
-		case <-time.After(2 * time.Second):
-			logging.InfoLogger.Println("ffmpeg did not stop gracefully, killing process...")
-			if err := currentRecording.Process.Kill(); err != nil {
-				if !strings.Contains(err.Error(), "process already finished") {
-					return fmt.Errorf("failed to kill ffmpeg process: %w", err)
+		var wg sync.WaitGroup
+		for i, cmd := range currentRecordings {
+			wg.Add(1)
+			go func(i int, cmd *exec.Cmd) {
+				defer wg.Done()
+				if err := cmd.Wait(); err != nil {
+					logging.InfoLogger.Printf("ffmpeg exited with error for Camera %d (this is normal): %v", i+1, err)
+				} else {
+					logging.InfoLogger.Printf("ffmpeg stopped gracefully for Camera %d", i+1)
 				}
-			}
+			}(i, cmd)
 		}
+
+		wg.Wait()
 	}
 
 	startTime := state.LastStartTime
@@ -203,55 +193,61 @@ func StopRecording(decisionTime int64) error {
 	logging.InfoLogger.Printf("Duration to be trimmed: %d milliseconds", trimDuration)
 
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
-	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
-	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))]
-	finalFileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
+	var finalFileNames []string
 
-	attemptInfo := fmt.Sprintf("%s - %s attempt %d",
-		strings.ReplaceAll(state.CurrentAthlete, "_", " "),
-		state.CurrentLiftType,
-		state.CurrentAttempt)
+	for i, currentFileName := range currentFileNames {
+		baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
+		baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))]
+		finalFileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_Camera%d.mp4", timestamp, baseFileName, i+1))
+		finalFileNames = append(finalFileNames, finalFileName)
 
-	SendStatus(status.Trimming, fmt.Sprintf("Trimming video: %s", attemptInfo))
+		attemptInfo := fmt.Sprintf("%s - %s attempt %d Camera %d",
+			strings.ReplaceAll(state.CurrentAthlete, "_", " "),
+			state.CurrentLiftType,
+			state.CurrentAttempt,
+			i+1)
 
-	var err error
-	if startTime == 0 {
-		logging.InfoLogger.Println("Start time is 0, not trimming the video")
-		if config.NoVideo {
-			logging.InfoLogger.Printf("Simulating rename video: %s -> %s", currentFileName, finalFileName)
-		} else if err = os.Rename(currentFileName, finalFileName); err != nil {
-			return fmt.Errorf("failed to rename video file to %s: %w", finalFileName, err)
-		}
-	} else {
-		for i := 0; i < 5; i++ {
-			args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName)
-			cmd := createFfmpegCmd(args)
+		SendStatus(status.Trimming, fmt.Sprintf("Trimming video for Camera %d: %s", i+1, attemptInfo))
 
-			if i == 0 {
-				logging.InfoLogger.Printf("Executing trim command: %s", strings.Join(args, " "))
+		var err error
+		if startTime == 0 {
+			logging.InfoLogger.Printf("Start time is 0, not trimming the video for Camera %d", i+1)
+			if config.NoVideo {
+				logging.InfoLogger.Printf("Simulating rename video for Camera %d: %s -> %s", i+1, currentFileName, finalFileName)
+			} else if err = os.Rename(currentFileName, finalFileName); err != nil {
+				return fmt.Errorf("failed to rename video file for Camera %d to %s: %w", i+1, finalFileName, err)
 			}
+		} else {
+			for j := 0; j < 5; j++ {
+				args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName)
+				cmd := createFfmpegCmd(args)
 
-			if err = cmd.Run(); err != nil {
-				logging.ErrorLogger.Printf("Waiting for input video (attempt %d/5): %v", i+1, err)
-				time.Sleep(1 * time.Second)
-			} else {
-				break
+				if j == 0 {
+					logging.InfoLogger.Printf("Executing trim command for Camera %d: %s", i+1, strings.Join(args, " "))
+				}
+
+				if err = cmd.Run(); err != nil {
+					logging.ErrorLogger.Printf("Waiting for input video for Camera %d (attempt %d/5): %v", i+1, j+1, err)
+					time.Sleep(1 * time.Second)
+				} else {
+					break
+				}
+				if j == 4 {
+					return fmt.Errorf("failed to open input video for Camera %d after 5 attempts: %w", i+1, err)
+				}
 			}
-			if i == 4 {
-				return fmt.Errorf("failed to open input video after 5 attempts: %w", err)
+			if err = os.Remove(currentFileName); err != nil {
+				return fmt.Errorf("failed to remove untrimmed video file for Camera %d: %w", i+1, err)
 			}
-		}
-		if err = os.Remove(currentFileName); err != nil {
-			return fmt.Errorf("failed to remove untrimmed video file: %w", err)
 		}
 	}
 
-	SendStatus(status.Ready, fmt.Sprintf("Video ready: %s", attemptInfo))
+	SendStatus(status.Ready, fmt.Sprintf("Videos ready: %v", finalFileNames))
 
-	logging.InfoLogger.Printf("Stopped recording and saved video: %s", finalFileName)
-	currentRecording = nil
+	logging.InfoLogger.Printf("Stopped recording and saved videos: %v", finalFileNames)
+	currentRecordings = nil
 	currentStdin = nil
-	currentFileName = ""
+	currentFileNames = nil
 
 	return nil
 }

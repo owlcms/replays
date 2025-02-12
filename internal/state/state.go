@@ -15,10 +15,11 @@ var (
 	LastDecisionTime  int64
 
 	// New state variables
-	CurrentAthlete   string
-	CurrentLiftType  string
-	CurrentAttempt   int
-	StopRequestCount int
+	CurrentAthlete      string
+	CurrentLiftType     string
+	CurrentAttempt      int
+	StopRequestCount    int
+	CurrentCameraNumber int
 )
 
 type StartMessage struct {
