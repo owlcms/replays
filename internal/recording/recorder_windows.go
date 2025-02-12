@@ -1,4 +1,4 @@
-//go:build windows && !darwin
+//go:build windows && !darwin && !linux
 
 package recording
 
@@ -6,15 +6,17 @@ import (
 	"os/exec"
 	"syscall"
 
+	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
 	"golang.org/x/sys/windows"
 )
 
 // createFfmpegCmd creates an exec.Cmd for ffmpeg with Windows-specific process attributes
 func createFfmpegCmd(args []string) *exec.Cmd {
-	path := FfmpegPath
-	if len(CameraConfigs) > 0 {
-		path = CameraConfigs[0].FfmpegPath
+	cameras := config.GetCameraConfigs()
+	path := "ffmpeg.exe"
+	if len(cameras) > 0 {
+		path = cameras[0].FfmpegPath
 	}
 
 	// If no path configured, try to find ffmpeg.exe in PATH

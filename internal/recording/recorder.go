@@ -20,7 +20,6 @@ var (
 	currentRecordings []*exec.Cmd
 	currentStdin      []*os.File
 	currentFileNames  []string
-	CameraConfigs     []config.CameraConfiguration
 )
 
 // buildRecordingArgs builds the ffmpeg arguments for recording
@@ -75,7 +74,7 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 	}
 
 	// Add extra parameters if specified
-	for _, camera := range CameraConfigs {
+	for _, camera := range config.GetCameraConfigs() {
 		if camera.Params != "" {
 			params := strings.Fields(camera.Params)
 			args = append(args, params...)
@@ -88,7 +87,8 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 
 // StartRecording starts recording videos using ffmpeg for all configured cameras
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
-	if len(CameraConfigs) == 0 {
+	cameras := config.GetCameraConfigs()
+	if len(cameras) == 0 {
 		return fmt.Errorf("no camera configurations available")
 	}
 
@@ -102,7 +102,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	var stdins []*os.File
 	var fileNames []string
 
-	for i, camera := range CameraConfigs {
+	for i, camera := range cameras {
 		fileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_attempt%d_Camera%d_%d.mp4", fullName, liftTypeKey, attemptNumber, i+1, state.LastStartTime))
 		args := buildRecordingArgs(fileName, camera)
 

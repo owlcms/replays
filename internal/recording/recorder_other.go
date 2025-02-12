@@ -1,4 +1,4 @@
-//go:build linux || darwin || freebsd || openbsd || netbsd || dragonfly || solaris
+//go:build linux || freebsd || openbsd || netbsd || dragonfly || solaris || darwin
 
 package recording
 

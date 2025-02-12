@@ -230,6 +230,11 @@ func SetCameraConfigs(configs []CameraConfiguration) {
 	CameraConfigs = configs
 }
 
+// GetCameraConfigs returns the current camera configurations
+func GetCameraConfigs() []CameraConfiguration {
+	return CameraConfigs
+}
+
 // getInstallDir returns the installation directory based on the environment
 func GetInstallDir() string {
 	if InstallDir != "" && filepath.IsAbs(InstallDir) {
