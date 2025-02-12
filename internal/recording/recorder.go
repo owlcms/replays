@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/state"
 	"github.com/owlcms/replays/internal/status"
@@ -20,14 +21,35 @@ var (
 	currentFileName  string
 )
 
+// New global variable to hold multiple camera configs.
+var CameraConfigs []config.CameraConfiguration
+
+// SetCameraConfigs sets the available camera configurations.
+// It also calls SetFfmpegConfig to set the first camera as the default.
+func SetCameraConfigs(configs []config.CameraConfiguration) {
+	CameraConfigs = configs
+	if len(configs) > 0 {
+		SetFfmpegConfig(configs[0].FfmpegPath, configs[0].FfmpegCamera, configs[0].Format, configs[0].Params)
+	}
+}
+
 // buildRecordingArgs builds the ffmpeg arguments for recording
 func buildRecordingArgs(fileName string) []string {
 	args := []string{
 		"-y",               // Overwrite output files
 		"-f", FfmpegFormat, // Format
-		"-video_size", fmt.Sprintf("%dx%d", Width, Height),
-		"-framerate", fmt.Sprintf("%d", Fps),
 		"-i", FfmpegCamera,
+	}
+
+	// Add camera-specific resolution and FPS parameters
+	if len(CameraConfigs) > 0 {
+		camera := CameraConfigs[0] // Use the first camera's settings
+		if camera.Size != "" {
+			args = append(args, "-s", camera.Size) // Use -s for resolution
+		}
+		if camera.Fps > 0 {
+			args = append(args, "-r", fmt.Sprintf("%d", camera.Fps)) // Use -r for framerate
+		}
 	}
 
 	// Add extra parameters if specified
@@ -42,7 +64,7 @@ func buildRecordingArgs(fileName string) []string {
 // buildTrimmingArgs builds the ffmpeg arguments for trimming
 func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string) []string {
 	args := []string{"-y"}
-	if recode {
+	if config.Recode {
 		if trimDuration > 0 {
 			args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
 		}
@@ -55,7 +77,6 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 			"-pix_fmt", "yuv420p",
 		)
 	} else {
-		// Put -ss before -i for better seeking
 		if trimDuration > 0 {
 			args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
 		}
@@ -65,7 +86,6 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 		)
 	}
 
-	// Add extra parameters if specified
 	if FfmpegParams != "" {
 		args = append(args, strings.Fields(FfmpegParams)...)
 	}
@@ -76,18 +96,14 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 
 // StartRecording starts recording a video using ffmpeg
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
-
-	// Ensure the video directory exists
-	if err := os.MkdirAll(videoDir, os.ModePerm); err != nil {
+	if err := os.MkdirAll(config.GetVideoDir(), os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create video directory: %w", err)
 	}
 
-	// Replace blanks in fullName with underscores
 	fullName = strings.ReplaceAll(fullName, " ", "_")
 
-	fileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
+	fileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_attempt%d_%d.mp4", fullName, liftTypeKey, attemptNumber, state.LastStartTime))
 
-	// If there is an ongoing recording, stop it and discard the file
 	if currentRecording != nil {
 		if err := currentRecording.Process.Kill(); err != nil {
 			return fmt.Errorf("failed to stop previous recording: %w", err)
@@ -101,7 +117,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	var cmd *exec.Cmd
 	args := buildRecordingArgs(fileName)
 
-	if NoVideo {
+	if config.NoVideo {
 		cmd = createFfmpegCmd(args)
 		logging.InfoLogger.Printf("Simulating start recording video: %s", fileName)
 	} else {
@@ -109,14 +125,13 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		logging.InfoLogger.Printf("Executing command: %s %s", FfmpegPath, strings.Join(args, " "))
 	}
 
-	if NoVideo {
+	if config.NoVideo {
 		logging.InfoLogger.Printf("ffmpeg command: %s", cmd.String())
 		currentFileName = fileName
 		state.LastTimerStopTime = 0
 		return nil
 	}
 
-	// Create a pipe for stdin
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stdin pipe: %w", err)
@@ -132,7 +147,6 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	currentFileName = fileName
 	state.LastTimerStopTime = 0
 
-	// Update status with spaces instead of underscores
 	SendStatus(status.Recording, fmt.Sprintf("Recording: %s - %s attempt %d",
 		strings.ReplaceAll(fullName, "_", " "),
 		liftTypeKey,
@@ -144,34 +158,29 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 
 // StopRecording stops the current recording and trims the video
 func StopRecording(decisionTime int64) error {
-	if currentRecording == nil && !NoVideo {
+	if currentRecording == nil && !config.NoVideo {
 		return fmt.Errorf("no ongoing recording to stop")
 	}
 
-	if NoVideo {
+	if config.NoVideo {
 		logging.InfoLogger.Printf("Simulating stop recording video: %s", currentFileName)
 	} else {
-		// Stop the recording gracefully first
 		logging.InfoLogger.Println("Attempting to stop ffmpeg gracefully...")
-		if _, err := currentStdin.Write([]byte("q\n")); err != nil { // Added \n after q
+		if _, err := currentStdin.Write([]byte("q\n")); err != nil {
 			logging.InfoLogger.Printf("Could not write 'q' to ffmpeg (this is normal if process exited): %v", err)
 		}
 
-		// Wait a moment to ensure the quit command is processed
 		time.Sleep(100 * time.Millisecond)
 
-		// Close stdin pipe
 		if err := currentStdin.Close(); err != nil {
 			logging.InfoLogger.Printf("Could not close stdin (this is normal if process exited): %v", err)
 		}
 
-		// Give ffmpeg a moment to exit gracefully
 		done := make(chan error, 1)
 		go func() {
 			done <- currentRecording.Wait()
 		}()
 
-		// Wait up to 2 seconds for graceful exit
 		select {
 		case err := <-done:
 			if err != nil {
@@ -189,18 +198,15 @@ func StopRecording(decisionTime int64) error {
 		}
 	}
 
-	// Compute the difference between start time and stop time, subtract 5 seconds
 	startTime := state.LastStartTime
-	trimDuration := state.LastTimerStopTime - startTime - 5000 // keep 5 seconds before last clock start
+	trimDuration := state.LastTimerStopTime - startTime - 5000
 	logging.InfoLogger.Printf("Duration to be trimmed: %d milliseconds", trimDuration)
 
-	// Save the video with an ISO 8601 timestamp without time zone
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
-	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))] // Remove the millis timestamp
-	finalFileName := filepath.Join(videoDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
+	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))]
+	finalFileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
 
-	// Use state information instead of parsing filename
 	attemptInfo := fmt.Sprintf("%s - %s attempt %d",
 		strings.ReplaceAll(state.CurrentAthlete, "_", " "),
 		state.CurrentLiftType,
@@ -211,13 +217,12 @@ func StopRecording(decisionTime int64) error {
 	var err error
 	if startTime == 0 {
 		logging.InfoLogger.Println("Start time is 0, not trimming the video")
-		if NoVideo {
+		if config.NoVideo {
 			logging.InfoLogger.Printf("Simulating rename video: %s -> %s", currentFileName, finalFileName)
 		} else if err = os.Rename(currentFileName, finalFileName); err != nil {
 			return fmt.Errorf("failed to rename video file to %s: %w", finalFileName, err)
 		}
 	} else {
-		// 5 attempts -- ffmpeg will fail if the input file has not been closed by the previous command
 		for i := 0; i < 5; i++ {
 			args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName)
 			cmd := createFfmpegCmd(args)

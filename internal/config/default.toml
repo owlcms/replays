@@ -1,48 +1,54 @@
 # HTTP server port
 port = 8091
 
-# address of owlcms.  a scan of the 192.168.x will be done if undefined.
-# owlcms = "192.168.1.174"
+# address of owlcms.  a scan of the local network 192.168.x will be done if undefined or unreachable.
+owlcms = "192.168.1.174"
 
-# Platform identifier if more than one platform detected 
+# Platform identifier if more than one platform detected
 platform = "A"
 
-# Directory to store video files
+# Directory to store video files (can be absolyte)
 videoDir = 'videos'
 
-# Video resolution
-width = 1280
-height = 720
-
-# Frames per second
-fps = 30
-
 # Video processing options
-recode = true     # true = recode using libx264, false = copy streams without recompression
+recode = true # true = recode using libx264, false = copy streams without recompression
 
 # Platform-specific FFmpeg configurations
 
 [linux]
-ffmpegPath = '/usr/bin/ffmpeg'
-ffmpegCamera = '/dev/video0'
-ffmpegFormat = 'v4l2'
-ffmpegParams = "-loglevel quiet"
+    ffmpegPath = '/usr/bin/ffmpeg'
+    ffmpegCamera = '/dev/video0'
+    format = 'v4l2'
+    size = "1280x720"
+    fps = 30
+    params = '-vf "format=yuv420p" -preset ultrafast output.mp4 -loglevel quiet'
+
+
+# On Windows and WSL, to find the camera name use:
+#   ffmpeg -hide_banner -f dshow -list_devices true -i dummy
+# Must include  video=  before the name.
 
 [windows]
-# To find the camera name use:
-#   ffmpeg -hide_banner -f dshow -list_devices true -i dummy
-# Must include  video=  before the name.
-ffmpegCamera = 'video=Logitech Webcam C930e'
-#ffmpegCamera = 'video=OV01A'
-ffmpegPath = 'ffmpeg.exe'
-ffmpegFormat = 'dshow'
-ffmpegParams = "-loglevel quiet"
+    ffmpegCamera = 'video=Logitech Webcam C930e'
+    ffmpegPath = 'ffmpeg.exe'
+    format = 'dshow'
+    size = "1280x720"
+    fps = 30
+    params = '-vf "format=yuv420p" -preset ultrafast output.mp4 -loglevel quiet'
+
+# for additional cameras, add a new section, add 1 to the section name.
+# [windows2]
+#     ffmpegCamera = 'video=OV01A'
+#     ffmpegPath = 'ffmpeg.exe'
+#     format = 'dshow'
+#     size = "1280x720"
+#     fps = 30
+#     params = '-vf "format=yuv420p" -preset ultrafast output.mp4 -loglevel quiet'
 
 [wsl]
-# To find the camera name use:
-#   ffmpeg -hide_banner -f dshow -list_devices true -i dummy
-# Must include  video=  before the name.
-ffmpegCamera = 'video=OV01A'
-ffmpegPath = '/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe'
-ffmpegFormat = 'dshow'
-ffmpegParams = "-loglevel quiet"
+    ffmpegCamera = 'video=OV01A'
+    ffmpegPath = '/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe'
+    format = 'dshow'
+    size = "1280x720"
+    fps = 30
+    params = '-vf "format=yuv420p" -preset ultrafast output.mp4 -loglevel quiet'

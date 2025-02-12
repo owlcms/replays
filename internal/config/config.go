@@ -6,37 +6,45 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/owlcms/replays/internal/logging"
-	"github.com/owlcms/replays/internal/recording"
 )
+
+// CameraConfiguration represents platform-specific configurations
+type CameraConfiguration struct {
+	FfmpegPath   string `toml:"ffmpegPath"`
+	FfmpegCamera string `toml:"ffmpegCamera"`
+	Format       string `toml:"format"`
+	Params       string `toml:"params"`
+	Size         string `toml:"size"`
+	Fps          int    `toml:"fps"`
+}
 
 // Config represents the configuration file structure
 type Config struct {
-	Port     int    `toml:"port"`
-	VideoDir string `toml:"videoDir"`
-	Width    int    `toml:"width"`
-	Height   int    `toml:"height"`
-	Fps      int    `toml:"fps"`
-	Recode   bool   `toml:"recode"`
-	OwlCMS   string `toml:"owlcms"`
-	Platform string `toml:"platform"` // Add platform parameter
-}
-
-// PlatformConfig represents platform-specific configurations
-type PlatformConfig struct {
-	FfmpegPath   string `toml:"ffmpegPath"`
-	FfmpegCamera string `toml:"ffmpegCamera"`
-	FfmpegFormat string `toml:"ffmpegFormat"`
-	FfmpegParams string `toml:"ffmpegParams"` // Add new field for ffmpeg parameters
+	Port     int                   `toml:"port"`
+	VideoDir string                `toml:"videoDir"`
+	Width    int                   `toml:"width"`
+	Height   int                   `toml:"height"`
+	Fps      int                   `toml:"fps"`
+	Recode   bool                  `toml:"recode"`
+	OwlCMS   string                `toml:"owlcms"`
+	Platform string                `toml:"platform"`
+	Cameras  []CameraConfiguration `toml:"-"`
 }
 
 var (
 	Verbose    bool
 	NoVideo    bool
-	InstallDir string // Add new variable for installation directory
+	InstallDir string
+	videoDir   string
+	Width      int
+	Height     int
+	Fps        int
+	Recode     bool
 )
 
 // LoadConfig loads the configuration from the specified file
@@ -52,11 +60,6 @@ func LoadConfig(configFile string) (*Config, error) {
 	}
 
 	var config Config
-	var platformConfig struct {
-		Windows PlatformConfig `toml:"windows"`
-		Linux   PlatformConfig `toml:"linux"`
-		WSL     PlatformConfig `toml:"wsl"`
-	}
 
 	if _, err := toml.DecodeFile(configFile, &config); err != nil {
 		return nil, err
@@ -78,64 +81,103 @@ func LoadConfig(configFile string) (*Config, error) {
 	// Log the video directory
 	logging.InfoLogger.Printf("Videos will be stored in: %s", config.VideoDir)
 
-	// Platform-specific configurations
-	platform := getPlatformName()
-	if _, err := toml.DecodeFile(configFile, &platformConfig); err != nil {
+	// Load all raw config data for camera configs
+	var raw map[string]interface{}
+	if _, err := toml.DecodeFile(configFile, &raw); err != nil {
 		return nil, err
 	}
 
-	switch platform {
-	case "windows":
-		recording.SetFfmpegConfig(
-			platformConfig.Windows.FfmpegPath,
-			platformConfig.Windows.FfmpegCamera,
-			platformConfig.Windows.FfmpegFormat,
-			platformConfig.Windows.FfmpegParams,
-		)
-	case "linux":
-		recording.SetFfmpegConfig(
-			platformConfig.Linux.FfmpegPath,
-			platformConfig.Linux.FfmpegCamera,
-			platformConfig.Linux.FfmpegFormat,
-			platformConfig.Linux.FfmpegParams,
-		)
-	case "WSL":
-		recording.SetFfmpegConfig(
-			platformConfig.WSL.FfmpegPath,
-			platformConfig.WSL.FfmpegCamera,
-			platformConfig.WSL.FfmpegFormat,
-			platformConfig.WSL.FfmpegParams,
-		)
+	platformKey := getPlatformName()
+	var cameras []CameraConfiguration
+
+	// Helper: decode a raw map into a PlatformConfig
+	decodePlatformConfig := func(data interface{}) (CameraConfiguration, error) {
+		m, ok := data.(map[string]interface{})
+		if !ok {
+			return CameraConfiguration{}, fmt.Errorf("invalid type for platform config")
+		}
+		var pc CameraConfiguration
+		if val, ok := m["ffmpegPath"].(string); ok {
+			pc.FfmpegPath = val
+		}
+		if val, ok := m["ffmpegCamera"].(string); ok {
+			pc.FfmpegCamera = val
+		}
+		if val, ok := m["format"].(string); ok {
+			pc.Format = val
+		}
+		if val, ok := m["params"].(string); ok {
+			pc.Params = val
+		}
+		if val, ok := m["size"].(string); ok {
+			pc.Size = val
+		}
+		if val, ok := m["fps"].(int64); ok {
+			pc.Fps = int(val)
+		}
+		return pc, nil
 	}
 
-	// Set all recording package configuration
-	recording.SetVideoDir(config.VideoDir)
-	recording.SetVideoConfig(config.Width, config.Height, config.Fps)
+	// Look for keys: "platformKey", "platformKey2", "platformKey3", ...
+	for i := 1; ; i++ {
+		key := platformKey
+		if i > 1 {
+			key = platformKey + strconv.Itoa(i)
+		}
+		confRaw, exists := raw[key]
+		if !exists {
+			break
+		}
+		pc, err := decodePlatformConfig(confRaw)
+		if err != nil {
+			return nil, err
+		}
+		cameras = append(cameras, pc)
+	}
+	config.Cameras = cameras
 
-	// Log all configuration parameters
+	// Set remaining recording package configurations
+	SetVideoDir(config.VideoDir)
+	SetVideoConfig(config.Width, config.Height, config.Fps)
+
+	// Log all configuration parameters including all cameras
+	platformKey = getPlatformName()
 	logging.InfoLogger.Printf("Configuration loaded from %s for platform %s:\n"+
 		"    Port: %d\n"+
-		"    VideoDir: %s\n"+
-		"    Resolution: %dx%d\n"+
-		"    FPS: %d\n"+
-		"    FFmpeg Path: %s\n"+
-		"    FFmpeg Camera: %s\n"+
-		"    FFmpeg Format: %s",
+		"    VideoDir: %s\n",
 		configFile,
-		getPlatformName(),
+		platformKey,
 		config.Port,
-		config.VideoDir,
-		config.Width, config.Height,
-		config.Fps,
-		recording.FfmpegPath,
-		recording.FfmpegCamera,
-		recording.FfmpegFormat)
+		config.VideoDir)
+
+	// Log each camera configuration
+	for i, camera := range cameras {
+		suffix := ""
+		if i > 0 {
+			suffix = strconv.Itoa(i + 1)
+		}
+		logging.InfoLogger.Printf("Camera configuration for %s%s:\n"+
+			"    FFmpeg Path: %s\n"+
+			"    FFmpeg Camera: %s\n"+
+			"    Format: %s\n"+
+			"    Params: %s\n"+
+			"    Size: %s\n"+
+			"    FPS: %d",
+			platformKey, suffix,
+			camera.FfmpegPath,
+			camera.FfmpegCamera,
+			camera.Format,
+			camera.Params,
+			camera.Size,
+			camera.Fps)
+	}
+
 	return &config, nil
 }
 
 // ValidateCamera checks if camera configuration is correct for the platform
 func (c *Config) ValidateCamera() error {
-	if recording.FfmpegCamera == "" {
+	if len(c.Cameras) == 0 || c.Cameras[0].FfmpegCamera == "" {
 		return fmt.Errorf("camera not configured")
 	}
 	return nil
@@ -168,21 +210,15 @@ An absolute path can be provded if needed.`, GetInstallDir()))
 		return nil, fmt.Errorf("error loading configuration: %w", err)
 	}
 
-	// Set the noVideo flag and recode option in the recording package
-	recording.SetNoVideo(NoVideo)
-	recording.SetRecode(cfg.Recode)
-
 	return cfg, nil
 }
 
 // getInstallDir returns the installation directory based on the environment
 func GetInstallDir() string {
-	// If InstallDir is set and is absolute, use it directly
 	if InstallDir != "" && filepath.IsAbs(InstallDir) {
 		return InstallDir
 	}
 
-	// Get the platform-specific base directory and app name
 	var baseDir string
 	appName := "replays"
 	if InstallDir != "" {
@@ -209,7 +245,6 @@ func isWSL() bool {
 		return false
 	}
 
-	// Check for WSL-specific file
 	data, err := os.ReadFile("/proc/version")
 	if err != nil {
 		return false
@@ -236,18 +271,15 @@ func UpdateConfigFile(configFile, owlcmsAddress string) error {
 	foundOwlcms := false
 	portLineIndex := -1
 
-	// Find and replace the owlcms line, preserving comments and structure
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "# owlcms =") ||
 			strings.HasPrefix(trimmed, "owlcms =") ||
 			trimmed == "# owlcms" {
-			// Remove port from address if present
 			address := owlcmsAddress
 			if strings.Contains(address, ":") {
 				address = strings.Split(address, ":")[0]
 			}
-			// Preserve any leading whitespace
 			leadingSpace := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 			lines[i] = fmt.Sprintf("%sowlcms = \"%s\"", leadingSpace, address)
 			foundOwlcms = true
@@ -258,7 +290,6 @@ func UpdateConfigFile(configFile, owlcmsAddress string) error {
 		}
 	}
 
-	// If owlcms line not found, add it after the port line
 	if !foundOwlcms && portLineIndex >= 0 {
 		address := owlcmsAddress
 		if strings.Contains(address, ":") {
@@ -272,7 +303,6 @@ func UpdateConfigFile(configFile, owlcmsAddress string) error {
 	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
 }
 
-// UpdatePlatform updates the platform in the config file while preserving comments and ordering
 func UpdatePlatform(configFile, platform string) error {
 	input, err := os.ReadFile(configFile)
 	if err != nil {
@@ -291,10 +321,8 @@ func UpdatePlatform(configFile, platform string) error {
 	}
 
 	if !platformFound {
-		// If platform line doesn't exist, add it after owlcms line
 		for i, line := range lines {
 			if strings.HasPrefix(strings.TrimSpace(line), "owlcms") {
-				// Insert platform after owlcms line
 				newLines := make([]string, 0, len(lines)+1)
 				newLines = append(newLines, lines[:i+1]...)
 				newLines = append(newLines, fmt.Sprintf("platform = \"%s\"", platform))
@@ -311,4 +339,31 @@ func UpdatePlatform(configFile, platform string) error {
 	}
 
 	return nil
+}
+
+// SetVideoDir sets the video directory
+func SetVideoDir(dir string) {
+	videoDir = dir
+}
+
+// SetVideoConfig sets the video configuration
+func SetVideoConfig(width, height, fps int) {
+	Width = width
+	Height = height
+	Fps = fps
+}
+
+// SetNoVideo sets the no video flag
+func SetNoVideo(noVideo bool) {
+	NoVideo = noVideo
+}
+
+// SetRecode sets the recode flag
+func SetRecode(recode bool) {
+	Recode = recode
+}
+
+// GetVideoDir returns the video directory
+func GetVideoDir() string {
+	return videoDir
 }

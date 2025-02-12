@@ -1,30 +1,35 @@
-//go:build windows
+//go:build windows && !darwin
 
 package recording
 
 import (
 	"os/exec"
-	"path/filepath"
 	"syscall"
 
 	"github.com/owlcms/replays/internal/logging"
 	"golang.org/x/sys/windows"
 )
 
+// createFfmpegCmd creates an exec.Cmd for ffmpeg with Windows-specific process attributes
 func createFfmpegCmd(args []string) *exec.Cmd {
-	ffmpegPath := FfmpegPath
-	if !filepath.IsAbs(ffmpegPath) {
+	path := FfmpegPath
+	if len(CameraConfigs) > 0 {
+		path = CameraConfigs[0].FfmpegPath
+	}
+
+	// If no path configured, try to find ffmpeg.exe in PATH
+	if path == "" {
 		var err error
-		ffmpegPath, err = exec.LookPath(FfmpegPath)
+		path, err = exec.LookPath("ffmpeg.exe")
 		if err != nil {
-			logging.ErrorLogger.Fatalf("ffmpeg executable not found in PATH: %v", err)
+			logging.ErrorLogger.Printf("No ffmpeg path configured and ffmpeg.exe not found in PATH: %v", err)
+			// Use default name, will fail if not in current directory
+			path = "ffmpeg.exe"
 		}
 	}
 
-	cmd := exec.Command(ffmpegPath, args...)
-	// Hide the command window on Windows
+	cmd := exec.Command(path, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
 		CreationFlags: windows.CREATE_NO_WINDOW,
 	}
 	return cmd

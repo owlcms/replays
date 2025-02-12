@@ -1,4 +1,4 @@
-//go:build windows || linux
+//go:build !darwin && (linux || windows)
 
 package main
 
@@ -23,10 +23,137 @@ import (
 	"github.com/owlcms/replays/internal/http"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
+	"github.com/owlcms/replays/internal/recording"
 	"github.com/owlcms/replays/internal/status"
 )
 
 var sigChan = make(chan os.Signal, 1)
+
+// openApplicationDirectory opens the application directory in the file explorer
+func openApplicationDirectory() {
+	dir := config.GetInstallDir()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", dir)
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	case "linux":
+		cmd = exec.Command("xdg-open", dir)
+	default:
+		logging.WarningLogger.Printf("Unsupported platform: %s", runtime.GOOS)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		logging.ErrorLogger.Printf("Failed to open application directory: %v", err)
+	}
+}
+
+// showOwlCMSServerAddress shows a dialog with the OwlCMS server address
+func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
+	var message string
+	if cfg.OwlCMS == "" {
+		message = "No server located."
+	} else {
+		message = fmt.Sprintf("Current owlcms Server Address:\n%s", cfg.OwlCMS)
+	}
+
+	entry := widget.NewEntry()
+	entry.SetPlaceHolder("Enter new server address")
+
+	updateFunc := func() {
+		newAddress := entry.Text
+		if newAddress != "" {
+			cfg.OwlCMS = newAddress
+			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+			if err := config.UpdateConfigFile(configFilePath, newAddress); err != nil {
+				fmt.Printf("Error updating config file: %v\n", err)
+				dialog.ShowError(err, window)
+				return
+			}
+			successDialog := dialog.NewInformation("Success", "OwlCMS server address updated. Restart the application.", window)
+			successDialog.SetOnClosed(func() {
+				window.Close()
+				os.Exit(0)
+			})
+			successDialog.Show()
+		}
+	}
+
+	// Set the entry's OnSubmitted handler
+	entry.OnSubmitted = func(string) { updateFunc() }
+
+	form := container.NewBorder(
+		nil,
+		nil,
+		nil,
+		widget.NewButton("Update", updateFunc),
+		entry,
+	)
+
+	content := container.NewVBox(
+		widget.NewLabel(message),
+		form,
+	)
+	dialog := dialog.NewCustom("OwlCMS Server Address", "Close", content, window)
+	dialog.Resize(fyne.NewSize(400, 0))
+	dialog.Show()
+}
+
+// showPlatformSelection shows a dialog with platform selection dropdown
+func showPlatformSelection(cfg *config.Config, window fyne.Window) {
+	// Request fresh platform list
+	monitor.PublishConfig(cfg.Platform)
+
+	// Wait up to 2 seconds for response
+	var platforms []string
+	select {
+	case platforms = <-monitor.PlatformListChan:
+		// got platforms
+	case <-time.After(2 * time.Second):
+		dialog.ShowInformation("Not Available", "No response from owlcms server", window)
+		return
+	}
+
+	if len(platforms) == 0 {
+		dialog.ShowInformation("No Platforms", "No platforms configured on owlcms server", window)
+		return
+	}
+
+	combo := widget.NewSelect(platforms, nil)
+	// Only set the current platform if it exists in the list
+	for _, p := range platforms {
+		if p == cfg.Platform {
+			combo.SetSelected(cfg.Platform)
+			break
+		}
+	}
+
+	content := container.NewVBox(
+		widget.NewLabel("Select Platform:"),
+		combo,
+	)
+
+	dialog := dialog.NewCustomConfirm("Platform Selection", "Update", "Cancel", content,
+		func(update bool) {
+			if update && combo.Selected != "" {
+				cfg.Platform = combo.Selected
+				configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+				if err := config.UpdatePlatform(configFilePath, combo.Selected); err != nil {
+					dialog.ShowError(err, window)
+					return
+				}
+				successDialog := dialog.NewInformation("Success", "Platform updated. Restart the application.", window)
+				successDialog.SetOnClosed(func() {
+					window.Close()
+					os.Exit(0)
+				})
+				successDialog.Show()
+			}
+		}, window)
+	dialog.Resize(fyne.NewSize(300, 0))
+	dialog.Show()
+}
 
 func main() {
 	// Disable Fyne telemetry
@@ -37,6 +164,11 @@ func main() {
 	if err != nil {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
+
+	// Set recording package configuration
+	recording.SetNoVideo(config.NoVideo)
+	recording.SetVideoDir(cfg.VideoDir)
+	recording.SetVideoConfig(cfg.Width, cfg.Height, cfg.Fps)
 
 	// Initialize with an empty status
 	var initialStatus string
@@ -185,130 +317,4 @@ func main() {
 	}()
 
 	window.ShowAndRun()
-}
-
-// openApplicationDirectory opens the application directory in the file explorer
-func openApplicationDirectory() {
-	dir := config.GetInstallDir()
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", dir)
-	case "darwin":
-		cmd = exec.Command("open", dir)
-	case "linux":
-		cmd = exec.Command("xdg-open", dir)
-	default:
-		logging.WarningLogger.Printf("Unsupported platform: %s", runtime.GOOS)
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		logging.ErrorLogger.Printf("Failed to open application directory: %v", err)
-	}
-}
-
-// showOwlCMSServerAddress shows a dialog with the OwlCMS server address
-func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
-	var message string
-	if cfg.OwlCMS == "" {
-		message = "No server located."
-	} else {
-		message = fmt.Sprintf("Current owlcms Server Address:\n%s", cfg.OwlCMS)
-	}
-
-	entry := widget.NewEntry()
-	entry.SetPlaceHolder("Enter new server address")
-
-	updateFunc := func() {
-		newAddress := entry.Text
-		if newAddress != "" {
-			cfg.OwlCMS = newAddress
-			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-			if err := config.UpdateConfigFile(configFilePath, newAddress); err != nil {
-				fmt.Printf("Error updating config file: %v\n", err)
-				dialog.ShowError(err, window)
-				return
-			}
-			successDialog := dialog.NewInformation("Success", "OwlCMS server address updated. Restart the application.", window)
-			successDialog.SetOnClosed(func() {
-				window.Close()
-				os.Exit(0)
-			})
-			successDialog.Show()
-		}
-	}
-
-	// Set the entry's OnSubmitted handler
-	entry.OnSubmitted = func(string) { updateFunc() }
-
-	form := container.NewBorder(
-		nil,
-		nil,
-		nil,
-		widget.NewButton("Update", updateFunc),
-		entry,
-	)
-
-	content := container.NewVBox(
-		widget.NewLabel(message),
-		form,
-	)
-	dialog := dialog.NewCustom("OwlCMS Server Address", "Close", content, window)
-	dialog.Resize(fyne.NewSize(400, 0))
-	dialog.Show()
-}
-
-// showPlatformSelection shows a dialog with platform selection dropdown
-func showPlatformSelection(cfg *config.Config, window fyne.Window) {
-	// Request fresh platform list
-	monitor.PublishConfig(cfg.Platform)
-
-	// Wait up to 2 seconds for response
-	var platforms []string
-	select {
-	case platforms = <-monitor.PlatformListChan:
-		// got platforms
-	case <-time.After(2 * time.Second):
-		dialog.ShowInformation("Not Available", "No response from owlcms server", window)
-		return
-	}
-
-	if len(platforms) == 0 {
-		dialog.ShowInformation("No Platforms", "No platforms configured on owlcms server", window)
-		return
-	}
-
-	combo := widget.NewSelect(platforms, nil)
-	// Only set the current platform if it exists in the list
-	for _, p := range platforms {
-		if p == cfg.Platform {
-			combo.SetSelected(cfg.Platform)
-			break
-		}
-	}
-
-	content := container.NewVBox(
-		widget.NewLabel("Select Platform:"),
-		combo,
-	)
-
-	dialog := dialog.NewCustomConfirm("Platform Selection", "Update", "Cancel", content,
-		func(update bool) {
-			if update && combo.Selected != "" {
-				cfg.Platform = combo.Selected
-				configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-				if err := config.UpdatePlatform(configFilePath, combo.Selected); err != nil {
-					dialog.ShowError(err, window)
-					return
-				}
-				successDialog := dialog.NewInformation("Success", "Platform updated. Restart the application.", window)
-				successDialog.SetOnClosed(func() {
-					window.Close()
-					os.Exit(0)
-				})
-				successDialog.Show()
-			}
-		}, window)
-	dialog.Resize(fyne.NewSize(300, 0))
-	dialog.Show()
 }
