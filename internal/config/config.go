@@ -21,6 +21,7 @@ type CameraConfiguration struct {
 	Params       string `toml:"params"`
 	Size         string `toml:"size"`
 	Fps          int    `toml:"fps"`
+	Recode       bool   `toml:"recode"` // Add recode field
 }
 
 // Config represents the configuration file structure
@@ -30,7 +31,6 @@ type Config struct {
 	Width    int                   `toml:"width"`
 	Height   int                   `toml:"height"`
 	Fps      int                   `toml:"fps"`
-	Recode   bool                  `toml:"recode"`
 	OwlCMS   string                `toml:"owlcms"`
 	Platform string                `toml:"platform"`
 	Cameras  []CameraConfiguration `toml:"-"`
@@ -116,6 +116,11 @@ func LoadConfig(configFile string) (*Config, error) {
 		if val, ok := m["fps"].(int64); ok {
 			pc.Fps = int(val)
 		}
+		if val, ok := m["recode"].(bool); ok {
+			pc.Recode = val
+		} else {
+			pc.Recode = false // Default to false
+		}
 		return pc, nil
 	}
 
@@ -171,14 +176,16 @@ func LoadConfig(configFile string) (*Config, error) {
 			"    Format: %s\n"+
 			"    Params: %s\n"+
 			"    Size: %s\n"+
-			"    FPS: %d",
+			"    FPS: %d\n"+
+			"    Recode: %t",
 			platformKey, suffix,
 			camera.FfmpegPath,
 			camera.FfmpegCamera,
 			camera.Format,
 			camera.Params,
 			camera.Size,
-			camera.Fps)
+			camera.Fps,
+			camera.Recode)
 	}
 
 	return &config, nil

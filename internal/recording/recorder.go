@@ -65,9 +65,10 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 }
 
 // buildTrimmingArgs builds the ffmpeg arguments for trimming
-func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string) []string {
+func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
 	args := []string{"-y"}
-	if config.Recode {
+	if camera.Recode {
+		logging.InfoLogger.Printf("Recode is enabled for camera: %s", camera.FfmpegCamera)
 		if trimDuration > 0 {
 			args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
 		}
@@ -192,7 +193,7 @@ func StopRecording(decisionTime int64) error {
 			}
 		} else {
 			for j := 0; j < 5; j++ {
-				args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName)
+				args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName, config.GetCameraConfigs()[i])
 				cmd := createFfmpegCmd(args)
 
 				if j == 0 {
