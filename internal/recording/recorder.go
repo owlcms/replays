@@ -65,7 +65,7 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 }
 
 // buildTrimmingArgs builds the ffmpeg arguments for trimming
-func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
+func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string) []string {
 	args := []string{"-y"}
 	if config.Recode {
 		if trimDuration > 0 {
@@ -175,11 +175,10 @@ func StopRecording(decisionTime int64) error {
 		finalFileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
 		finalFileNames = append(finalFileNames, finalFileName)
 
-		attemptInfo := fmt.Sprintf("%s - %s attempt %d Camera %d",
+		attemptInfo := fmt.Sprintf("%s - %s attempt %d",
 			strings.ReplaceAll(state.CurrentAthlete, "_", " "),
 			state.CurrentLiftType,
-			state.CurrentAttempt,
-			i+1)
+			state.CurrentAttempt)
 
 		SendStatus(status.Trimming, fmt.Sprintf("Trimming video for Camera %d: %s", i+1, attemptInfo))
 
@@ -193,8 +192,7 @@ func StopRecording(decisionTime int64) error {
 			}
 		} else {
 			for j := 0; j < 5; j++ {
-				cameras := config.GetCameraConfigs()
-				args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName, cameras[i])
+				args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName)
 				cmd := createFfmpegCmd(args)
 
 				if j == 0 {

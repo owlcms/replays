@@ -99,8 +99,8 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		validFiles = validFiles[:20]
 	}
 
-	// Regex to extract date, hour, name, lift type, and attempt
-	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)(?:_\d+)?\.mp4$`)
+	// Regex to extract date, hour, name, lift type, attempt, and camera
+	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)_Camera(\d+)\.mp4$`)
 
 	videos := make([]VideoInfo, 0)
 	for _, file := range validFiles {
@@ -109,14 +109,15 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 			// Replace Clean_and_Jerk with CJ
 			fileName2 := strings.ReplaceAll(fileName, "Clean_and_Jerk", "CJ")
 			matches := re.FindStringSubmatch(fileName2)
-			if len(matches) == 6 {
+			if len(matches) == 7 {
 				date := matches[1]
 				hourMinuteSeconds := strings.NewReplacer("h", ":", "m", ":", "s", "").Replace(matches[2])
 				name := strings.ReplaceAll(matches[3], "_", " ")
 				lift := matches[4]
 				attempt := matches[5]
-				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s",
-					date, hourMinuteSeconds, name, lift, attempt)
+				camera := matches[6]
+				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s - Camera %s",
+					date, hourMinuteSeconds, name, lift, attempt, camera)
 				videos = append(videos, VideoInfo{
 					Filename:    fileName,
 					DisplayName: displayName,
