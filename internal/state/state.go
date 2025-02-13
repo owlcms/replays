@@ -20,6 +20,7 @@ var (
 	CurrentAttempt      int
 	StopRequestCount    int
 	CurrentCameraNumber int
+	CurrentSession      string // Current competition session name
 )
 
 type StartMessage struct {

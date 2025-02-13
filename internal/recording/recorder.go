@@ -170,10 +170,21 @@ func StopRecording(decisionTime int64) error {
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
 	var finalFileNames []string
 
+	// Create session directory if it doesn't exist
+	sessionDir := state.CurrentSession
+	if sessionDir == "" {
+		sessionDir = "unsorted"
+	}
+	sessionDir = strings.ReplaceAll(sessionDir, " ", "_")
+	fullSessionDir := filepath.Join(config.GetVideoDir(), sessionDir)
+	if err := os.MkdirAll(fullSessionDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create session directory: %w", err)
+	}
+
 	for i, currentFileName := range currentFileNames {
 		baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
 		baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))]
-		finalFileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
+		finalFileName := filepath.Join(fullSessionDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
 		finalFileNames = append(finalFileNames, finalFileName)
 
 		attemptInfo := fmt.Sprintf("%s - %s attempt %d",

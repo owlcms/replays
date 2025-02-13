@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/state"
 )
 
 var (
@@ -40,6 +42,8 @@ type TemplateData struct {
 	ShowAll    bool
 	TotalCount int
 	StatusMsg  string
+	Sessions   []string
+	Session    string
 }
 
 type VideoCountMessage struct {
@@ -94,6 +98,32 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get session from query parameter, default to current session
+	sessionName := r.URL.Query().Get("session")
+	if sessionName == "" {
+		sessionName = state.CurrentSession
+		if sessionName == "" {
+			sessionName = "unsorted"
+		}
+	}
+	sessionName = strings.ReplaceAll(sessionName, " ", "_")
+
+	// Get list of sessions (subdirectories)
+	var sessions []string
+	for _, f := range files {
+		if f.IsDir() {
+			sessions = append(sessions, f.Name())
+		}
+	}
+
+	// Read files from the session directory
+	sessionDir := filepath.Join(config.GetVideoDir(), sessionName)
+	files, err = os.ReadDir(sessionDir)
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, "Failed to read session directory", http.StatusInternalServerError)
+		return
+	}
+
 	// Sort files in reverse order (most recent first)
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Name() > files[j].Name()
@@ -141,7 +171,7 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s - Camera %s",
 					date, hourMinuteSeconds, name, lift, attempt, camera)
 				videos = append(videos, VideoInfo{
-					Filename:    fileName,
+					Filename:    filepath.Join(sessionName, fileName),
 					DisplayName: displayName,
 				})
 			}
@@ -153,6 +183,8 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		ShowAll:    showAll,
 		TotalCount: fileCount,
 		StatusMsg:  statusMsg,
+		Sessions:   sessions,    // Add available sessions
+		Session:    sessionName, // Add current session
 	}
 
 	// Remove the SendStatus call here as it's not needed

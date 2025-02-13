@@ -103,11 +103,26 @@
             border-color: #f5c6cb;
             color: #721c24;
         }
+        .session-selector {
+            margin: 10px 0;
+            padding: 5px;
+            font-size: 1em;
+        }
     </style>
 </head>
 <body>
     <h1>Replays</h1>
     <div id="status-message" class="status-message"></div>
+    
+    <!-- Add session selector -->
+    <select class="session-selector" onchange="window.location.href='/?session=' + this.value">
+        {{range .Sessions}}
+            <option value="{{.}}" {{if eq . $.Session}}selected{{end}}>
+                {{if eq . "unsorted"}}Unsorted{{else}}{{.}}{{end}}
+            </option>
+        {{end}}
+    </select>
+
     <div class="showAll">
         {{if .ShowAll}}
             <a href="/">Show recent videos</a>
