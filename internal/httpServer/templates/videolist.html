@@ -76,16 +76,22 @@
 </head>
 <body>
     <h1>Replays</h1>
-    <div id="status-message" class="status-message"></div>
     
-    <!-- Session selector dropdown -->
-    <select class="session-selector" onchange="window.location.href='/?session=' + this.value">
-        {{range .Sessions}}
-            <option value="{{.}}" {{if eq . $.Session}}selected{{end}}>
-                {{if eq . "unsorted"}}Unsorted{{else}}{{.}}{{end}}
-            </option>
-        {{end}}
-    </select>
+    {{if .NoSessions}}
+        <div class="no-sessions">No recorded sessions</div>
+    {{else}}
+        <div class="session-container">
+            <span class="current-session">{{if .ActiveSession}}Current Session: {{.ActiveSession}}{{else}}No active session{{end}}</span>
+            <select class="session-selector" onchange="window.location.href='/?session=' + this.value">
+                <option value="" disabled {{if not .SelectedSession}}selected{{end}}>Select Session</option>
+                {{range .Sessions}}
+                    <option value="{{.}}" {{if and $.ActiveSession (eq . $.ActiveSession)}}selected{{end}}>{{.}}</option>
+                {{end}}
+            </select>
+        </div>
+    {{end}}
+    
+    <div id="status-message" class="status-message"></div>
 
     <ul>
         {{range .Videos}}

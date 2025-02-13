@@ -38,12 +38,12 @@ type VideoInfo struct {
 }
 
 type TemplateData struct {
-	Videos     []VideoInfo
-	ShowAll    bool
-	TotalCount int
-	StatusMsg  string
-	Sessions   []string
-	Session    string
+	Videos          []VideoInfo
+	StatusMsg       string
+	Sessions        []string
+	SelectedSession string // Currently selected directory
+	ActiveSession   string // Current competition session from state
+	NoSessions      bool
 }
 
 type VideoCountMessage struct {
@@ -98,26 +98,36 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get session from query parameter, default to current session
-	sessionName := r.URL.Query().Get("session")
-	if sessionName == "" {
-		sessionName = state.CurrentSession
-		if sessionName == "" {
-			sessionName = "unsorted"
+	// Get selected session from query parameter, default to current session's directory
+	selectedSession := r.URL.Query().Get("session")
+	if selectedSession == "" {
+		// Default to current active session's directory if it exists
+		if state.CurrentSession != "" {
+			selectedSession = strings.ReplaceAll(state.CurrentSession, " ", "_")
+		} else {
+			selectedSession = "unsorted"
 		}
 	}
-	sessionName = strings.ReplaceAll(sessionName, " ", "_")
 
 	// Get list of sessions (subdirectories)
 	var sessions []string
 	for _, f := range files {
-		if f.IsDir() {
+		if f.IsDir() && f.Name() != "unsorted" {
 			sessions = append(sessions, f.Name())
 		}
 	}
 
+	// If no sessions exist, show a message instead
+	if len(sessions) == 0 {
+		data := TemplateData{
+			NoSessions: true,
+		}
+		templates.ExecuteTemplate(w, "videolist.html", data)
+		return
+	}
+
 	// Read files from the session directory
-	sessionDir := filepath.Join(config.GetVideoDir(), sessionName)
+	sessionDir := filepath.Join(config.GetVideoDir(), selectedSession)
 	files, err = os.ReadDir(sessionDir)
 	if err != nil && !os.IsNotExist(err) {
 		http.Error(w, "Failed to read session directory", http.StatusInternalServerError)
@@ -146,11 +156,6 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		SendStatus(Ready, fmt.Sprintf("Total videos available: %d", fileCount))
 	}
 
-	showAll := r.URL.Query().Get("showAll") == "true"
-	if !showAll && fileCount > 20 {
-		validFiles = validFiles[:20]
-	}
-
 	// Regex to extract date, hour, name, lift type, attempt, and camera
 	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)_Camera(\d+)\.mp4$`)
 
@@ -169,9 +174,10 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 				attempt := matches[5]
 				camera := matches[6]
 				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s - Camera %s",
+
 					date, hourMinuteSeconds, name, lift, attempt, camera)
 				videos = append(videos, VideoInfo{
-					Filename:    filepath.Join(sessionName, fileName),
+					Filename:    filepath.Join(selectedSession, fileName),
 					DisplayName: displayName,
 				})
 			}
@@ -179,12 +185,11 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := TemplateData{
-		Videos:     videos,
-		ShowAll:    showAll,
-		TotalCount: fileCount,
-		StatusMsg:  statusMsg,
-		Sessions:   sessions,    // Add available sessions
-		Session:    sessionName, // Add current session
+		Videos:          videos,
+		StatusMsg:       statusMsg,
+		Sessions:        sessions,
+		SelectedSession: selectedSession,
+		ActiveSession:   state.CurrentSession, // Current competition session
 	}
 
 	// Remove the SendStatus call here as it's not needed

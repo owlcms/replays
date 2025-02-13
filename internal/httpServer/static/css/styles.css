@@ -32,26 +32,9 @@ a:hover {
 	text-decoration: underline;
 }
 
-.showAll {
-    text-align: center;
-    margin: 1em 0;
-}
-
-.showAll a {
-    padding: 0.5em 1em;
-    background-color: #007bff;
-    color: white;
-    border-radius: 3px;
-}
-
-.showAll a:hover {
-    background-color: #0056b3;
-    text-decoration: none;
-}
-
 .status-message {
     padding: 10px;
-    margin: 10px 0;
+    margin: 0 10px 20px 10px;
     background-color: #f0f0f0;
     border: 1px solid #ddd;
     border-radius: 4px;
@@ -84,7 +67,31 @@ a:hover {
 }
 
 .session-selector {
-    margin: 10px 0;
-    padding: 5px;
+    flex-grow: 1;
+    max-width: 300px;
+    padding: 8px;
     font-size: 1em;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: white;
+}
+
+.no-sessions {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-style: italic;
+}
+
+.session-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 20px 10px;
+}
+
+.current-session {
+    font-weight: bold;
+    color: #333;
+    white-space: nowrap;
 }
