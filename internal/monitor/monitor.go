@@ -8,6 +8,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/recording"
 	"github.com/owlcms/replays/internal/state"
@@ -84,25 +85,36 @@ func PublishConfig(platform string) {
 
 func messageHandler() mqtt.MessageHandler {
 	return func(client mqtt.Client, msg mqtt.Message) {
+		topic := msg.Topic()
 		payload := string(msg.Payload())
-		// logging.InfoLogger.Printf("Received message: %s %s", msg.Topic(), msg.Payload())
 
-		topicParts := strings.Split(msg.Topic(), "/")
+		// Split topic for message handling
+		topicParts := strings.Split(topic, "/")
 		if len(topicParts) < 3 {
 			return
 		}
-		topic := strings.Join(topicParts[:3], "/")
+		topic = strings.Join(topicParts[:3], "/")
 
 		switch topic {
 		case "owlcms/fop/start":
 			handleStart(payload)
 		case "owlcms/fop/stop":
 			handleStop(payload)
+		case "owlcms/fop/break":
+			handleBreak(payload)
 		case "owlcms/fop/refereesDecision":
 			handleRefereesDecision()
 		case "owlcms/fop/config":
 			handleConfig(payload)
 		}
+	}
+}
+
+func handleBreak(payload string) {
+	if payload == "GROUP_DONE" {
+		logging.InfoLogger.Println("Session ended")
+		state.CurrentSession = ""                                    // Clear current session
+		httpServer.SendStatus(httpServer.Ready, "No active session") // Update web UI with session state
 	}
 }
 

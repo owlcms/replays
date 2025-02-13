@@ -37,19 +37,6 @@
             }
         }
 
-        function updateSessionAndStatus(msg) {
-            updateStatusMessage(msg.text, msg.code);
-            
-            // Check if this is a recording start message (code 1)
-            if (msg.code === 1 && msg.text.includes("Recording:")) {
-                // Reload the page to switch to the active session
-                window.location.href = '/?session=' + encodeURIComponent(msg.session || '');
-            } else if (msg.code === 0 && msg.text.includes('Videos ready')) {
-                // Just reload the current page for new videos
-                setTimeout(() => location.reload(), 1000);
-            }
-        }
-
         function connectWebSocket() {
             ws = new WebSocket(`ws://${window.location.host}/ws`);
             
@@ -62,7 +49,15 @@
                 try {
                     const msg = JSON.parse(event.data);
                     if (msg && typeof msg.text === 'string') {
-                        updateSessionAndStatus(msg);
+                        updateStatusMessage(msg.text, msg.code);
+                        
+                        // Only reload when new videos are ready, not for the "Total videos available" message
+                        if (msg.code === 0 && 
+                            msg.text.includes('Videos ready') && 
+                            !msg.text.includes('Total videos available')) {
+                            console.log('Reloading page due to new videos');
+                            setTimeout(() => location.reload(), 1000);
+                        }
                     }
                 } catch (e) {
                     console.error('Parse error:', e);
