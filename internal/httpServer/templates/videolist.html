@@ -114,7 +114,7 @@
     <h1>Replays</h1>
     <div id="status-message" class="status-message"></div>
     
-    <!-- Add session selector -->
+    <!-- Session selector dropdown -->
     <select class="session-selector" onchange="window.location.href='/?session=' + this.value">
         {{range .Sessions}}
             <option value="{{.}}" {{if eq . $.Session}}selected{{end}}>
@@ -123,19 +123,9 @@
         {{end}}
     </select>
 
-    <div class="showAll">
-        {{if .ShowAll}}
-            <a href="/">Show recent videos</a>
-        {{else}}
-            <a href="/?showAll=true">Show All ({{.TotalCount}} videos)</a>
-        {{end}}
-    </div>
     <ul>
         {{range .Videos}}
             <li><a href="/videos/{{.Filename}}" target="_blank" rel="noopener noreferrer">{{.DisplayName}}</a></li>
-        {{end}}
-        {{if and (not .ShowAll) (gt .TotalCount 20)}}
-            <li><a href="/?showAll=true">List all replays</a></li>
         {{end}}
     </ul>
 </body>
