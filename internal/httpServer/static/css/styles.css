@@ -48,3 +48,43 @@ a:hover {
     background-color: #0056b3;
     text-decoration: none;
 }
+
+.status-message {
+    padding: 10px;
+    margin: 10px 0;
+    background-color: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    min-height: 1.2em;
+    font-weight: bold;
+}
+
+.status-message.recording {
+    background-color: #fff3cd;
+    border-color: #ffeeba;
+    color: #856404;
+}
+
+.status-message.trimming {
+    background-color: #cce5ff;
+    border-color: #b8daff;
+    color: #004085;
+}
+
+.status-message.ready {
+    background-color: #d4edda;
+    border-color: #c3e6cb;
+    color: #155724;
+}
+
+.status-message.error {
+    background-color: #f8d7da;
+    border-color: #f5c6cb;
+    color: #721c24;
+}
+
+.session-selector {
+    margin: 10px 0;
+    padding: 5px;
+    font-size: 1em;
+}
