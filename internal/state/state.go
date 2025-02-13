@@ -27,6 +27,7 @@ type StartMessage struct {
 	AthleteName   string `json:"athleteName"`
 	AttemptNumber int    `json:"attemptNumber"`
 	LiftType      string `json:"liftType"`
+	Session       string `json:"session"` // Add session field
 }
 
 func UpdateStateFromStartMessage(message string) {
@@ -54,6 +55,7 @@ func UpdateStateFromStartMessage(message string) {
 	CurrentAthlete = startMsg.AthleteName
 	CurrentAttempt = startMsg.AttemptNumber
 	CurrentLiftType = startMsg.LiftType
+	CurrentSession = startMsg.Session // Update session from message
 	LastStartTime = parseTime(timePart)
 	StopRequestCount = 0
 }
