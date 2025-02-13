@@ -186,23 +186,29 @@ func main() {
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
 	window.SetCloseIntercept(func() {
+		// Ask for confirmation before closing
 		confirmDialog := dialog.NewConfirm(
 			"Confirm Exit",
-			"Are you sure you want to exit? Any ongoing recordings will be stopped.",
+			"Are you sure you want to exit? This will stop jury replays. Any ongoing recordings will be stopped.",
 			func(confirm bool) {
 				if confirm {
-					// Stop any ongoing recordings
+					// First stop HTTP server to prevent new recordings
+					httpServer.StopServer()
+
+					// Then stop any ongoing recordings
 					if err := recording.StopRecording(0); err != nil {
 						logging.ErrorLogger.Printf("Error stopping recordings: %v", err)
 					}
-					// Stop the HTTP server
-					httpServer.StopServer()
+
+					// Finally close the window
 					logging.InfoLogger.Println("Closing replays recorder")
 					window.Close()
 				}
 			},
 			window,
 		)
+		confirmDialog.SetDismissText("Cancel")
+		confirmDialog.SetConfirmText("Exit")
 		confirmDialog.Show()
 	})
 
