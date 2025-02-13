@@ -98,15 +98,10 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get selected session from query parameter, default to current session's directory
+	// Get selected session from query parameter or active session
 	selectedSession := r.URL.Query().Get("session")
 	if selectedSession == "" {
-		// Default to current active session's directory if it exists
-		if state.CurrentSession != "" {
-			selectedSession = strings.ReplaceAll(state.CurrentSession, " ", "_")
-		} else {
-			selectedSession = "unsorted"
-		}
+		selectedSession = strings.ReplaceAll(state.CurrentSession, " ", "_")
 	}
 
 	// Get list of sessions (subdirectories)
