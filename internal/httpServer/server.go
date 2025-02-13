@@ -121,8 +121,16 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read files from the session directory
+	// Create directory if it doesn't exist yet
 	sessionDir := filepath.Join(config.GetVideoDir(), selectedSession)
+	if selectedSession != "" && selectedSession != "unsorted" {
+		if err := os.MkdirAll(sessionDir, os.ModePerm); err != nil {
+			logging.ErrorLogger.Printf("Failed to create session directory: %v", err)
+		}
+	}
+
+	// Read files from the session directory
+	sessionDir = filepath.Join(config.GetVideoDir(), selectedSession)
 	files, err = os.ReadDir(sessionDir)
 	if err != nil && !os.IsNotExist(err) {
 		http.Error(w, "Failed to read session directory", http.StatusInternalServerError)
@@ -145,11 +153,8 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 
 	fileCount := len(validFiles)
 
-	// Only send status update if the number of videos has changed
-	if fileCount != lastVideoCount {
-		lastVideoCount = fileCount
-		SendStatus(Ready, fmt.Sprintf("Total videos available: %d", fileCount))
-	}
+	// Remove the status update for total videos
+	lastVideoCount = fileCount
 
 	// Regex to extract date, hour, name, lift type, attempt, and camera
 	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)_Camera(\d+)\.mp4$`)

@@ -227,7 +227,8 @@ func StopRecording(decisionTime int64) error {
 		}
 	}
 
-	httpServer.SendStatus(httpServer.Ready, fmt.Sprintf("Videos ready: %v", finalFileNames))
+	// Send single "Videos ready" message after all cameras are done
+	httpServer.SendStatus(httpServer.Ready, "Videos ready")
 
 	logging.InfoLogger.Printf("Stopped recording and saved videos: %v", finalFileNames)
 	currentRecordings = nil

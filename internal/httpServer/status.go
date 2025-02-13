@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/state"
 )
 
 type StatusCode int
@@ -16,8 +17,9 @@ const (
 )
 
 type StatusMessage struct {
-	Code StatusCode `json:"code"`
-	Text string     `json:"text"`
+	Code    StatusCode `json:"code"`
+	Text    string     `json:"text"`
+	Session string     `json:"session"` // Add session field
 }
 
 var (
@@ -32,7 +34,11 @@ func SendStatus(code StatusCode, text string) {
 	if code == Ready && strings.Contains(text, "Videos ready") {
 		text = "Videos ready"
 	}
-	msg := StatusMessage{Code: code, Text: text}
+	msg := StatusMessage{
+		Code:    code,
+		Text:    text,
+		Session: state.CurrentSession, // Include current session in message
+	}
 	logging.InfoLogger.Printf("Sending status update: %s", text)
 
 	mu.Lock()

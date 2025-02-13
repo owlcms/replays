@@ -5,6 +5,7 @@
     <link rel="stylesheet" type="text/css" href="/static/css/styles.css">
     <script type="text/javascript">
         let ws;
+        let currentSession = "{{.ActiveSession}}";
         
         function updateStatusMessage(text, code) {
             const statusDiv = document.getElementById('status-message');
@@ -37,6 +38,43 @@
             }
         }
 
+        function updateCurrentSession(session) {
+            const sessionSpan = document.querySelector('.current-session');
+            const sessionSelect = document.querySelector('.session-selector');
+            
+            // Update the current session display
+            if (sessionSpan) {
+                sessionSpan.textContent = session ? `Current Session: ${session}` : 'No active session';
+            }
+            
+            // Update dropdown selection if it exists and matches a session
+            if (sessionSelect) {
+                const options = Array.from(sessionSelect.options);
+                const matchingOption = options.find(opt => opt.value === session);
+                if (matchingOption) {
+                    sessionSelect.value = session;
+                }
+            }
+            
+            currentSession = session;
+        }
+
+        function updateSessionAndStatus(msg) {
+            updateStatusMessage(msg.text, msg.code);
+            
+            // If this is a recording start message
+            if (msg.code === 1 && msg.text.includes("Recording:") && msg.session) {
+                updateCurrentSession(msg.session);
+                // Always switch to the new session's directory
+                window.location.href = '/?session=' + encodeURIComponent(msg.session);
+            } else if (msg.code === 0 && msg.text === "No active session") {
+                updateCurrentSession('');
+            } else if (msg.code === 0 && msg.text === "Videos ready") {
+                // Single reload when all videos are ready
+                location.reload();
+            }
+        }
+
         function connectWebSocket() {
             ws = new WebSocket(`ws://${window.location.host}/ws`);
             
@@ -49,15 +87,7 @@
                 try {
                     const msg = JSON.parse(event.data);
                     if (msg && typeof msg.text === 'string') {
-                        updateStatusMessage(msg.text, msg.code);
-                        
-                        // Only reload when new videos are ready, not for the "Total videos available" message
-                        if (msg.code === 0 && 
-                            msg.text.includes('Videos ready') && 
-                            !msg.text.includes('Total videos available')) {
-                            console.log('Reloading page due to new videos');
-                            setTimeout(() => location.reload(), 1000);
-                        }
+                        updateSessionAndStatus(msg);
                     }
                 } catch (e) {
                     console.error('Parse error:', e);
@@ -80,14 +110,17 @@
     {{if .NoSessions}}
         <div class="no-sessions">No recorded sessions</div>
     {{else}}
-        <div class="session-container">
-            <span class="current-session">{{if .ActiveSession}}Current Session: {{.ActiveSession}}{{else}}No active session{{end}}</span>
-            <select class="session-selector" onchange="window.location.href='/?session=' + this.value">
-                <option value="" disabled {{if not .SelectedSession}}selected{{end}}>Select Session</option>
-                {{range .Sessions}}
-                    <option value="{{.}}" {{if eq . $.SelectedSession}}selected{{end}}>{{.}}</option>
-                {{end}}
-            </select>
+        <div class="session-info">
+            <div class="current-session">{{if .ActiveSession}}Current Session: {{.ActiveSession}}{{else}}No active session{{end}}</div>
+            <div class="session-selector-container">
+                <label for="session-select">List Videos from Session:</label>
+                <select id="session-select" class="session-selector" onchange="window.location.href='/?session=' + this.value">
+                    <option value="" disabled {{if not .SelectedSession}}selected{{end}}>Select Session</option>
+                    {{range .Sessions}}
+                        <option value="{{.}}" {{if eq . $.SelectedSession}}selected{{end}}>{{.}}</option>
+                    {{end}}
+                </select>
+            </div>
         </div>
     {{end}}
     
