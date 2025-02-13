@@ -1,4 +1,4 @@
-package http
+package httpServer
 
 import (
 	"context"
@@ -9,17 +9,25 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
+	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
-	"github.com/owlcms/replays/internal/recording"
-	"github.com/owlcms/replays/internal/websocket"
 )
 
 var (
-	Server    *http.Server // Make server public
+	Server    *http.Server
 	templates *template.Template
+	upgrader  = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	clients        = make(map[*websocket.Conn]bool)
+	broadcast      = make(chan StatusMessage)
+	mu             sync.Mutex
+	lastVideoCount = 0 // Add this new variable to track video count
 )
 
 type VideoInfo struct {
@@ -31,6 +39,11 @@ type TemplateData struct {
 	Videos     []VideoInfo
 	ShowAll    bool
 	TotalCount int
+	StatusMsg  string
+}
+
+type VideoCountMessage struct {
+	Count int `json:"count"`
 }
 
 func init() {
@@ -51,12 +64,11 @@ func StartServer(port int, _ bool) {
 	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fileServer))
 
 	// Serve video files
-	x := recording.GetVideoDir()
+	x := config.GetVideoDir()
 	logging.InfoLogger.Printf("Serving video files from %s\n", x)
 	router.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir(x))))
 
 	router.HandleFunc("/", listFilesHandler)
-
 	router.HandleFunc("/ws", handleWebSocket)
 
 	addr := fmt.Sprintf(":%d", port)
@@ -64,6 +76,9 @@ func StartServer(port int, _ bool) {
 		Addr:    addr,
 		Handler: router,
 	}
+
+	// Start the WebSocket broadcaster
+	go handleMessages()
 
 	logging.InfoLogger.Printf("Starting HTTP server on %s\n", addr)
 	if err := Server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -73,7 +88,7 @@ func StartServer(port int, _ bool) {
 
 // listFilesHandler lists all files in the videos directory as clickable hyperlinks
 func listFilesHandler(w http.ResponseWriter, r *http.Request) {
-	files, err := os.ReadDir(recording.GetVideoDir())
+	files, err := os.ReadDir(config.GetVideoDir())
 	if err != nil {
 		http.Error(w, "Failed to read videos directory", http.StatusInternalServerError)
 		return
@@ -93,8 +108,15 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	showAll := r.URL.Query().Get("showAll") == "true"
 	fileCount := len(validFiles)
+
+	// Only send status update if the number of videos has changed
+	if fileCount != lastVideoCount {
+		lastVideoCount = fileCount
+		SendStatus(Ready, fmt.Sprintf("Total videos available: %d", fileCount))
+	}
+
+	showAll := r.URL.Query().Get("showAll") == "true"
 	if !showAll && fileCount > 20 {
 		validFiles = validFiles[:20]
 	}
@@ -130,10 +152,67 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		Videos:     videos,
 		ShowAll:    showAll,
 		TotalCount: fileCount,
+		StatusMsg:  statusMsg,
 	}
+
+	// Remove the SendStatus call here as it's not needed
+	// SendStatus(Ready, fmt.Sprintf("Total videos available: %d", fileCount))
 
 	if err := templates.ExecuteTemplate(w, "videolist.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleWebSocket upgrades HTTP connection to WebSocket
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		logging.ErrorLogger.Printf("WebSocket upgrade failed: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	mu.Lock()
+	clients[conn] = true
+	// Send current status immediately after connection
+	if statusMsg != "" {
+		if err := conn.WriteJSON(StatusMessage{Code: Ready, Text: statusMsg}); err != nil {
+			logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
+		}
+	}
+	mu.Unlock()
+
+	// Keep the connection alive until it closes
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			break
+		}
+	}
+
+	mu.Lock()
+	delete(clients, conn)
+	mu.Unlock()
+}
+
+// handleMessages broadcasts status messages to all connected WebSocket clients
+func handleMessages() {
+	for {
+		msg := <-broadcast
+		mu.Lock()
+		statusMsg = msg.Text                                           // Update the current status message
+		logging.InfoLogger.Printf("Broadcasting status: %s", msg.Text) // Debug logging
+
+		// Broadcast to all connected clients
+		for client := range clients {
+			err := client.WriteJSON(msg)
+			if err != nil {
+				logging.ErrorLogger.Printf("WebSocket error: %v", err)
+				client.Close()
+				delete(clients, client)
+				continue
+			}
+		}
+		mu.Unlock()
 	}
 }
 
@@ -146,26 +225,5 @@ func StopServer() {
 			logging.ErrorLogger.Printf("Server forced to shutdown: %v", err)
 		}
 		logging.InfoLogger.Println("Server stopped")
-	}
-}
-
-// handleWebSocket upgrades HTTP connection to WebSocket
-func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		logging.ErrorLogger.Printf("WebSocket upgrade failed: %v", err)
-		return
-	}
-	defer conn.Close()
-
-	websocket.Clients[conn] = true
-	defer delete(websocket.Clients, conn)
-
-	// Keep the connection alive
-	for {
-		_, _, err := conn.ReadMessage()
-		if err != nil {
-			break
-		}
 	}
 }

@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/state"
-	"github.com/owlcms/replays/internal/status"
 )
 
 var (
@@ -146,7 +146,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	currentFileNames = fileNames
 	state.LastTimerStopTime = 0
 
-	SendStatus(status.Recording, fmt.Sprintf("Recording: %s - %s attempt %d",
+	httpServer.SendStatus(httpServer.Recording, fmt.Sprintf("Recording: %s - %s attempt %d",
 		strings.ReplaceAll(fullName, "_", " "),
 		liftTypeKey,
 		attemptNumber))
@@ -181,7 +181,7 @@ func StopRecording(decisionTime int64) error {
 			state.CurrentLiftType,
 			state.CurrentAttempt)
 
-		SendStatus(status.Trimming, fmt.Sprintf("Trimming video for Camera %d: %s", i+1, attemptInfo))
+		httpServer.SendStatus(httpServer.Trimming, fmt.Sprintf("Trimming video for Camera %d: %s", i+1, attemptInfo))
 
 		var err error
 		if startTime == 0 {
@@ -216,7 +216,7 @@ func StopRecording(decisionTime int64) error {
 		}
 	}
 
-	SendStatus(status.Ready, fmt.Sprintf("Videos ready: %v", finalFileNames))
+	httpServer.SendStatus(httpServer.Ready, fmt.Sprintf("Videos ready: %v", finalFileNames))
 
 	logging.InfoLogger.Printf("Stopped recording and saved videos: %v", finalFileNames)
 	currentRecordings = nil

@@ -1,4 +1,4 @@
-package http
+package httpServer
 
 import (
 	"embed"

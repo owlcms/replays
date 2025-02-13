@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Files</title>
+    <link rel="stylesheet" type="text/css" href="/static/css/styles.css">
+    <script type="text/javascript">
+        let ws;
+        
+        function updateStatusMessage(text, code) {
+            const statusDiv = document.getElementById('status-message');
+            if (statusDiv) {
+                // Clear any existing content
+                statusDiv.textContent = text || '';
+                
+                // Reset classes and add new ones
+                statusDiv.className = 'status-message';  // Always keep base class
+                if (text) {
+                    switch (code) {
+                        case 0:
+                            statusDiv.classList.add('ready');
+                            break;
+                        case 1:
+                            statusDiv.classList.add('recording');
+                            break;
+                        case 2:
+                            statusDiv.classList.add('trimming');
+                            break;
+                        case 3:
+                            statusDiv.classList.add('error');
+                            break;
+                    }
+                    statusDiv.style.display = 'block';
+                } else {
+                    statusDiv.style.display = 'none';
+                }
+                console.log('Status updated:', text, 'code:', code);
+            }
+        }
+
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+            
+            ws.onopen = function() {
+                console.log('WebSocket connected');
+            };
+
+            ws.onmessage = function(event) {
+                console.log('Received:', event.data);
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg && typeof msg.text === 'string') {
+                        updateStatusMessage(msg.text, msg.code);
+                        
+                        // Only reload when new videos are ready, not for the "Total videos available" message
+                        if (msg.code === 0 && 
+                            msg.text.includes('Videos ready') && 
+                            !msg.text.includes('Total videos available')) {
+                            console.log('Reloading page due to new videos');
+                            setTimeout(() => location.reload(), 1000);
+                        }
+                    }
+                } catch (e) {
+                    console.error('Parse error:', e);
+                }
+            };
+
+            ws.onclose = function() {
+                console.log('WebSocket closed, reconnecting...');
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        // Start connection when page loads
+        window.addEventListener('load', connectWebSocket);
+    </script>
+    <style>
+        .status-message {
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #f0f0f0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            min-height: 1.2em;
+            font-weight: bold;
+        }
+        .status-message.recording {
+            background-color: #fff3cd;
+            border-color: #ffeeba;
+            color: #856404;
+        }
+        .status-message.trimming {
+            background-color: #cce5ff;
+            border-color: #b8daff;
+            color: #004085;
+        }
+        .status-message.ready {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+        .status-message.error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <h1>Replays</h1>
+    <div id="status-message" class="status-message"></div>
+    <div class="showAll">
+        {{if .ShowAll}}
+            <a href="/">Show recent videos</a>
+        {{else}}
+            <a href="/?showAll=true">Show All ({{.TotalCount}} videos)</a>
+        {{end}}
+    </div>
+    <ul>
+        {{range .Videos}}
+            <li><a href="/videos/{{.Filename}}" target="_blank" rel="noopener noreferrer">{{.DisplayName}}</a></li>
+        {{end}}
+        {{if and (not .ShowAll) (gt .TotalCount 20)}}
+            <li><a href="/?showAll=true">List all replays</a></li>
+        {{end}}
+    </ul>
+</body>
+</html>

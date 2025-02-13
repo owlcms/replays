@@ -20,11 +20,10 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
-	"github.com/owlcms/replays/internal/http"
+	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/recording"
-	"github.com/owlcms/replays/internal/status"
 )
 
 var sigChan = make(chan os.Signal, 1)
@@ -180,7 +179,7 @@ func main() {
 
 	// Start HTTP server
 	go func() {
-		http.StartServer(cfg.Port, config.Verbose)
+		httpServer.StartServer(cfg.Port, config.Verbose)
 	}()
 
 	myApp := app.New()
@@ -189,17 +188,21 @@ func main() {
 	window.SetCloseIntercept(func() {
 		confirmDialog := dialog.NewConfirm(
 			"Confirm Exit",
-			"The replays recorder is running. This will stop jury recordings. Are you sure you want to exit?",
+			"Are you sure you want to exit? Any ongoing recordings will be stopped.",
 			func(confirm bool) {
-				if !confirm {
-					logging.ErrorLogger.Println("Closing replays recorder")
+				if confirm {
+					// Stop any ongoing recordings
+					if err := recording.StopRecording(0); err != nil {
+						logging.ErrorLogger.Printf("Error stopping recordings: %v", err)
+					}
+					// Stop the HTTP server
+					httpServer.StopServer()
+					logging.InfoLogger.Println("Closing replays recorder")
 					window.Close()
 				}
 			},
 			window,
 		)
-		confirmDialog.SetConfirmText("Don't Stop Recorder")
-		confirmDialog.SetDismissText("Stop Recorder and Exit")
 		confirmDialog.Show()
 	})
 
@@ -260,7 +263,7 @@ func main() {
 	// Status update goroutine
 	go func() {
 		var hideTimer *time.Timer
-		for msg := range status.StatusChan {
+		for msg := range httpServer.StatusChan {
 			if hideTimer != nil {
 				hideTimer.Stop()
 			}
@@ -273,7 +276,7 @@ func main() {
 			statusLabel.Refresh()
 
 			// Auto-hide Ready messages after 10 seconds
-			if msg.Code == status.Ready {
+			if msg.Code == httpServer.Ready {
 				hideTimer = time.AfterFunc(10*time.Second, func() {
 					statusLabel.SetText("Ready")
 					statusLabel.TextStyle = fyne.TextStyle{Bold: false}
@@ -312,7 +315,7 @@ func main() {
 	go func() {
 		<-sigChan
 		logging.InfoLogger.Println("Interrupt signal received. Shutting down...")
-		http.StopServer()
+		httpServer.StopServer()
 		myApp.Quit()
 	}()
 
