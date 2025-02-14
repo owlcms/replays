@@ -207,10 +207,19 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	clients[conn] = true
 	// Send current status immediately after connection
 	if statusMsg != "" {
-		if err := conn.WriteJSON(StatusMessage{Code: Ready, Text: statusMsg}); err != nil {
-			logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
+		if VideoReadyReloading {
+			statusMsg = "Videos ready"
+			if err := conn.WriteJSON(StatusMessage{Code: Ready, Text: statusMsg}); err != nil {
+				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
+			}
+			VideoReadyReloading = false
+		} else {
+			if err := conn.WriteJSON(StatusMessage{Code: Ready, Text: statusMsg}); err != nil {
+				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
+			}
 		}
 	}
+	VideoReadyReloading = false
 	mu.Unlock()
 
 	// Keep the connection alive until it closes

@@ -23,25 +23,25 @@ type StatusMessage struct {
 }
 
 var (
-	StatusChan = make(chan StatusMessage, 10)
-	statusMsg  string
+	StatusChan          = make(chan StatusMessage, 10)
+	statusMsg           string
+	VideoReadyReloading bool
 )
 
 // SendStatus sends a status update to all clients through the broadcast channel
 // and updates the Fyne UI through StatusChan
 func SendStatus(code StatusCode, text string) {
 	// Simplify the "Videos ready" message for web display
-	vr := false
+	VideoReadyReloading = false
 	if code == Ready && strings.Contains(text, "Videos ready") {
-		text = "Videos ready"
-		vr = true
+		text = "Reloading..."
+		VideoReadyReloading = true
 	}
 	msg := StatusMessage{
 		Code:    code,
 		Text:    text,
 		Session: state.CurrentSession, // Include current session in message
 	}
-
 	mu.Lock()
 	statusMsg = text
 	for client := range clients {
@@ -51,10 +51,6 @@ func SendStatus(code StatusCode, text string) {
 			client.Close()
 			delete(clients, client)
 			continue
-		}
-		if vr {
-			// client will reload and reconnect
-			client.Close()
 		}
 	}
 	mu.Unlock()

@@ -69,9 +69,9 @@
                 window.location.href = '/?session=' + encodeURIComponent(msg.session);
             } else if (msg.code === 0 && msg.text === "No active session") {
                 updateCurrentSession('');
-            } else if (msg.code === 0 && msg.text === "Videos ready") {
+            } else if (msg.code === 0 && msg.text === "Reloading...") {
                 // Single reload when all videos are ready
-                //location.reload();
+                location.reload();
             }
         }
 
