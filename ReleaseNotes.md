@@ -1,6 +1,6 @@
 **Change log**
 
-> This version requires owlcms 55.3.0-beta or newer (use "additional versions" "show prereleases" to get)
+> This version requires owlcms 56.0.0-beta or newer (use "additional versions" "show prereleases" to get)
 
 - 1.1.0 Replays are organized by session; it possible to see replays from a prior session.
 - 1.1.0 Multiple cameras are supported
