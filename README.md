@@ -21,7 +21,8 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
   - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
   - The jury simply switches tabs to go back to the jury console or jury scoreboard
   
-  ![image](https://github.com/user-attachments/assets/bd8192ba-7e1d-46d3-a893-ec3a3e1f9d09)
+![image](https://github.com/user-attachments/assets/648d8679-2501-4c17-9c5f-1ab20a9a8509)
+
   
 ## How to use
 
@@ -37,16 +38,10 @@ See the [Equipment Setup](#equipment-setup) notes at the bottom of this page.
     ![replays41](https://github.com/user-attachments/assets/42c8e2eb-17e7-4cd7-90d3-9528d3126b3f)
 
   - The replays app will start recording when the clock starts, and stop once the decision has been shown
-    
-    ![replays50](https://github.com/user-attachments/assets/79201b88-701e-4884-a4d2-2f64b5ffcd5d)
 
   - After the decision is shown, the app trims the video down to remove the wait time before the actual lift (when the clock was last stopped).
 
-    ![replay60](https://github.com/user-attachments/assets/4090f9ba-7671-41a8-95ba-07f30496944c)
-
   - The video is shown as being available
-
-    ![image](https://github.com/user-attachments/assets/0e15e9d0-2b7a-49f8-bd21-66307c4f1437)
 
   - The replay app makes the video available on a web page that updates automatically as videos become available. Videos are listed with the most recent at the top.
     - Clicking on a link opens a tab where the video can be seen, paused and restarted at will.
