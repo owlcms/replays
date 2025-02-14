@@ -276,6 +276,39 @@ func doStopRecordings() {
 	}
 }
 
+func ForceStopRecordings() {
+	if config.NoVideo {
+		for i, fileName := range currentFileNames {
+			logging.InfoLogger.Printf("Simulating forced stop recording video for Camera %d: %s", i+1, fileName)
+		}
+	} else {
+		logging.InfoLogger.Println("Forcing stop ffmpeg if required...")
+		for i, stdin := range currentStdin {
+			logging.InfoLogger.Printf("Attempting to stop ffmpeg %d gracefully...", i+1)
+			if _, err := stdin.Write([]byte("q\n")); err != nil {
+				logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		var wg sync.WaitGroup
+		for i, cmd := range currentRecordings {
+			wg.Add(1)
+			go func(i int, cmd *exec.Cmd) {
+				defer wg.Done()
+				if err := forceKillCmd(cmd); err != nil {
+					logging.InfoLogger.Printf("ffmpeg exited for Camera %d: %v", i+1, err)
+				} else {
+					logging.InfoLogger.Printf("ffmpeg stopped gracefully for Camera %d", i+1)
+				}
+			}(i, cmd)
+		}
+
+		wg.Wait()
+	}
+}
+
 // GetStartTimeMillis returns the start time in milliseconds
 func GetStartTimeMillis() string {
 	return strconv.FormatInt(state.LastStartTime, 10)

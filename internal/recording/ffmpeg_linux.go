@@ -1,9 +1,8 @@
-//go:build windows && !darwin && linux
-
 package recording
 
 import (
 	"os/exec"
+	"syscall"
 
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
@@ -28,5 +27,21 @@ func createFfmpegCmd(args []string) *exec.Cmd {
 		}
 	}
 
-	return exec.Command(path, args...)
+	cmd := exec.Command(path, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	return cmd
+}
+
+func forceKillCmd(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	// Kill the entire process group
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err != nil {
+		return err
+	}
+	return syscall.Kill(-pgid, syscall.SIGKILL)
 }

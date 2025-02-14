@@ -4,6 +4,7 @@ package recording
 
 import (
 	"os/exec"
+	"strconv"
 	"syscall"
 
 	"github.com/owlcms/replays/internal/config"
@@ -36,4 +37,13 @@ func createFfmpegCmd(args []string) *exec.Cmd {
 	}
 
 	return cmd
+}
+
+func forceKillCmd(cmd *exec.Cmd) error {
+	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
+	if cmd.Process == nil {
+		return nil
+	}
+	kill := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid))
+	return kill.Run()
 }

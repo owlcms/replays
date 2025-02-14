@@ -1,5 +1,3 @@
-//go:build linux || windows
-
 package main
 
 import (
@@ -161,16 +159,14 @@ func confirmAndQuit(window fyne.Window) {
 		"Are you sure you want to exit? This will stop jury replays. Any ongoing recordings will be stopped.",
 		func(confirm bool) {
 			if confirm {
+				logging.InfoLogger.Println("Forced closing of replays recorder")
 
 				// Stop any ongoing recordings
-				if err := recording.StopRecording(0); err != nil {
-					logging.ErrorLogger.Printf("Error stopping recordings: %v", err)
-				}
+				recording.ForceStopRecordings()
 
 				httpServer.StopServer()
 
 				// Close the window
-				logging.InfoLogger.Println("Closing replays recorder")
 				window.Close()
 			}
 		},
@@ -325,6 +321,7 @@ func main() {
 	go func() {
 		<-sigChan
 		logging.InfoLogger.Println("Interrupt signal received. Shutting down...")
+		recording.ForceStopRecordings()
 		httpServer.StopServer()
 		myApp.Quit()
 	}()
