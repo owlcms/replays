@@ -68,8 +68,8 @@ func Monitor(cfg *config.Config) {
 	var platforms []string
 	select {
 	case platforms = <-PlatformListChan:
-		// got platforms
-		if cfg.Platform == "" {
+		// Validate configured platform
+		if !validatePlatform(cfg, platforms) {
 			if len(platforms) == 1 {
 				// Auto-select single platform
 				platform := platforms[0]
@@ -119,6 +119,20 @@ func Monitor(cfg *config.Config) {
 	}
 
 	logging.InfoLogger.Printf("MQTT monitoring started on %s", mqttAddress)
+}
+
+func validatePlatform(cfg *config.Config, platforms []string) bool {
+	if cfg.Platform == "" {
+		return false
+	}
+	for _, p := range platforms {
+		if p == cfg.Platform {
+			return true
+		}
+	}
+	// Platform not found in list, clear it
+	cfg.Platform = ""
+	return false
 }
 
 func PublishConfig(platform string) {

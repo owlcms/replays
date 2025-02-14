@@ -44,7 +44,7 @@
             
             // Update the current session display
             if (sessionSpan) {
-                sessionSpan.textContent = session ? `Current Session: ${session}` : 'No active session';
+                sessionSpan.textContent = session ? `Current Session: ${session}` : 'No active session. Session will be updated on next clock start.';
             }
             
             // Update dropdown selection if it exists and matches a session
@@ -111,7 +111,7 @@
         <div class="no-sessions">No recorded sessions</div>
     {{else}}
         <div class="session-info">
-            <div class="current-session">{{if .ActiveSession}}Current Session: {{.ActiveSession}}{{else}}No active session{{end}}</div>
+            <div class="current-session">{{if .ActiveSession}}Current Session: {{.ActiveSession}}{{else}}No active session. Active session will switch on next clock start.{{end}}</div>
             <div class="session-selector-container">
                 <label for="session-select">List Videos from Session:</label>
                 <select id="session-select" class="session-selector" onchange="window.location.href='/?session=' + this.value">
