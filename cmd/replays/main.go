@@ -266,6 +266,11 @@ func main() {
 	)
 	window.SetMainMenu(mainMenu)
 
+	// Register platform dialog function for monitor package
+	monitor.ShowPlatformDialogFunc = func() {
+		showPlatformSelection(cfg, window)
+	}
+
 	// Status update goroutine
 	go func() {
 		var hideTimer *time.Timer

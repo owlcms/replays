@@ -46,6 +46,7 @@ var (
 	Fps           int
 	Recode        bool
 	CameraConfigs []CameraConfiguration
+	currentConfig *Config
 )
 
 // LoadConfig loads the configuration from the specified file
@@ -188,7 +189,15 @@ func LoadConfig(configFile string) (*Config, error) {
 			camera.Recode)
 	}
 
+	// Store the current config for later use
+	currentConfig = &config
+
 	return &config, nil
+}
+
+// GetCurrentConfig returns the current configuration
+func GetCurrentConfig() *Config {
+	return currentConfig
 }
 
 // ValidateCamera checks if camera configuration is correct for the platform

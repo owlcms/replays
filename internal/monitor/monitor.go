@@ -3,6 +3,7 @@ package monitor
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,10 +26,13 @@ var (
 	mqttClient mqtt.Client
 	// Channel to notify when platform list is updated
 	PlatformListChan = make(chan []string, 1)
+	// Add new function to show platform dialog
+	ShowPlatformDialogFunc func()
 )
 
 // Monitor listens to the owlcms broker for specific messages
 func Monitor(cfg *config.Config) {
+	// First establish MQTT connection
 	mqttAddress := fmt.Sprintf("tcp://%s:1883", cfg.OwlCMS)
 	opts := mqtt.NewClientOptions().AddBroker(mqttAddress)
 	opts.SetClientID("replays-monitor")
@@ -40,14 +44,72 @@ func Monitor(cfg *config.Config) {
 		return
 	}
 
-	// Define topics and subscribe
+	// First subscribe to config topic
+	configTopic := "owlcms/fop/config"
+	logging.InfoLogger.Printf("Subscribing to topic %s", configTopic)
+	if token := mqttClient.Subscribe(configTopic, 0, nil); token.Wait() && token.Error() != nil {
+		logging.ErrorLogger.Printf("Failed to subscribe to topic %s: %v", configTopic, token.Error())
+		mqttClient.Disconnect(250)
+		return
+	}
+
+	// Request config and wait for response
+	if mqttClient.IsConnected() {
+		topic := "owlcms/config"
+		token := mqttClient.Publish(topic, 0, false, "requesting configuration")
+		if token.Wait() && token.Error() != nil {
+			logging.ErrorLogger.Printf("Failed to publish config request: %v", token.Error())
+			mqttClient.Disconnect(250)
+			return
+		}
+	}
+
+	// Wait up to 2 seconds for platform list
+	var platforms []string
+	select {
+	case platforms = <-PlatformListChan:
+		// got platforms
+		if cfg.Platform == "" {
+			if len(platforms) == 1 {
+				// Auto-select single platform
+				platform := platforms[0]
+				configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+				if err := config.UpdatePlatform(configFilePath, platform); err != nil {
+					logging.ErrorLogger.Printf("Error updating platform: %v", err)
+					mqttClient.Disconnect(250)
+					return
+				}
+				logging.InfoLogger.Printf("Automatically selected platform: %s", platform)
+				cfg.Platform = platform
+			} else if len(platforms) > 1 {
+				if ShowPlatformDialogFunc != nil {
+					logging.InfoLogger.Println("Multiple platforms detected, showing selection dialog")
+					ShowPlatformDialogFunc()
+				}
+				mqttClient.Disconnect(250)
+				return // Don't proceed without platform selection
+			}
+		}
+	case <-time.After(2 * time.Second):
+		logging.ErrorLogger.Printf("No response from MQTT broker for platform list")
+		mqttClient.Disconnect(250)
+		return
+	}
+
+	// Don't proceed if no platform is selected
+	if cfg.Platform == "" {
+		logging.ErrorLogger.Printf("No platform selected, cannot subscribe to MQTT topics")
+		mqttClient.Disconnect(250)
+		return
+	}
+
+	// Subscribe to platform-specific topics only after platform is confirmed
 	platformTopics := []string{
 		"owlcms/fop/start",
 		"owlcms/fop/stop",
 		"owlcms/fop/refereesDecision",
 	}
 
-	// Subscribe to platform-specific topics
 	for _, topic := range platformTopics {
 		fullTopic := topic + "/" + cfg.Platform
 		logging.InfoLogger.Printf("Subscribing to topic %s", fullTopic)
@@ -56,20 +118,15 @@ func Monitor(cfg *config.Config) {
 		}
 	}
 
-	// Subscribe to global config topic
-	configTopic := "owlcms/fop/config"
-	logging.InfoLogger.Printf("Subscribing to topic %s", configTopic)
-	if token := mqttClient.Subscribe(configTopic, 0, nil); token.Wait() && token.Error() != nil {
-		logging.ErrorLogger.Printf("Failed to subscribe to topic %s: %v", configTopic, token.Error())
-	}
-
 	logging.InfoLogger.Printf("MQTT monitoring started on %s", mqttAddress)
-
-	// Publish config request after successful connection
-	PublishConfig(cfg.Platform)
 }
 
 func PublishConfig(platform string) {
+	if mqttClient == nil {
+		logging.ErrorLogger.Printf("MQTT client not initialized")
+		return
+	}
+
 	// Drain any pending messages from channel
 	select {
 	case <-PlatformListChan:
@@ -119,17 +176,14 @@ func handleBreak(payload string) {
 }
 
 func handleConfig(payload string) {
-	// logging.InfoLogger.Printf("Received config reply: %s", payload)
-	var config ConfigMessage
-	if err := json.Unmarshal([]byte(payload), &config); err != nil {
+	var configMsg ConfigMessage
+	if err := json.Unmarshal([]byte(payload), &configMsg); err != nil {
 		logging.ErrorLogger.Printf("Error parsing config message: %v", err)
 		return
 	}
-	// logging.InfoLogger.Printf("Parsed config: jury=%d, platforms=%v, version=%s",
-	// 	config.JurySize, config.Platforms, config.Version)
 
-	// Send platform list to channel
-	PlatformListChan <- config.Platforms
+	// Send platform list to channel immediately
+	PlatformListChan <- configMsg.Platforms
 }
 
 func handleStart(payload string) {
