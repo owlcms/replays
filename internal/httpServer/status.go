@@ -25,6 +25,7 @@ type StatusMessage struct {
 var (
 	StatusChan          = make(chan StatusMessage, 10)
 	statusMsg           string
+	statusCode          StatusCode
 	VideoReadyReloading bool
 )
 

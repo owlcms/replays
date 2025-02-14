@@ -39,6 +39,7 @@ type VideoInfo struct {
 type TemplateData struct {
 	Videos               []VideoInfo
 	StatusMsg            string
+	StatusCode           StatusCode // Change type to StatusCode instead of int
 	Sessions             []string
 	SelectedSession      string // Currently selected directory
 	ActiveSession        string // Current competition session from state
@@ -153,6 +154,8 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Regex to extract date, hour, name, lift type, attempt, and camera
+
+	// Regex to extract date, hour, name, lift type, attempt, and camera
 	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)_Camera(\d+)\.mp4$`)
 
 	videos := make([]VideoInfo, 0)
@@ -184,6 +187,7 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	data := TemplateData{
 		Videos:               videos,
 		StatusMsg:            statusMsg,
+		StatusCode:           statusCode,
 		Sessions:             sessions,
 		SelectedSession:      selectedSession,
 		ActiveSession:        state.CurrentSession, // Current competition session
@@ -215,12 +219,16 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// prevent infinite loop if we are reloading after saving videos
 		if VideoReadyReloading {
 			statusMsg = "Videos ready"
-			if err := conn.WriteJSON(StatusMessage{Code: Ready, Text: statusMsg}); err != nil {
+			statusCode = Ready
+			if err := conn.WriteJSON(StatusMessage{Code: statusCode, Text: statusMsg}); err != nil {
 				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
 			}
 			VideoReadyReloading = false
 		} else {
-			if err := conn.WriteJSON(StatusMessage{Code: Ready, Text: statusMsg}); err != nil {
+			if strings.Contains(statusMsg, "Recording") {
+				statusCode = Recording
+			}
+			if err := conn.WriteJSON(StatusMessage{Code: statusCode, Text: statusMsg}); err != nil {
 				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
 			}
 		}
@@ -245,8 +253,9 @@ func handleMessages() {
 	for {
 		msg := <-broadcast
 		mu.Lock()
-		statusMsg = msg.Text                                           // Update the current status message
-		logging.InfoLogger.Printf("Broadcasting status: %s", msg.Text) // Debug logging
+		statusMsg = msg.Text  // Update the current status message
+		statusCode = msg.Code // Update the current status code
+		logging.InfoLogger.Printf("Broadcasting status: %s (code: %d)", msg.Text, msg.Code)
 
 		// Broadcast to all connected clients
 		for client := range clients {
