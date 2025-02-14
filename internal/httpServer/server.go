@@ -43,6 +43,7 @@ type TemplateData struct {
 	SelectedSession string // Currently selected directory
 	ActiveSession   string // Current competition session from state
 	NoSessions      bool
+	Platform        string // Add Platform field
 }
 
 type VideoCountMessage struct {
@@ -168,10 +169,11 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 				attempt := matches[5]
 				camera := matches[6]
 				displayName := fmt.Sprintf("%s %s - %s - %s - attempt %s - Camera %s",
-
 					date, hourMinuteSeconds, name, lift, attempt, camera)
+				// Use forward slashes for URL path
+				urlPath := strings.Join([]string{selectedSession, fileName}, "/")
 				videos = append(videos, VideoInfo{
-					Filename:    filepath.Join(selectedSession, fileName),
+					Filename:    urlPath,
 					DisplayName: displayName,
 				})
 			}
@@ -184,6 +186,7 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		Sessions:        sessions,
 		SelectedSession: selectedSession,
 		ActiveSession:   state.CurrentSession, // Current competition session
+		Platform:        config.GetCurrentConfig().Platform,
 	}
 
 	// Remove the SendStatus call here as it's not needed
@@ -207,6 +210,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	clients[conn] = true
 	// Send current status immediately after connection
 	if statusMsg != "" {
+		// prevent infinite loop if we are reloading after saving videos
 		if VideoReadyReloading {
 			statusMsg = "Videos ready"
 			if err := conn.WriteJSON(StatusMessage{Code: Ready, Text: statusMsg}); err != nil {

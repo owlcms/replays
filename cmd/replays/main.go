@@ -208,19 +208,25 @@ func main() {
 	myApp := app.New()
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
-	window.SetCloseIntercept(func() {
-		confirmAndQuit(window)
-	})
-
 	label := widget.NewLabel("OWLCMS Jury Replays")
 	label.TextStyle = fyne.TextStyle{Bold: true}
+
+	// Add platform label if platform is selected
+	var platformLabel *widget.Label
+	if cfg.Platform != "" {
+		platformLabel = widget.NewLabel(fmt.Sprintf("Platform %s", cfg.Platform))
+		platformLabel.TextStyle = fyne.TextStyle{Bold: true}
+	}
 
 	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
 	parsedURL, _ := url.Parse(urlStr)
 	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
 
-	// Create a horizontal container for the hyperlink
-	horizontalContainer := container.NewHBox(hyperlink)
+	// Create containers
+	topContainer := container.NewVBox(label)
+	if platformLabel != nil {
+		topContainer.Add(platformLabel)
+	}
 
 	// Add status label with initial status (bold for errors)
 	statusLabel := widget.NewLabel(initialStatus)
@@ -230,8 +236,8 @@ func main() {
 	}
 
 	content := container.NewPadded(container.NewVBox(
-		label,
-		horizontalContainer, // Use the horizontal container here
+		topContainer,
+		container.NewHBox(hyperlink),
 		widget.NewSeparator(),
 		statusLabel,
 	))
