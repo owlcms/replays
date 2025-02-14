@@ -31,24 +31,30 @@ var (
 // and updates the Fyne UI through StatusChan
 func SendStatus(code StatusCode, text string) {
 	// Simplify the "Videos ready" message for web display
+	vr := false
 	if code == Ready && strings.Contains(text, "Videos ready") {
 		text = "Videos ready"
+		vr = true
 	}
 	msg := StatusMessage{
 		Code:    code,
 		Text:    text,
 		Session: state.CurrentSession, // Include current session in message
 	}
-	logging.InfoLogger.Printf("Sending status update: %s", text)
 
 	mu.Lock()
 	statusMsg = text
 	for client := range clients {
+		logging.InfoLogger.Printf("Sending status update: %s", text)
 		if err := client.WriteJSON(msg); err != nil {
 			logging.ErrorLogger.Printf("Failed to send status: %v", err)
 			client.Close()
 			delete(clients, client)
 			continue
+		}
+		if vr {
+			// client will reload and reconnect
+			client.Close()
 		}
 	}
 	mu.Unlock()

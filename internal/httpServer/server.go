@@ -26,10 +26,9 @@ var (
 	upgrader  = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
-	clients        = make(map[*websocket.Conn]bool)
-	broadcast      = make(chan StatusMessage)
-	mu             sync.Mutex
-	lastVideoCount = 0 // Add this new variable to track video count
+	clients   = make(map[*websocket.Conn]bool)
+	broadcast = make(chan StatusMessage)
+	mu        sync.Mutex
 )
 
 type VideoInfo struct {
@@ -150,11 +149,6 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 			validFiles = append(validFiles, file)
 		}
 	}
-
-	fileCount := len(validFiles)
-
-	// Remove the status update for total videos
-	lastVideoCount = fileCount
 
 	// Regex to extract date, hour, name, lift type, attempt, and camera
 	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)_Camera(\d+)\.mp4$`)
