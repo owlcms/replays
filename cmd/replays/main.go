@@ -212,28 +212,8 @@ func main() {
 	label := widget.NewLabel("OWLCMS Jury Replays")
 	label.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Add platform label only if there are multiple platforms
-	var platformLabel *widget.Label
-	if len(state.AvailablePlatforms) > 1 {
-		if cfg.Platform != "" {
-			platformLabel = widget.NewLabel(fmt.Sprintf("Platform %s", cfg.Platform))
-		} else {
-			platformLabel = widget.NewLabel("No Platform Selected")
-		}
-		if platformLabel != nil {
-			platformLabel.TextStyle = fyne.TextStyle{Bold: true}
-		}
-	}
-
-	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
-	parsedURL, _ := url.Parse(urlStr)
-	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
-
 	// Create containers
 	topContainer := container.NewVBox(label)
-	if platformLabel != nil {
-		topContainer.Add(platformLabel)
-	}
 
 	// Add status label with initial status (bold for errors)
 	statusLabel := widget.NewLabel(initialStatus)
@@ -241,6 +221,10 @@ func main() {
 	if strings.HasPrefix(initialStatus, "Error:") {
 		statusLabel.TextStyle = fyne.TextStyle{Bold: true}
 	}
+
+	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
+	parsedURL, _ := url.Parse(urlStr)
+	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
 
 	content := container.NewPadded(container.NewVBox(
 		topContainer,
@@ -329,6 +313,32 @@ func main() {
 
 			// Start MQTT monitor only after successful discovery
 			go monitor.Monitor(cfg)
+
+			// Wait for platform list to be retrieved
+			var platforms []string
+			select {
+			case platforms = <-monitor.PlatformListChan:
+				logging.InfoLogger.Printf("Available platforms: %v", platforms)
+				state.AvailablePlatforms = platforms
+			case <-time.After(2 * time.Second):
+				logging.ErrorLogger.Printf("No response from MQTT broker for platform list")
+			}
+
+			// Add platform label only if multiple platforms are available
+			if len(state.AvailablePlatforms) > 1 {
+				var platformLabel *widget.Label
+				if cfg.Platform != "" {
+					platformLabel = widget.NewLabel(fmt.Sprintf("Platform %s", cfg.Platform))
+					logging.InfoLogger.Printf("Showing platform label: Platform %s", cfg.Platform)
+				} else {
+					platformLabel = widget.NewLabel("No Platform Selected")
+					logging.InfoLogger.Println("Showing platform label: No Platform Selected")
+				}
+				platformLabel.TextStyle = fyne.TextStyle{Bold: true}
+				topContainer.Add(platformLabel)
+			} else {
+				logging.InfoLogger.Println("Not showing platform label: Only one platform available")
+			}
 		}
 	}()
 

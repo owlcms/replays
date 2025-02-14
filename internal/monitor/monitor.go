@@ -68,6 +68,9 @@ func Monitor(cfg *config.Config) {
 	var platforms []string
 	select {
 	case platforms = <-PlatformListChan:
+		// Log the retrieved platforms
+		logging.InfoLogger.Printf("Retrieved platforms from MQTT config: %v", platforms)
+
 		// Validate configured platform
 		if !validatePlatform(cfg, platforms) {
 			if len(platforms) == 1 {
@@ -198,6 +201,9 @@ func handleConfig(payload string) {
 
 	// Store available platforms
 	state.AvailablePlatforms = configMsg.Platforms
+
+	// Log the available platforms
+	logging.InfoLogger.Printf("Available platforms: %v", state.AvailablePlatforms)
 
 	// Send platform list to channel
 	PlatformListChan <- configMsg.Platforms
