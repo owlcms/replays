@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Replays{{if .Platform}} - Platform {{.Platform}}{{else if .HasMultiplePlatforms}} - No Platform Selected{{end}}</title>
+    <title>Replays{{if and .HasMultiplePlatforms .Platform}} - Platform {{.Platform}}{{else if .HasMultiplePlatforms}} - No Platform Selected{{end}}</title>
     <link rel="stylesheet" type="text/css" href="/static/css/styles.css">
     <script type="text/javascript">
         let ws;
@@ -105,7 +105,7 @@
     </script>
 </head>
 <body>
-    <h1>Replays{{if .Platform}} - Platform {{.Platform}}{{else if .HasMultiplePlatforms}} - No Platform Selected{{end}}</h1>
+    <h1>Replays{{if and .HasMultiplePlatforms .Platform}} - Platform {{.Platform}}{{else if .HasMultiplePlatforms}} - No Platform Selected{{end}}</h1>
     
     {{if .NoSessions}}
         <div class="no-sessions">No recorded sessions</div>

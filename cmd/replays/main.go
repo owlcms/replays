@@ -212,15 +212,17 @@ func main() {
 	label := widget.NewLabel("OWLCMS Jury Replays")
 	label.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Add platform label
+	// Add platform label only if there are multiple platforms
 	var platformLabel *widget.Label
-	if cfg.Platform != "" {
-		platformLabel = widget.NewLabel(fmt.Sprintf("Platform %s", cfg.Platform))
-	} else if len(state.AvailablePlatforms) > 1 {
-		platformLabel = widget.NewLabel("No Platform Selected")
-	}
-	if platformLabel != nil {
-		platformLabel.TextStyle = fyne.TextStyle{Bold: true}
+	if len(state.AvailablePlatforms) > 1 {
+		if cfg.Platform != "" {
+			platformLabel = widget.NewLabel(fmt.Sprintf("Platform %s", cfg.Platform))
+		} else {
+			platformLabel = widget.NewLabel("No Platform Selected")
+		}
+		if platformLabel != nil {
+			platformLabel.TextStyle = fyne.TextStyle{Bold: true}
+		}
 	}
 
 	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
