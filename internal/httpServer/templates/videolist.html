@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>{{if .Platform}}Platform {{.Platform}} - {{end}}Video Files</title>
+    <title>Replays{{if .Platform}} - Platform {{.Platform}}{{else if .HasMultiplePlatforms}} - No Platform Selected{{end}}</title>
     <link rel="stylesheet" type="text/css" href="/static/css/styles.css">
     <script type="text/javascript">
         let ws;
@@ -105,7 +105,7 @@
     </script>
 </head>
 <body>
-    <h1>{{if .Platform}}Platform {{.Platform}} {{end}}Replays</h1>
+    <h1>Replays{{if .Platform}} - Platform {{.Platform}}{{else if .HasMultiplePlatforms}} - No Platform Selected{{end}}</h1>
     
     {{if .NoSessions}}
         <div class="no-sessions">No recorded sessions</div>

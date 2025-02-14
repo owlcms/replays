@@ -182,7 +182,10 @@ func handleConfig(payload string) {
 		return
 	}
 
-	// Send platform list to channel immediately
+	// Store available platforms
+	state.AvailablePlatforms = configMsg.Platforms
+
+	// Send platform list to channel
 	PlatformListChan <- configMsg.Platforms
 }
 

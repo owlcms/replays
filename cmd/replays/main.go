@@ -22,6 +22,7 @@ import (
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/recording"
+	"github.com/owlcms/replays/internal/state"
 )
 
 var sigChan = make(chan os.Signal, 1)
@@ -211,10 +212,14 @@ func main() {
 	label := widget.NewLabel("OWLCMS Jury Replays")
 	label.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Add platform label if platform is selected
+	// Add platform label
 	var platformLabel *widget.Label
 	if cfg.Platform != "" {
 		platformLabel = widget.NewLabel(fmt.Sprintf("Platform %s", cfg.Platform))
+	} else if len(state.AvailablePlatforms) > 1 {
+		platformLabel = widget.NewLabel("No Platform Selected")
+	}
+	if platformLabel != nil {
 		platformLabel.TextStyle = fyne.TextStyle{Bold: true}
 	}
 

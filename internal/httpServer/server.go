@@ -37,13 +37,14 @@ type VideoInfo struct {
 }
 
 type TemplateData struct {
-	Videos          []VideoInfo
-	StatusMsg       string
-	Sessions        []string
-	SelectedSession string // Currently selected directory
-	ActiveSession   string // Current competition session from state
-	NoSessions      bool
-	Platform        string // Add Platform field
+	Videos               []VideoInfo
+	StatusMsg            string
+	Sessions             []string
+	SelectedSession      string // Currently selected directory
+	ActiveSession        string // Current competition session from state
+	NoSessions           bool
+	Platform             string // Add Platform field
+	HasMultiplePlatforms bool
 }
 
 type VideoCountMessage struct {
@@ -181,12 +182,13 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := TemplateData{
-		Videos:          videos,
-		StatusMsg:       statusMsg,
-		Sessions:        sessions,
-		SelectedSession: selectedSession,
-		ActiveSession:   state.CurrentSession, // Current competition session
-		Platform:        config.GetCurrentConfig().Platform,
+		Videos:               videos,
+		StatusMsg:            statusMsg,
+		Sessions:             sessions,
+		SelectedSession:      selectedSession,
+		ActiveSession:        state.CurrentSession, // Current competition session
+		Platform:             config.GetCurrentConfig().Platform,
+		HasMultiplePlatforms: len(state.AvailablePlatforms) > 1,
 	}
 
 	// Remove the SendStatus call here as it's not needed

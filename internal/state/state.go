@@ -21,6 +21,7 @@ var (
 	StopRequestCount    int
 	CurrentCameraNumber int
 	CurrentSession      string // Current competition session name
+	AvailablePlatforms  []string
 )
 
 type StartMessage struct {
