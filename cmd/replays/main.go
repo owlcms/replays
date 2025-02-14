@@ -154,6 +154,33 @@ func showPlatformSelection(cfg *config.Config, window fyne.Window) {
 	dialog.Show()
 }
 
+// confirmAndQuit shows a confirmation dialog and quits if confirmed
+func confirmAndQuit(window fyne.Window) {
+	confirmDialog := dialog.NewConfirm(
+		"Confirm Exit",
+		"Are you sure you want to exit? This will stop jury replays. Any ongoing recordings will be stopped.",
+		func(confirm bool) {
+			if confirm {
+
+				// Stop any ongoing recordings
+				if err := recording.StopRecording(0); err != nil {
+					logging.ErrorLogger.Printf("Error stopping recordings: %v", err)
+				}
+
+				httpServer.StopServer()
+
+				// Close the window
+				logging.InfoLogger.Println("Closing replays recorder")
+				window.Close()
+			}
+		},
+		window,
+	)
+	confirmDialog.SetDismissText("Cancel")
+	confirmDialog.SetConfirmText("Exit")
+	confirmDialog.Show()
+}
+
 func main() {
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
@@ -186,30 +213,7 @@ func main() {
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
 	window.SetCloseIntercept(func() {
-		// Ask for confirmation before closing
-		confirmDialog := dialog.NewConfirm(
-			"Confirm Exit",
-			"Are you sure you want to exit? This will stop jury replays. Any ongoing recordings will be stopped.",
-			func(confirm bool) {
-				if confirm {
-					// First stop HTTP server to prevent new recordings
-					httpServer.StopServer()
-
-					// Then stop any ongoing recordings
-					if err := recording.StopRecording(0); err != nil {
-						logging.ErrorLogger.Printf("Error stopping recordings: %v", err)
-					}
-
-					// Finally close the window
-					logging.InfoLogger.Println("Closing replays recorder")
-					window.Close()
-				}
-			},
-			window,
-		)
-		confirmDialog.SetDismissText("Cancel")
-		confirmDialog.SetConfirmText("Exit")
-		confirmDialog.Show()
+		confirmAndQuit(window)
 	})
 
 	label := widget.NewLabel("OWLCMS Jury Replays")
@@ -255,7 +259,7 @@ func main() {
 			}),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Quit", func() {
-				window.Close()
+				confirmAndQuit(window)
 			}),
 		),
 		fyne.NewMenu("Help",
