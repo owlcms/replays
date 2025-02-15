@@ -188,6 +188,9 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
+	// Ensure logging is closed on exit
+	defer logging.Close()
+
 	// Set recording package configuration
 	recording.SetNoVideo(config.NoVideo)
 	recording.SetVideoDir(cfg.VideoDir)

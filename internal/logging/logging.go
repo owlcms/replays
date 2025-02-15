@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -20,26 +21,31 @@ var (
 func Init(logDirectory string) error {
 	logDir = logDirectory
 
+	// Write the value of logDir to the console
+	fmt.Printf("Initializing logs in directory: %s\n", logDir)
+
 	// Create logs directory if it doesn't exist
 	if err := os.MkdirAll(logDir, os.ModePerm); err != nil {
+		fmt.Printf("Failed to create log directory: %v\n", err)
 		return err
 	}
+	fmt.Printf("Log directory created successfully: %s\n", logDir)
 
-	// Open log file
+	// Open log file with O_SYNC to ensure no buffering
 	var err error
-	logFile, err = os.OpenFile(filepath.Join(logDir, "replays.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logFile, err = os.OpenFile(filepath.Join(logDir, "replays.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0666)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("Log file created successfully: %s\n", logFile.Name())
 
 	// Initialize writers based on platform
 	var infoWriter, warnWriter, errorWriter io.Writer
 	if runtime.GOOS == "windows" {
-		// Windows: write to both console and file
-		multiWriter := io.MultiWriter(os.Stdout, logFile)
-		infoWriter = multiWriter
-		warnWriter = multiWriter
-		errorWriter = multiWriter
+		// Windows: write to file only because of console behavior
+		infoWriter = io.MultiWriter(logFile)
+		warnWriter = io.MultiWriter(logFile)
+		errorWriter = io.MultiWriter(logFile)
 	} else {
 		// Linux/WSL: write to both console and file
 		infoWriter = io.MultiWriter(os.Stdout, logFile)
@@ -54,4 +60,11 @@ func Init(logDirectory string) error {
 	ErrorLogger = log.New(errorWriter, "ERROR: ", flags)
 
 	return nil
+}
+
+// Close closes the log file
+func Close() {
+	if logFile != nil {
+		logFile.Close()
+	}
 }
