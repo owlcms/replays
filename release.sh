@@ -50,7 +50,6 @@ git commit -am "$TAG"
 # Package the app for arm64
 fyne-cross linux --arch arm64 -app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays 
 
-exit
 # Package the app for Windows
 fyne-cross windows --app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays
 

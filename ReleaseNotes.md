@@ -2,6 +2,8 @@
 
 > This version requires owlcms 56.0.0-beta or newer (use "additional versions" "show prereleases" to get)
 
+- 1.2.0 Fixes for the initial plaftform detection
+- 1.2.0 Logging to the logs/replays.log now works again
 - 1.1.0 Replays are organized by session; it possible to see replays from a prior session.
 - 1.1.0 Multiple cameras are supported
 - 1.1.0 replays gets the list of platforms from owlcms and allows selecting which one
