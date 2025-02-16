@@ -15,7 +15,20 @@ var (
 	ErrorLogger   *log.Logger
 	logFile       *os.File
 	logDir        string
+	Verbose       bool // Move Verbose flag here from config package
 )
+
+// Trace logs a debug message that only appears when verbose logging is enabled
+func Trace(format string, v ...interface{}) {
+	if Verbose {
+		InfoLogger.Printf(format, v...)
+	}
+}
+
+// SetVerbose sets the verbose logging flag
+func SetVerbose(verbose bool) {
+	Verbose = verbose
+}
 
 // Init initializes the loggers
 func Init(logDirectory string) error {

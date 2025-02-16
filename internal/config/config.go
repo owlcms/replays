@@ -216,10 +216,13 @@ func InitConfig() (*Config, error) {
 Value is relative to the platform-specific directory for applcation data (%s)
 Used for multiple installations on the same machine (e.g. 'replays2, replay3').
 An absolute path can be provded if needed.`, GetInstallDir()))
-	flag.BoolVar(&Verbose, "v", false, "enable verbose logging")
-	flag.BoolVar(&Verbose, "verbose", false, "enable verbose logging")
+	verbose := flag.Bool("v", false, "enable verbose logging")
+	verboseAlt := flag.Bool("verbose", false, "enable verbose logging")
 	flag.BoolVar(&NoVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
 	flag.Parse()
+
+	// Set verbose mode in logging package
+	logging.SetVerbose(*verbose || *verboseAlt)
 
 	// Ensure logging directory is absolute
 	logDir := filepath.Join(GetInstallDir(), "logs")

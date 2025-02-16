@@ -275,6 +275,11 @@ func main() {
 				hideTimer.Stop()
 			}
 
+			// Skip showing "Reloading..." in the Fyne window
+			if msg.Text == "Reloading..." {
+				msg.Text = "Ready"
+			}
+
 			// Update status text and style
 			statusLabel.SetText(msg.Text)
 			statusLabel.TextStyle = fyne.TextStyle{
@@ -282,7 +287,6 @@ func main() {
 			}
 			statusLabel.Refresh()
 
-			// Auto-hide Ready messages after 10 seconds
 			if msg.Code == httpServer.Ready {
 				hideTimer = time.AfterFunc(10*time.Second, func() {
 					statusLabel.SetText("Ready")

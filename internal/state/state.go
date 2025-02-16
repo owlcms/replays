@@ -2,7 +2,6 @@ package state
 
 import (
 	"encoding/json"
-	"log"
 	"strings"
 	"time"
 
@@ -41,17 +40,19 @@ func UpdateStateFromStartMessage(message string) {
 	jsonPart := message[:spaceIndex]
 	timePart := message[spaceIndex+1:]
 
-	log.Printf("Received start message: %s", message)
-	log.Printf("Parsing json: %s", jsonPart)
+	// Change to debug level logging
+	logging.Trace("Received start message: %s", message)
+	logging.Trace("Parsing json: %s", jsonPart)
 
 	var startMsg StartMessage
 	err := json.Unmarshal([]byte(jsonPart), &startMsg)
 	if err != nil {
-		log.Printf("Error parsing start message: %v", err)
+		logging.ErrorLogger.Printf("Error parsing start message: %v", err)
 		return
 	}
 
-	log.Printf("Parsed start message: %+v", startMsg)
+	// Change to debug level logging
+	logging.Trace("Parsed start message: %+v", startMsg)
 
 	CurrentAthlete = startMsg.AthleteName
 	CurrentAttempt = startMsg.AttemptNumber
