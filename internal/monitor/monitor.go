@@ -44,6 +44,19 @@ func Monitor(cfg *config.Config) {
 		return
 	}
 
+	// Wait for connection to be established
+	attempts := 0
+	maxAttempts := 5
+	for !mqttClient.IsConnected() && attempts < maxAttempts {
+		time.Sleep(100 * time.Millisecond)
+		attempts++
+	}
+
+	if !mqttClient.IsConnected() {
+		logging.ErrorLogger.Printf("Failed to establish MQTT connection after %d attempts", maxAttempts)
+		return
+	}
+
 	// First subscribe to config topic
 	configTopic := "owlcms/fop/config"
 	logging.InfoLogger.Printf("Subscribing to topic %s", configTopic)
@@ -53,50 +66,23 @@ func Monitor(cfg *config.Config) {
 		return
 	}
 
-	// Request config and wait for response
-	if mqttClient.IsConnected() {
-		topic := "owlcms/config"
-		token := mqttClient.Publish(topic, 0, false, "requesting configuration")
-		if token.Wait() && token.Error() != nil {
-			logging.ErrorLogger.Printf("Failed to publish config request: %v", token.Error())
-			mqttClient.Disconnect(250)
-			return
-		}
-	}
-
-	// Wait up to 2 seconds for platform list
-	var platforms []string
-	select {
-	case platforms = <-PlatformListChan:
-		// Log the retrieved platforms
-		logging.InfoLogger.Printf("Retrieved platforms from MQTT config: %v", platforms)
-
-		// Validate configured platform
-		if !validatePlatform(cfg, platforms) {
-			if len(platforms) == 1 {
-				// Auto-select single platform
-				platform := platforms[0]
-				configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-				if err := config.UpdatePlatform(configFilePath, platform); err != nil {
-					logging.ErrorLogger.Printf("Error updating platform: %v", err)
-					mqttClient.Disconnect(250)
-					return
-				}
-				logging.InfoLogger.Printf("Automatically selected platform: %s", platform)
-				cfg.Platform = platform
-			} else if len(platforms) > 1 {
-				if ShowPlatformDialogFunc != nil {
-					logging.InfoLogger.Println("Multiple platforms detected, showing selection dialog")
-					ShowPlatformDialogFunc()
-				}
-				mqttClient.Disconnect(250)
-				return // Don't proceed without platform selection
-			}
-		}
-	case <-time.After(2 * time.Second):
+	// Get platform list and validate current platform
+	platforms, isValid := GetValidatedPlatforms(cfg)
+	if platforms == nil {
 		logging.ErrorLogger.Printf("No response from MQTT broker for platform list")
 		mqttClient.Disconnect(250)
 		return
+	}
+
+	if !isValid {
+		if !AutoSelectPlatform(cfg, platforms) && len(platforms) > 1 {
+			if ShowPlatformDialogFunc != nil {
+				logging.InfoLogger.Println("Multiple platforms detected, showing selection dialog")
+				ShowPlatformDialogFunc()
+			}
+			mqttClient.Disconnect(250)
+			return // Don't proceed without platform selection
+		}
 	}
 
 	// Don't proceed if no platform is selected
@@ -106,7 +92,7 @@ func Monitor(cfg *config.Config) {
 		return
 	}
 
-	// Subscribe to platform-specific topics only after platform is confirmed
+	// Subscribe to platform-specific topics
 	platformTopics := []string{
 		"owlcms/fop/start",
 		"owlcms/fop/stop",
@@ -138,18 +124,41 @@ func validatePlatform(cfg *config.Config, platforms []string) bool {
 	return false
 }
 
-func PublishConfig(platform string) {
-	if mqttClient == nil {
-		logging.ErrorLogger.Printf("MQTT client not initialized")
-		return
+// GetValidatedPlatforms returns the validated list of platforms and whether the current platform is valid
+func GetValidatedPlatforms(cfg *config.Config) ([]string, bool) {
+	if mqttClient == nil || !mqttClient.IsConnected() {
+		logging.ErrorLogger.Printf("MQTT client not initialized or not connected")
+		return nil, false
 	}
 
-	// Drain any pending messages from channel
+	// Clean out any pending messages from previous requests
 	select {
 	case <-PlatformListChan:
 	default:
 	}
 
+	// Request fresh platform list using existing MQTT client
+	topic := "owlcms/config"
+	token := mqttClient.Publish(topic, 0, false, "requesting configuration")
+	if token.Wait() && token.Error() != nil {
+		logging.ErrorLogger.Printf("Failed to publish config request: %v", token.Error())
+		return nil, false
+	}
+
+	// Wait for response
+	select {
+	case platforms := <-PlatformListChan:
+		logging.InfoLogger.Printf("Retrieved platforms from MQTT config: %v", platforms)
+		isValid := validatePlatform(cfg, platforms)
+		return platforms, isValid
+	case <-time.After(2 * time.Second):
+		logging.ErrorLogger.Printf("No response from MQTT broker for platform list")
+		return nil, false
+	}
+}
+
+// PublishConfig simplified as it's now only used with the existing connection
+func PublishConfig(platform string) {
 	topic := "owlcms/config"
 	token := mqttClient.Publish(topic, 0, false, "requesting configuration")
 	if token.Wait() && token.Error() != nil {
@@ -206,7 +215,11 @@ func handleConfig(payload string) {
 	logging.InfoLogger.Printf("Available platforms: %v", state.AvailablePlatforms)
 
 	// Send platform list to channel
-	PlatformListChan <- configMsg.Platforms
+	select {
+	case PlatformListChan <- configMsg.Platforms:
+	default:
+		// If the channel is full, do not block
+	}
 }
 
 func handleStart(payload string) {
@@ -243,4 +256,21 @@ func handleRefereesDecision() {
 			return
 		}
 	}()
+}
+
+// AutoSelectPlatform attempts to automatically select a platform when there's only one available
+func AutoSelectPlatform(cfg *config.Config, platforms []string) bool {
+	if len(platforms) == 1 {
+		// Auto-select single platform
+		platform := platforms[0]
+		configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+		if err := config.UpdatePlatform(configFilePath, platform); err != nil {
+			logging.ErrorLogger.Printf("Error updating platform: %v", err)
+			return false
+		}
+		logging.InfoLogger.Printf("Automatically selected platform: %s", platform)
+		cfg.Platform = platform
+		return true
+	}
+	return false
 }

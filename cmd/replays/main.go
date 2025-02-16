@@ -22,7 +22,6 @@ import (
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/recording"
-	"github.com/owlcms/replays/internal/state"
 )
 
 var sigChan = make(chan os.Signal, 1)
@@ -188,9 +187,6 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
-	// Ensure logging is closed on exit
-	defer logging.Close()
-
 	// Set recording package configuration
 	recording.SetNoVideo(config.NoVideo)
 	recording.SetVideoDir(cfg.VideoDir)
@@ -314,34 +310,8 @@ func main() {
 			statusLabel.TextStyle = fyne.TextStyle{Bold: false}
 			statusLabel.Refresh()
 
-			// Start MQTT monitor only after successful discovery
+			// Start MQTT monitor which handles platform list retrieval
 			go monitor.Monitor(cfg)
-
-			// Wait for platform list to be retrieved
-			var platforms []string
-			select {
-			case platforms = <-monitor.PlatformListChan:
-				logging.InfoLogger.Printf("Available platforms: %v", platforms)
-				state.AvailablePlatforms = platforms
-			case <-time.After(2 * time.Second):
-				logging.ErrorLogger.Printf("No response from MQTT broker for platform list")
-			}
-
-			// Add platform label only if multiple platforms are available
-			if len(state.AvailablePlatforms) > 1 {
-				var platformLabel *widget.Label
-				if cfg.Platform != "" {
-					platformLabel = widget.NewLabel(fmt.Sprintf("Platform %s", cfg.Platform))
-					logging.InfoLogger.Printf("Showing platform label: Platform %s", cfg.Platform)
-				} else {
-					platformLabel = widget.NewLabel("No Platform Selected")
-					logging.InfoLogger.Println("Showing platform label: No Platform Selected")
-				}
-				platformLabel.TextStyle = fyne.TextStyle{Bold: true}
-				topContainer.Add(platformLabel)
-			} else {
-				logging.InfoLogger.Println("Not showing platform label: Only one platform available")
-			}
 		}
 	}()
 
