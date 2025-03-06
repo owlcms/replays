@@ -157,12 +157,12 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 }
 
 // trimVideo handles the trimming of a single video file
-func trimVideo(wg *sync.WaitGroup, i int, currentFileName, finalFileName string, trimDuration int64, startTime int64, fullSessionDir string, timestamp string, finalFileNames *[]string) {
+func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, trimDuration int64, startTime int64, fullSessionDir string, timestamp string, finalFileNames *[]string) {
 	defer wg.Done()
 
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
 	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))]
-	finalFileName = filepath.Join(fullSessionDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
+	finalFileName := filepath.Join(fullSessionDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
 	*finalFileNames = append(*finalFileNames, finalFileName)
 
 	attemptInfo := fmt.Sprintf("%s - %s attempt %d",
@@ -236,7 +236,7 @@ func StopRecordingAndTrim(decisionTime int64) error {
 	var wg sync.WaitGroup
 	for i, currentFileName := range currentFileNames {
 		wg.Add(1)
-		go trimVideo(&wg, i, currentFileName, "", trimDuration, startTime, fullSessionDir, timestamp, &finalFileNames)
+		go trimVideo(&wg, i, currentFileName, trimDuration, startTime, fullSessionDir, timestamp, &finalFileNames)
 	}
 
 	wg.Wait()
