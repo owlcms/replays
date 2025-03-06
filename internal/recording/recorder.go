@@ -170,7 +170,7 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, trimDuration i
 		state.CurrentLiftType,
 		state.CurrentAttempt)
 
-	httpServer.SendStatus(httpServer.Trimming, fmt.Sprintf("Trimming video for Camera %d: %s", i+1, attemptInfo))
+	logging.InfoLogger.Printf("Trimming video for Camera %d: %s", i+1, attemptInfo)
 
 	var err error
 	if startTime == 0 {
