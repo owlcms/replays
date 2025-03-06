@@ -154,8 +154,6 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Regex to extract date, hour, name, lift type, attempt, and camera
-
-	// Regex to extract date, hour, name, lift type, attempt, and camera
 	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)_Camera(\d+)\.mp4$`)
 
 	videos := make([]VideoInfo, 0)

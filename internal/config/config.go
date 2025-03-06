@@ -47,6 +47,7 @@ var (
 	Recode        bool
 	CameraConfigs []CameraConfiguration
 	currentConfig *Config
+	ffmpegPath    string // Store the located ffmpeg path
 )
 
 // LoadConfig loads the configuration from the specified file
@@ -407,4 +408,15 @@ func SetRecode(recode bool) {
 // GetVideoDir returns the video directory
 func GetVideoDir() string {
 	return videoDir
+}
+
+// SetFFmpegPath sets the ffmpeg executable path
+func SetFFmpegPath(path string) {
+	ffmpegPath = path
+	logging.InfoLogger.Printf("FFmpeg path set to: %s", path)
+}
+
+// GetFFmpegPath returns the ffmpeg executable path
+func GetFFmpegPath() string {
+	return ffmpegPath
 }

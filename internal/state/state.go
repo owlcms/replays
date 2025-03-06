@@ -57,7 +57,8 @@ func UpdateStateFromStartMessage(message string) {
 	CurrentAthlete = startMsg.AthleteName
 	CurrentAttempt = startMsg.AttemptNumber
 	CurrentLiftType = startMsg.LiftType
-	CurrentSession = startMsg.Session // Update session from message
+	CurrentSession = startMsg.Session
+	CurrentSession = strings.ReplaceAll(CurrentSession, " ", "_")
 	LastStartTime = parseTime(timePart)
 	StopRequestCount = 0
 }

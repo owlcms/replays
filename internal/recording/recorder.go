@@ -96,6 +96,7 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 
 // StartRecording starts recording videos using ffmpeg for all configured cameras
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
+	Recording = true
 	cameras := config.GetCameraConfigs()
 	if len(cameras) == 0 {
 		return fmt.Errorf("no camera configurations available")
@@ -112,7 +113,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	var fileNames []string
 
 	for i, camera := range cameras {
-		fileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_attempt%d_Camera%d_%d.mp4", fullName, liftTypeKey, attemptNumber, i+1, state.LastStartTime))
+		fileName := filepath.Join(config.GetVideoDir(), fmt.Sprintf("%s_%s_attempt%d_Camera%d_%d.mkv", fullName, liftTypeKey, attemptNumber, i+1, state.LastStartTime))
 		args := buildRecordingArgs(fileName, camera)
 
 		if config.NoVideo {
@@ -157,6 +158,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 
 // StopRecording stops the current recordings and trims the videos
 func StopRecording(decisionTime int64) error {
+	Recording = false
 	if len(currentRecordings) == 0 && !config.NoVideo {
 		return fmt.Errorf("no ongoing recordings to stop")
 	}

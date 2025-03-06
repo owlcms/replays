@@ -226,6 +226,14 @@ func handleStart(payload string) {
 	// Handle start message
 	logging.InfoLogger.Printf("Handling start message: %s", payload)
 	state.UpdateStateFromStartMessage(payload)
+	// stop any existing recording
+	if recording.IsRecording() {
+		logging.InfoLogger.Println("Stopping running recordings")
+		if err := recording.StopRecording(state.LastStartTime); err != nil {
+			logging.ErrorLogger.Printf("Error stopping recording: %v", err)
+			return
+		}
+	}
 	if err := recording.StartRecording(state.CurrentAthlete, state.CurrentLiftType, state.CurrentAttempt); err != nil {
 		logging.ErrorLogger.Printf("Failed to start recording: %v", err)
 		return

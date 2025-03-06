@@ -1,5 +1,5 @@
 #!/bin/bash
-TAG=1.3.0-alpha01
+TAG=1.2.1-alpha1
 
 # Extract the first two parts and the third number from the tag
 FIRST_TWO_PARTS=$(echo $TAG | awk -F. '{print $1"."$2}')
@@ -41,27 +41,13 @@ echo "Version set to $VERSION_TAG in internal/config/version.go"
 # sed -i "s/_BUILD_/${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE}/" FyneApp.toml
 # echo "Version set to ${APP_VERSION} ; Build set to ${THIRD_NUMBER}${MAPPED_RELEASE}${PRE_RELEASE} in FyneApp.toml"
 
-git tag -d  $TAG
-git push origin --delete $TAG
-gh release delete $TAG -y
+# git tag -d  $TAG
+# git push origin --delete $TAG
+# gh release delete $TAG -y
 
-git commit -am "$TAG"
+# git commit -am "$TAG"
 
 # Package the app for arm64
-fyne-cross linux --arch arm64 -app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays 
+fyne-cross linux --arch arm64 -app-id app.owlcms.replays -app-version $APP_VERSION -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays 
 
-# Package the app for Windows
-fyne-cross windows --app-id app.owlcms.replays -app-version $VERSION_TAG -app-build ${MAPPED_RELEASE}${PRE_RELEASE} -icon Icon.png ./cmd/replays
-
-# Determine if the release should be marked as a prereleasedo
-if [[ $TAG == *"-"* ]]; then
-  PRERELEASE_FLAG="--prerelease"
-else
-  PRERELEASE_FLAG=""
-fi
-
-# Create a release using the tag and ReleaseNotes.md
-gh release create $TAG -F ReleaseNotes.md $PRERELEASE_FLAG --title "owlcms jury replays $TAG"
-
-# Upload the executables
-gh release upload $TAG fyne-cross/bin/linux-arm64/replays fyne-cross/bin/windows-amd64/replays.exe
+exit

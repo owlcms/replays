@@ -187,6 +187,12 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
+	// Initialize FFmpeg path
+	if err := recording.InitializeFFmpeg(); err != nil {
+		logging.WarningLogger.Printf("Warning: %v", err)
+		// Continue execution even if FFmpeg initialization fails
+	}
+
 	// Set recording package configuration
 	recording.SetNoVideo(config.NoVideo)
 	recording.SetVideoDir(cfg.VideoDir)
