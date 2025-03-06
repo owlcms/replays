@@ -3,6 +3,7 @@ package monitor
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -226,7 +227,8 @@ func handleStart(payload string) {
 	// Handle start message
 	logging.InfoLogger.Printf("Handling start message: %s", payload)
 	state.UpdateStateFromStartMessage(payload)
-	// stop any existing recording
+
+	// Stop any existing recording
 	if recording.IsRecording() {
 		logging.InfoLogger.Println("Stopping running recordings")
 		if _, err := recording.StopRecording(); err != nil {
@@ -234,10 +236,53 @@ func handleStart(payload string) {
 			return
 		}
 	}
+
+	// Clean up old .mkv files in the video directory
+	cleanUpOldMkvFiles()
+
 	if err := recording.StartRecording(state.CurrentAthlete, state.CurrentLiftType, state.CurrentAttempt); err != nil {
 		logging.ErrorLogger.Printf("Failed to start recording: %v", err)
 		return
 	}
+}
+
+// cleanUpOldMkvFiles finds and deletes .mkv files directly in the video directory
+func cleanUpOldMkvFiles() {
+	videoDir := config.GetVideoDir()
+	if videoDir == "" {
+		logging.ErrorLogger.Println("Video directory not set, cannot clean up old .mkv files")
+		return
+	}
+
+	// Run in background to avoid delaying recording start
+	go func() {
+		files, err := os.ReadDir(videoDir)
+		if err != nil {
+			logging.ErrorLogger.Printf("Error reading video directory for cleanup: %v", err)
+			return
+		}
+
+		var deletedCount int
+		for _, file := range files {
+			// Skip directories and non-mkv files
+			if file.IsDir() || !strings.HasSuffix(strings.ToLower(file.Name()), ".mkv") {
+				continue
+			}
+
+			filePath := filepath.Join(videoDir, file.Name())
+			logging.InfoLogger.Printf("Removing old temporary file: %s", filePath)
+
+			if err := os.Remove(filePath); err != nil {
+				logging.ErrorLogger.Printf("Failed to remove old .mkv file %s: %v", filePath, err)
+			} else {
+				deletedCount++
+			}
+		}
+
+		if deletedCount > 0 {
+			logging.InfoLogger.Printf("Cleaned up %d old .mkv files from video directory", deletedCount)
+		}
+	}()
 }
 
 func handleStop(payload string) {
