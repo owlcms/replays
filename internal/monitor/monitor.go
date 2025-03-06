@@ -229,7 +229,7 @@ func handleStart(payload string) {
 	// stop any existing recording
 	if recording.IsRecording() {
 		logging.InfoLogger.Println("Stopping running recordings")
-		if err := recording.StopRecording(state.LastStartTime); err != nil {
+		if _, err := recording.StopRecording(); err != nil {
 			logging.ErrorLogger.Printf("Error stopping recording: %v", err)
 			return
 		}
@@ -250,6 +250,7 @@ func handleRefereesDecision() {
 	// Handle refereesDecision message
 	logging.InfoLogger.Printf("Handling refereesDecision message")
 	state.LastDecisionTime = time.Now().UnixNano() / int64(time.Millisecond)
+
 	logging.InfoLogger.Println("Trimming video")
 	go func() {
 		defer func() {
@@ -258,8 +259,9 @@ func handleRefereesDecision() {
 			}
 		}()
 
-		time.Sleep(2 * time.Second)
-		if err := recording.StopRecording(state.LastDecisionTime); err != nil {
+		// wait in case of manual decision reversal.
+		time.Sleep(3 * time.Second)
+		if err := recording.StopRecordingAndTrim(state.LastDecisionTime); err != nil {
 			logging.ErrorLogger.Printf("Error during trimming: %v", err)
 			return
 		}

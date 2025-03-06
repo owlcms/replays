@@ -156,14 +156,12 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	return nil
 }
 
-// StopRecording stops the current recordings and trims the videos
-func StopRecording(decisionTime int64) error {
-	Recording = false
-	if len(currentRecordings) == 0 && !config.NoVideo {
-		return fmt.Errorf("no ongoing recordings to stop")
+// StopRecordingAndTrim stops the current recordings and trims the videos
+func StopRecordingAndTrim(decisionTime int64) error {
+	shouldReturn, err := StopRecording()
+	if shouldReturn {
+		return err
 	}
-
-	doStopRecordings()
 
 	startTime := state.LastStartTime
 	trimDuration := state.LastTimerStopTime - startTime - 5000
@@ -240,7 +238,12 @@ func StopRecording(decisionTime int64) error {
 	return nil
 }
 
-func doStopRecordings() {
+func StopRecording() (bool, error) {
+	Recording = false
+	if len(currentRecordings) == 0 && !config.NoVideo {
+		return true, fmt.Errorf("no ongoing recordings to stop")
+	}
+
 	if config.NoVideo {
 		for i, fileName := range currentFileNames {
 			logging.InfoLogger.Printf("Simulating stop recording video for Camera %d: %s", i+1, fileName)
@@ -252,15 +255,12 @@ func doStopRecordings() {
 				logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
 			}
 		}
-
 		time.Sleep(100 * time.Millisecond)
-
 		for i, stdin := range currentStdin {
 			if err := stdin.Close(); err != nil {
 				logging.InfoLogger.Printf("Could not close stdin for Camera %d (this is normal if process exited): %v", i+1, err)
 			}
 		}
-
 		var wg sync.WaitGroup
 		for i, cmd := range currentRecordings {
 			wg.Add(1)
@@ -273,12 +273,12 @@ func doStopRecordings() {
 				}
 			}(i, cmd)
 		}
-
 		wg.Wait()
 	}
+	return false, nil
 }
 
-func ForceStopRecordings() {
+func TerminateRecordings() {
 	if config.NoVideo {
 		for i, fileName := range currentFileNames {
 			logging.InfoLogger.Printf("Simulating forced stop recording video for Camera %d: %s", i+1, fileName)

@@ -162,7 +162,7 @@ func confirmAndQuit(window fyne.Window) {
 				logging.InfoLogger.Println("Forced closing of replays recorder")
 
 				// Stop any ongoing recordings
-				recording.ForceStopRecordings()
+				recording.TerminateRecordings()
 
 				httpServer.StopServer()
 
@@ -332,7 +332,7 @@ func main() {
 	go func() {
 		<-sigChan
 		logging.InfoLogger.Println("Interrupt signal received. Shutting down...")
-		recording.ForceStopRecordings()
+		recording.TerminateRecordings()
 		httpServer.StopServer()
 		myApp.Quit()
 	}()
