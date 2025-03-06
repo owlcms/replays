@@ -8,6 +8,14 @@ import (
 	"github.com/owlcms/replays/internal/logging"
 )
 
+// InitializeFFmpeg finds and stores the ffmpeg path in config
+func InitializeFFmpeg() error {
+	path := "/usr/bin/ffmpeg"
+	config.SetFFmpegPath(path)
+	logging.InfoLogger.Printf("FFmpeg executable set to: %s", path)
+	return nil
+}
+
 // createFfmpegCmd creates an exec.Cmd for ffmpeg
 func createFfmpegCmd(args []string) *exec.Cmd {
 	cameras := config.GetCameraConfigs()
