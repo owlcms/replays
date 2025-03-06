@@ -233,6 +233,10 @@ func StopRecordingAndTrim(decisionTime int64) error {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
+	// Update status to "Trimming videos for XXX attempt YYY"
+	statusMessage := fmt.Sprintf("Trimming videos for %s -- %s attempt %d", state.CurrentAthlete, state.CurrentLiftType, state.CurrentAttempt)
+	httpServer.SendStatus(httpServer.Trimming, statusMessage)
+
 	var wg sync.WaitGroup
 	for i, currentFileName := range currentFileNames {
 		wg.Add(1)
