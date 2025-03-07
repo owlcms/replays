@@ -2,6 +2,9 @@
 
 > This version requires owlcms 56.0.0-beta or newer (use "additional versions" "show prereleases" to get)
 
+- 1.3.0 Fixes for clock start/restart
+- 1.3.0 On Windows, ffmpeg is downloaded and the local copy is used, no install is necessary.
+- 1.3.0 Fixes for platform names with spaces
 - 1.2.0 Fixes for the initial plaftform detection
 - 1.2.0 Logging to the logs/replays.log now works again
 - 1.1.0 Replays are organized by session; it possible to see replays from a prior session.

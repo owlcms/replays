@@ -1,6 +1,6 @@
 package config
 
-var programVersion = "1.2.1-alpha1"
+var programVersion = "1.3.0"
 
 // GetProgramVersion returns the current version of the program
 func GetProgramVersion() string {
