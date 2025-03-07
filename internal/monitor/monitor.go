@@ -3,6 +3,7 @@ package monitor
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,8 +37,16 @@ func Monitor(cfg *config.Config) {
 	// First establish MQTT connection
 	mqttAddress := fmt.Sprintf("tcp://%s:1883", cfg.OwlCMS)
 	opts := mqtt.NewClientOptions().AddBroker(mqttAddress)
-	opts.SetClientID("replays-monitor")
+
+	// Get machine's IP address for unique client ID
+	ip, err := getLocalIP()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get local IP address: %v", err)
+		return
+	}
+	opts.SetClientID(fmt.Sprintf("replays-monitor-%s", ip))
 	opts.SetDefaultPublishHandler(messageHandler())
+	opts.SetResumeSubs(true) // Ensure subscriptions are resumed on reconnect
 
 	mqttClient = mqtt.NewClient(opts)
 	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
@@ -328,4 +337,21 @@ func AutoSelectPlatform(cfg *config.Config, platforms []string) bool {
 		return true
 	}
 	return false
+}
+
+// getLocalIP retrieves the local IP address of the machine
+func getLocalIP() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", err
+	}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no IP address found")
 }
