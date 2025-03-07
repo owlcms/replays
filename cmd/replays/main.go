@@ -194,7 +194,7 @@ func main() {
 	// Check for ffmpeg directory on Windows
 	if runtime.GOOS == "windows" {
 		installDir := config.GetInstallDir()
-		ffmpegDir := filepath.Join(installDir, "ffmpeg-7.1-full_build")
+		ffmpegDir := filepath.Join(installDir, recording.FfmpegBuild)
 		if _, err := os.Stat(ffmpegDir); os.IsNotExist(err) {
 			// Directory does not exist, download and extract ffmpeg
 			downloadURL := downloadUtils.GetDownloadURL()
@@ -224,7 +224,7 @@ func main() {
 				}
 
 				progressDialog.Hide()
-				dialog.ShowInformation("Success", "FFmpeg has been downloaded and extracted successfully.", window)
+				//dialog.ShowInformation("Success", "FFmpeg has been downloaded and extracted successfully.", window)
 			}()
 		}
 	}

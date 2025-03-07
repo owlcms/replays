@@ -34,15 +34,11 @@ func SetVerbose(verbose bool) {
 func Init(logDirectory string) error {
 	logDir = logDirectory
 
-	// Write the value of logDir to the console
-	fmt.Printf("Initializing logs in directory: %s\n", logDir)
-
 	// Create logs directory if it doesn't exist
 	if err := os.MkdirAll(logDir, os.ModePerm); err != nil {
 		fmt.Printf("Failed to create log directory: %v\n", err)
 		return err
 	}
-	fmt.Printf("Log directory created successfully: %s\n", logDir)
 
 	// Open log file with O_SYNC to ensure no buffering
 	var err error
@@ -50,7 +46,6 @@ func Init(logDirectory string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Log file created successfully: %s\n", logFile.Name())
 
 	// Initialize writers based on platform
 	var infoWriter, warnWriter, errorWriter io.Writer

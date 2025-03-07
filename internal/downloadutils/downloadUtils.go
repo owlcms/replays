@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/recording"
 )
 
 // ProgressCallback is a function type that receives download progress updates
@@ -117,7 +118,7 @@ func IsWSL() bool {
 
 // GetDownloadURL returns the correct download URL based on the operating system.
 func GetDownloadURL() string {
-	return "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build.zip"
+	return "https://github.com/GyanD/codexffmpeg/releases/download/7.1/" + recording.FfmpegBuild + ".zip"
 }
 
 func GetGoos() string {

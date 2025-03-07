@@ -26,60 +26,10 @@ func InitializeFFmpeg() error {
 	return nil
 }
 
-// findFFmpeg finds the ffmpeg executable path based on configuration and environment
+// on Windows, we use the locally downloaded ffmpeg
 func findFFmpeg() string {
-	cameras := config.GetCameraConfigs()
-	path := ""
-
-	// Try to get path from camera config
-	if len(cameras) > 0 {
-		path = cameras[0].FfmpegPath
-	}
-
-	// Check if the configured path exists
-	if path != "" {
-		// Check if it's an absolute path that exists
-		if filepath.IsAbs(path) {
-			if _, err := os.Stat(path); err == nil {
-				logging.InfoLogger.Printf("Using configured absolute ffmpeg path: %s", path)
-				return path // Path is valid and exists
-			} else {
-				logging.ErrorLogger.Printf("Configured absolute ffmpeg path does not exist: %s", path)
-				path = "" // Reset path to try other methods
-			}
-		} else if !isSimpleProgramName(path) {
-			// It's a relative path, check relative to current directory
-			absPath := filepath.Join(".", path)
-			if _, err := os.Stat(absPath); err == nil {
-				logging.InfoLogger.Printf("Using configured relative ffmpeg path: %s", absPath)
-				return absPath
-			} else {
-				logging.ErrorLogger.Printf("Configured relative ffmpeg path does not exist: %s", path)
-				path = "" // Reset path to try other methods
-			}
-		}
-	}
-
-	// If path is a simple program name or empty, try to find it in PATH
-	if path == "" || isSimpleProgramName(path) {
-		programName := "ffmpeg.exe"
-		if path != "" {
-			programName = path
-		}
-
-		var err error
-		foundPath, err := exec.LookPath(programName)
-		if err == nil {
-			logging.InfoLogger.Printf("Found ffmpeg in PATH: %s", foundPath)
-			return foundPath
-		} else {
-			logging.ErrorLogger.Printf("ffmpeg not found in PATH: %v", err)
-		}
-	}
-
-	// As last resort, check the installation directory
 	installDir := config.GetInstallDir()
-	ffmpegPath := filepath.Join(installDir, "ffmpeg-7.1-full_build", "bin", "ffmpeg.exe")
+	ffmpegPath := filepath.Join(installDir, FfmpegBuild, "bin", "ffmpeg.exe")
 	logging.InfoLogger.Printf("Trying ffmpeg at installation directory: %s", ffmpegPath)
 
 	if _, err := os.Stat(ffmpegPath); err == nil {
@@ -102,11 +52,6 @@ func createFfmpegCmd(args []string) *exec.Cmd {
 	}
 
 	return cmd
-}
-
-// isSimpleProgramName checks if the path is just a program name without directory separators
-func isSimpleProgramName(path string) bool {
-	return filepath.Base(path) == path
 }
 
 func forceKillCmd(cmd *exec.Cmd) error {
