@@ -18,7 +18,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
-	"github.com/owlcms/replays/internal/downloadUtils"
+	"github.com/owlcms/replays/internal/downloadutils"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
@@ -197,7 +197,7 @@ func main() {
 		ffmpegDir := filepath.Join(installDir, recording.FfmpegBuild)
 		if _, err := os.Stat(ffmpegDir); os.IsNotExist(err) {
 			// Directory does not exist, download and extract ffmpeg
-			downloadURL := downloadUtils.GetDownloadURL()
+			downloadURL := downloadutils.GetDownloadURL()
 			destPath := filepath.Join(installDir, "ffmpeg.zip")
 
 			progressDialog := dialog.NewProgress("Downloading FFmpeg", "Please wait while FFmpeg is being downloaded...", window)
@@ -205,7 +205,7 @@ func main() {
 
 			cancel := make(chan bool)
 			go func() {
-				err := downloadUtils.DownloadArchive(downloadURL, destPath, func(downloaded, total int64) {
+				err := downloadutils.DownloadArchive(downloadURL, destPath, func(downloaded, total int64) {
 					progressDialog.SetValue(float64(downloaded) / float64(total))
 				}, cancel)
 				if err != nil {
@@ -215,7 +215,7 @@ func main() {
 					return
 				}
 
-				err = downloadUtils.ExtractZip(destPath, installDir)
+				err = downloadutils.ExtractZip(destPath, installDir)
 				if err != nil {
 					logging.ErrorLogger.Printf("Failed to extract FFmpeg: %v", err)
 					dialog.ShowError(err, window)

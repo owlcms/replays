@@ -1,4 +1,4 @@
-package downloadUtils
+package downloadutils
 
 import (
 	"archive/tar"
