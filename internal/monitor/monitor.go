@@ -30,6 +30,8 @@ var (
 	PlatformListChan = make(chan []string, 1)
 	// Add new function to show platform dialog
 	ShowPlatformDialogFunc func()
+	lastConfigPayload      string
+	lastConfigTimestamp    time.Time
 )
 
 // Monitor listens to the owlcms broker for specific messages
@@ -212,6 +214,15 @@ func handleBreak(payload string) {
 }
 
 func handleConfig(payload string) {
+	// Discard identical responses received within a second
+	if payload == lastConfigPayload && time.Since(lastConfigTimestamp) < time.Second {
+		//logging.InfoLogger.Printf("Discarding duplicate config response")
+		return
+	}
+
+	lastConfigPayload = payload
+	lastConfigTimestamp = time.Now()
+
 	var configMsg ConfigMessage
 	if err := json.Unmarshal([]byte(payload), &configMsg); err != nil {
 		logging.ErrorLogger.Printf("Error parsing config message: %v", err)
