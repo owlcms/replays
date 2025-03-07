@@ -31,13 +31,12 @@ recode = true # true = recode using libx264, false = copy streams without recomp
     params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
     recode = false # Default to false
 
-# On Windows and WSL, to find the camera name use:
+# On Windows to find the camera name use:
 #   ffmpeg -hide_banner -f dshow -list_devices true -i dummy
-# Must include  video=  before the name.
+# the ffmpegCamera parameter must include  video=  before the name.
 
 [windows]
     ffmpegCamera = 'video=Logitech Webcam C930e'
-    ffmpegPath = 'ffmpeg.exe'
     format = 'dshow'
     size = "1280x720"
     fps = 30
@@ -47,17 +46,8 @@ recode = true # true = recode using libx264, false = copy streams without recomp
 # for additional cameras, add a new section, add 1 to the section name.
 # [windows2]
 #     ffmpegCamera = 'video=OV01A'
-#     ffmpegPath = 'ffmpeg.exe'
 #     format = 'dshow'
 #     size = "1280x720"
 #     fps = 30
 #     params = '-vf "format=yuv420p" -preset ultrafast -loglevel quiet'
 
-[wsl]
-    ffmpegCamera = 'video=OV01A'
-    ffmpegPath = '/mnt/c/ProgramData/chocolatey/bin/ffmpeg.exe'
-    format = 'dshow'
-    size = "1280x720"
-    fps = 30
-    params = '-vf "format=yuv420p" -preset ultrafast -loglevel quiet'
-    recode = false # Default to false
