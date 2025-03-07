@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/owlcms/replays/internal/logging"
 )
 
 // ProgressCallback is a function type that receives download progress updates
@@ -20,7 +22,7 @@ type ProgressCallback func(downloaded, total int64)
 
 // DownloadArchive downloads a file and reports progress through the callback. It also accepts a cancel channel.
 func DownloadArchive(url, destPath string, progress ProgressCallback, cancel <-chan bool) error {
-	log.Printf("Attempting to download from URL: %s\n", url)
+	logging.InfoLogger.Printf("Attempting to download from URL: %s\n", url)
 
 	client := &http.Client{}
 
@@ -67,7 +69,7 @@ func DownloadArchive(url, destPath string, progress ProgressCallback, cancel <-c
 		return fmt.Errorf("failed to copy data: %w", err)
 	}
 
-	log.Printf("Successfully downloaded file to: %s\n", destPath)
+	logging.InfoLogger.Printf("Successfully downloaded file to: %s\n", destPath)
 	return nil
 }
 
@@ -115,7 +117,7 @@ func IsWSL() bool {
 
 // GetDownloadURL returns the correct download URL based on the operating system.
 func GetDownloadURL() string {
-	return " https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build.zip"
+	return "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build.zip"
 }
 
 func GetGoos() string {

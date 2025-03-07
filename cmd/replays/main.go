@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/downloadUtils"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
@@ -187,6 +188,47 @@ func main() {
 		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
 	}
 
+	myApp := app.New()
+	window := myApp.NewWindow("OWLCMS Jury Replays")
+
+	// Check for ffmpeg directory on Windows
+	if runtime.GOOS == "windows" {
+		installDir := config.GetInstallDir()
+		ffmpegDir := filepath.Join(installDir, "ffmpeg-7.1-full_build")
+		if _, err := os.Stat(ffmpegDir); os.IsNotExist(err) {
+			// Directory does not exist, download and extract ffmpeg
+			downloadURL := downloadUtils.GetDownloadURL()
+			destPath := filepath.Join(installDir, "ffmpeg.zip")
+
+			progressDialog := dialog.NewProgress("Downloading FFmpeg", "Please wait while FFmpeg is being downloaded...", window)
+			progressDialog.Show()
+
+			cancel := make(chan bool)
+			go func() {
+				err := downloadUtils.DownloadArchive(downloadURL, destPath, func(downloaded, total int64) {
+					progressDialog.SetValue(float64(downloaded) / float64(total))
+				}, cancel)
+				if err != nil {
+					logging.ErrorLogger.Printf("Failed to download FFmpeg: %v", err)
+					dialog.ShowError(err, window)
+					progressDialog.Hide()
+					return
+				}
+
+				err = downloadUtils.ExtractZip(destPath, installDir)
+				if err != nil {
+					logging.ErrorLogger.Printf("Failed to extract FFmpeg: %v", err)
+					dialog.ShowError(err, window)
+					progressDialog.Hide()
+					return
+				}
+
+				progressDialog.Hide()
+				dialog.ShowInformation("Success", "FFmpeg has been downloaded and extracted successfully.", window)
+			}()
+		}
+	}
+
 	// Initialize FFmpeg path
 	if err := recording.InitializeFFmpeg(); err != nil {
 		logging.WarningLogger.Printf("Warning: %v", err)
@@ -210,9 +252,6 @@ func main() {
 	go func() {
 		httpServer.StartServer(cfg.Port, config.Verbose)
 	}()
-
-	myApp := app.New()
-	window := myApp.NewWindow("OWLCMS Jury Replays")
 
 	label := widget.NewLabel("OWLCMS Jury Replays")
 	label.TextStyle = fyne.TextStyle{Bold: true}
