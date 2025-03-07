@@ -26,6 +26,7 @@ import (
 )
 
 var sigChan = make(chan os.Signal, 1)
+var titleLabel *widget.Label
 
 // openApplicationDirectory opens the application directory in the file explorer
 func openApplicationDirectory() {
@@ -178,6 +179,15 @@ func confirmAndQuit(window fyne.Window) {
 	confirmDialog.Show()
 }
 
+func updateTitle() {
+	cfg := config.GetCurrentConfig()
+	platform := cfg.Platform
+	if platform == "" {
+		platform = "No Platform Selected"
+	}
+	titleLabel.SetText(fmt.Sprintf("OWLCMS Jury Replays - Platform %s", platform))
+}
+
 func main() {
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
@@ -190,6 +200,10 @@ func main() {
 
 	myApp := app.New()
 	window := myApp.NewWindow("OWLCMS Jury Replays")
+
+	titleLabel = widget.NewLabel("")
+	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
+	updateTitle()
 
 	// Check for ffmpeg directory on Windows
 	if runtime.GOOS == "windows" {
@@ -257,7 +271,7 @@ func main() {
 	label.TextStyle = fyne.TextStyle{Bold: true}
 
 	// Create containers
-	topContainer := container.NewVBox(label)
+	topContainer := container.NewVBox(titleLabel)
 
 	// Add status label with initial status (bold for errors)
 	statusLabel := widget.NewLabel(initialStatus)
@@ -286,6 +300,7 @@ func main() {
 		fyne.NewMenu("File",
 			fyne.NewMenuItem("Platform Selection", func() {
 				showPlatformSelection(cfg, window)
+				updateTitle() // Update title after platform selection
 			}),
 			fyne.NewMenuItem("owlcms Server Address", func() {
 				showOwlCMSServerAddress(cfg, window)
