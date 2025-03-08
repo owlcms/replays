@@ -1,62 +1,73 @@
 # HTTP server port
 port = 8091
 
-# address of owlcms.  a scan of the local network 192.168.x will be done if undefined or unreachable.
-owlcms = "192.168.1.174"
+# address of owlcms.  a scan of the local network will be done if undefined or unreachable.
+owlcms = ""
 
 # Platform identifier if more than one platform detected
 platform = "A"
 
-# Directory to store video files (can be absolyte)
+# Directory to store video files (can be an absolute path to store on a different drive)
 videoDir = 'videos'
 
 # Video processing options
 recode = true # true = recode using libx264, false = copy streams without recompression
 
 # Platform-specific FFmpeg configurations
-
-# use the Help > List Cameras menu item to get the device names
-# when using Linux (Rapberry Pi) devices are /dev/video0 /dev/video2 (even numbers)
-[linux]
-    ffmpegCamera = '/dev/video0'
-    format = 'v4l2'
-    size = "1280x720"
-    fps = 30
-    params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
-    recode = false # Default to false
-# for webcams that produce MJPEG streams (Logitech C920, C930 and older), 
-# you may try the following parameters if recording is choppy
-#     params = '-vcodec mjpeg -q:v 2 -loglevel quiet'
-#     recode = true
-
-# for additional cameras, add a new section, add 1 to the section name.
-# and the device name will usually be the next even number
-# [linux2]
-#     ffmpegCamera = '/dev/video2'
-#     format = 'v4l2'
-#     size = "1280x720"
-#     fps = 30
-#     params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
-#     recode = false
+# [linux...] is ignored on Windows, [windows...] is ignored on Linux
 
 # use the Help > List Cameras menu item to get the camera names
-[windows]
-    ffmpegCamera = 'video=Logitech Webcam C930e'
+[windows1]
+    enabled = true
+    camera = 'Logitech Webcam C930e'
     format = 'dshow'
     size = "1280x720"
     fps = 30
     params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
     recode = false
-# for webcams that produce MJPEG streams (Logitech C920, C930 and older), 
-# you may try the following parameters if recording is choppy
+#   for webcams that produce MJPEG streams (Logitech C920, C930 and older), 
+#   you may try the following parameters if recording is choppy
 #     params = '-vcodec mjpeg -q:v 2 -loglevel quiet'
 #     recode = true
 
-# for additional cameras, add a new section, add 1 to the section name.
-# [windows2]
-#     ffmpegCamera = 'video=OV01A'
-#     format = 'dshow'
-#     size = "1280x720"
-#     fps = 30
-#     params = '-vf "format=yuv420p" -preset ultrafast -loglevel quiet'
+
+# for additional cameras, use a new section, add 1 to the section name.
+#     enabled = true   (to enable the camera; false to disable the camera)
+[windows2]
+    enabled = false
+    camera = 'OV01A'
+    format = 'dshow'
+    size = "1280x720"
+    fps = 30
+    params = '-vf "format=yuv420p" -preset ultrafast -loglevel quiet'
+    recode = false
+
+
+# use the Help > List Cameras menu item to get the device names
+# when using Linux (Rapberry Pi) devices are /dev/video0 /dev/video2 (even numbers)
+[linux1]
+    enabled = true
+    camera = '/dev/video0'
+    format = 'v4l2'
+    size = "1280x720"
+    fps = 30
+    params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
+    recode = false
+#   for webcams that produce MJPEG streams (Logitech C920, C930 and older), 
+#   you may try the following parameters if recording is choppy
+#     params = '-vcodec mjpeg -q:v 2 -loglevel quiet'
+#     recode = true
+
+
+# for additional cameras, use a new section, add 1 to the section name.
+#     device name will usually be the next *even* number (2, 4, 6, ...)
+#     enabled = true   (to enable the camera; false to disable the camera)
+[linux2]
+    enabled = false
+    camera = '/dev/video2'
+    format = 'v4l2'
+    size = "1280x720"
+    fps = 30
+    params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
+    recode = false
 

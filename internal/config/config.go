@@ -94,16 +94,23 @@ func LoadConfig(configFile string) (*Config, error) {
 	var cameras []CameraConfiguration
 
 	// Helper: decode a raw map into a PlatformConfig
-	decodePlatformConfig := func(data interface{}) (CameraConfiguration, error) {
+	decodePlatformConfig := func(sectionName string, data interface{}) (CameraConfiguration, error) {
 		m, ok := data.(map[string]interface{})
 		if !ok {
 			return CameraConfiguration{}, fmt.Errorf("invalid type for platform config")
 		}
 		var pc CameraConfiguration
+		if val, ok := m["enabled"].(bool); ok && !val {
+			logging.InfoLogger.Printf("Camera configuration for section %s is disabled", sectionName)
+			return CameraConfiguration{}, fmt.Errorf("camera configuration for section %s is disabled", sectionName)
+		}
 		if val, ok := m["ffmpegPath"].(string); ok {
 			pc.FfmpegPath = val
 		}
 		if val, ok := m["ffmpegCamera"].(string); ok {
+			pc.FfmpegCamera = val
+		}
+		if val, ok := m["camera"].(string); ok {
 			pc.FfmpegCamera = val
 		}
 		if val, ok := m["format"].(string); ok {
@@ -150,9 +157,9 @@ func LoadConfig(configFile string) (*Config, error) {
 				break
 			}
 		}
-		pc, err := decodePlatformConfig(confRaw)
+		pc, err := decodePlatformConfig(key, confRaw)
 		if err != nil {
-			return nil, err
+			continue // Skip disabled camera configurations
 		}
 		cameras = append(cameras, pc)
 	}

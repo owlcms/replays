@@ -1,8 +1,8 @@
 **Change log**
 
-> This version requires owlcms 56.0.0-beta or newer (use "additional versions" "show prereleases" to get)
+> This version requires owlcms 56 or newer (use "additional versions" "show prereleases" to get)
 
-- 1.3.0 Menu Entry Help > List Cameras
+- 1.3.0 Menu Entry to list cameras: Help > List Cameras
 - 1.3.0 Fixes for clock start/restart
 - 1.3.0 On Windows, ffmpeg is downloaded and the local copy is used, no install is necessary.
 - 1.3.0 Fixes for platform names with spaces
