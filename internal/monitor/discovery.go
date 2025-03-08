@@ -13,71 +13,70 @@ import (
 // DiscoverBroker scans local network for an MQTT broker on port 1883
 // Returns the IP address of the first broker found
 func DiscoverBroker() (string, error) {
-	// Get local IP address and netmask
-	ip, mask, err := getLocalIPAndMask()
+	_, ipNet, err := getLocalIPAndNetmask()
 	if err != nil {
-		return "", fmt.Errorf("failed to get local IP: %v", err)
+		return "", err
 	}
 
-	// Check if we're on a /24 network
-	ones, bits := mask.Size()
-	if bits-ones != 8 {
-		return "", fmt.Errorf("not scanning, network mask must be /24 (255.255.255.0), got /%d", ones)
+	// Calculate the number of hosts in the subnet
+	ones, bits := ipNet.Mask.Size()
+	numHosts := 1 << (bits - ones)
+
+	// Perform a scan if there are fewer than 255 machines in the subnet
+	if numHosts <= 256 {
+		return scanNetworkForBroker(ipNet)
 	}
 
-	// Extract subnet (192.168.x)
-	parts := strings.Split(ip, ".")
-	if len(parts) != 4 {
-		return "", fmt.Errorf("invalid IP format: %s", ip)
-	}
-	subnet := fmt.Sprintf("%s.%s.%s", parts[0], parts[1], parts[2])
-
-	// Scan addresses in subnet
-	for i := 1; i < 255; i++ {
-		target := fmt.Sprintf("%s.%d:1883", subnet, i)
-		logging.InfoLogger.Printf("Scanning %s", target)
-		if IsPortOpen(target) {
-			return target, nil
-		}
-	}
-
-	logging.InfoLogger.Printf("no owlcms found in subnet %s", subnet)
-	return "", fmt.Errorf("owlcms not found")
+	return "", fmt.Errorf("network too large to scan")
 }
 
-// getLocalIPAndMask returns the non-loopback local IP and netmask of the host
-func getLocalIPAndMask() (string, net.IPMask, error) {
-	ifaces, err := net.Interfaces()
+// getLocalIPAndNetmask returns the non-loopback local IP and netmask of the host
+func getLocalIPAndNetmask() (net.IP, *net.IPNet, error) {
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
-	for _, iface := range ifaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-				if ip4 := ipnet.IP.To4(); ip4 != nil {
-					ip := ip4.String()
-					if strings.HasPrefix(ip, "192.168") {
-						return ip, ipnet.Mask, nil
-					}
-				}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP, ipNet, nil
 			}
 		}
 	}
-	return "", nil, fmt.Errorf("no suitable local IP address found")
+	return nil, nil, fmt.Errorf("no IP address found")
+}
+
+// scanNetworkForBroker scans the network to find the MQTT broker address
+func scanNetworkForBroker(ipNet *net.IPNet) (string, error) {
+	ip := ipNet.IP.Mask(ipNet.Mask)
+	for ip := ip.Mask(ipNet.Mask); ipNet.Contains(ip); inc(ip) {
+		address := fmt.Sprintf("%s:1883", ip.String())
+		logging.InfoLogger.Printf("Trying address: %s", address)
+		if IsPortOpen(address) {
+			return ip.String(), nil
+		}
+	}
+	return "", fmt.Errorf("MQTT broker not found on the network")
+}
+
+// inc increments an IP address
+func inc(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] > 0 {
+			break
+		}
+	}
 }
 
 // IsPortOpen tests if a port is open by attempting to connect
 func IsPortOpen(address string) bool {
-	timeout := 100 * time.Millisecond
-	conn, err := net.DialTimeout("tcp", address, timeout)
+	conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
+	conn.Close()
 	return true
 }
 
@@ -100,6 +99,7 @@ func UpdateOwlcmsAddress(cfg *config.Config, configFile string) (string, error) 
 		cfg.OwlCMS = broker
 		if err := config.UpdateConfigFile(configFile, broker); err != nil {
 			fmt.Printf("Error updating config file: %v\n", err)
+			return broker, err
 		}
 	}
 	return broker, nil
