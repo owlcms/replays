@@ -378,20 +378,21 @@ func main() {
 			fyne.NewMenuItem("Open Application Directory", func() {
 				openApplicationDirectory()
 			}),
-			fyne.NewMenuItemSeparator(),
+
 			fyne.NewMenuItem("Quit", func() {
 				confirmAndQuit(window)
 			}),
 		),
 		fyne.NewMenu("Help",
-			fyne.NewMenuItem("About", func() {
-				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
-			}),
 			// Add "List Cameras" menu item for Windows and Linux
 			fyne.NewMenuItem("List Cameras", func() {
 				if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
 					listCameras(window)
 				}
+			}),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("About", func() {
+				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
 			}),
 		),
 	)
