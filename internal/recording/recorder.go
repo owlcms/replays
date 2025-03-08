@@ -1,15 +1,22 @@
 package recording
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
@@ -332,4 +339,71 @@ func TerminateRecordings() {
 // GetStartTimeMillis returns the start time in milliseconds
 func GetStartTimeMillis() string {
 	return strconv.FormatInt(state.LastStartTime, 10)
+}
+
+// ListCameras lists available cameras using ffmpeg on Windows or v4l2-ctl on Linux and displays them in a Fyne text area
+func ListCameras(window fyne.Window) {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		args := []string{"-list_devices", "true", "-f", "dshow", "-i", "dummy", "-hide_banner"}
+		cmd = CreateFfmpegCmd(args)
+	} else if runtime.GOOS == "linux" {
+		cmd = exec.Command("v4l2-ctl", "--list-devices")
+	} else {
+		dialog.ShowInformation("Unsupported Platform", "Camera listing is not supported on this platform.", window)
+		return
+	}
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		logging.ErrorLogger.Printf("Failed to list cameras: %v", err)
+		dialog.ShowError(err, window)
+		return
+	}
+
+	var cameraNames []string
+	scanner := bufio.NewScanner(&out)
+	if runtime.GOOS == "windows" {
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, "(video)") {
+				start := strings.Index(line, "\"")
+				end := strings.LastIndex(line, "\"")
+				if start != -1 && end != -1 && start != end {
+					cameraNames = append(cameraNames, line[start+1:end])
+				}
+			}
+		}
+	} else if runtime.GOOS == "linux" {
+		var currentCamera string
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.Contains(line, "(usb-") {
+				currentCamera = strings.TrimSpace(line)
+			} else if strings.HasPrefix(line, "/dev/video") && currentCamera != "" {
+				cameraNames = append(cameraNames, fmt.Sprintf("%s: %s", currentCamera, strings.TrimSpace(line)))
+				currentCamera = ""
+			}
+		}
+	}
+
+	if len(cameraNames) == 0 {
+		dialog.ShowInformation("No Cameras Found", "No cameras were found on this system.", window)
+		return
+	}
+
+	cameraList := strings.Join(cameraNames, "\n")
+	textArea := widget.NewMultiLineEntry()
+	textArea.SetText(cameraList)
+	textArea.Wrapping = fyne.TextWrapWord
+
+	dialog := dialog.NewCustom("Available Cameras", "Close", container.NewVBox(
+		widget.NewLabel("The following cameras were found on this system:"),
+		textArea,
+	), window)
+	dialog.Resize(fyne.NewSize(400, 300))
+	dialog.Show()
 }
