@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
@@ -188,6 +190,52 @@ func updateTitle() {
 	titleLabel.SetText(fmt.Sprintf("OWLCMS Jury Replays - Platform %s", platform))
 }
 
+// listCameras lists available cameras using ffmpeg and displays them in a Fyne text area
+func listCameras(window fyne.Window) {
+	args := []string{"-list_devices", "true", "-f", "dshow", "-i", "dummy", "-hide_banner"}
+	cmd := recording.CreateFfmpegCmd(args)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		logging.ErrorLogger.Printf("Failed to list cameras: %v", err)
+		dialog.ShowError(err, window)
+		return
+	}
+
+	scanner := bufio.NewScanner(&out)
+	var cameraNames []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "(video)") {
+			start := strings.Index(line, "\"")
+			end := strings.LastIndex(line, "\"")
+			if start != -1 && end != -1 && start != end {
+				cameraNames = append(cameraNames, line[start+1:end])
+			}
+		}
+	}
+
+	if len(cameraNames) == 0 {
+		dialog.ShowInformation("No Cameras Found", "No cameras were found on this system.", window)
+		return
+	}
+
+	cameraList := strings.Join(cameraNames, "\n")
+	textArea := widget.NewMultiLineEntry()
+	textArea.SetText(cameraList)
+	textArea.Wrapping = fyne.TextWrapWord
+
+	dialog := dialog.NewCustom("Available Cameras", "Close", container.NewVBox(
+		widget.NewLabel("The following cameras were found on this system:"),
+		textArea,
+	), window)
+	dialog.Resize(fyne.NewSize(400, 300))
+	dialog.Show()
+}
+
 func main() {
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
@@ -317,6 +365,12 @@ func main() {
 		fyne.NewMenu("Help",
 			fyne.NewMenuItem("About", func() {
 				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
+			}),
+			// Add "List Cameras" menu item for Windows
+			fyne.NewMenuItem("List Cameras", func() {
+				if runtime.GOOS == "windows" {
+					listCameras(window)
+				}
 			}),
 		),
 	)

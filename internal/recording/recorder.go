@@ -117,7 +117,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		args := buildRecordingArgs(fileName, camera)
 
 		if config.NoVideo {
-			cmd := createFfmpegCmd(args)
+			cmd := CreateFfmpegCmd(args)
 			logging.InfoLogger.Printf("Simulating start recording video for Camera %d: %s", i+1, cmd.String())
 			logging.InfoLogger.Printf("ffmpeg command for Camera %d: %s", i+1, cmd.String())
 			fileNames = append(fileNames, fileName)
@@ -125,7 +125,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 			continue
 		}
 
-		cmd := createFfmpegCmd(args)
+		cmd := CreateFfmpegCmd(args)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("failed to create stdin pipe for Camera %d: %w", i+1, err)
@@ -184,7 +184,7 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, trimDuration i
 	} else {
 		for j := 0; j < 5; j++ {
 			args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName, config.GetCameraConfigs()[i])
-			cmd := createFfmpegCmd(args)
+			cmd := CreateFfmpegCmd(args)
 
 			if j == 0 {
 				logging.InfoLogger.Printf("Executing trim command for Camera %d: %s", i+1, cmd.String())

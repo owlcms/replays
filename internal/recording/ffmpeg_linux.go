@@ -16,8 +16,8 @@ func InitializeFFmpeg() error {
 	return nil
 }
 
-// createFfmpegCmd creates an exec.Cmd for ffmpeg
-func createFfmpegCmd(args []string) *exec.Cmd {
+// CreateFfmpegCmd creates an exec.Cmd for ffmpeg
+func CreateFfmpegCmd(args []string) *exec.Cmd {
 	cameras := config.GetCameraConfigs()
 	path := "ffmpeg"
 	if len(cameras) > 0 {

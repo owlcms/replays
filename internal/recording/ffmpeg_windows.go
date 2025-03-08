@@ -42,7 +42,7 @@ func findFFmpeg() string {
 }
 
 // createFfmpegCmd creates an exec.Cmd for ffmpeg with Windows-specific process attributes
-func createFfmpegCmd(args []string) *exec.Cmd {
+func CreateFfmpegCmd(args []string) *exec.Cmd {
 	// Use the stored ffmpeg path from config
 	path := config.GetFFmpegPath()
 
