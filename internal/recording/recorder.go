@@ -380,11 +380,11 @@ func ListCameras(window fyne.Window) {
 	} else if runtime.GOOS == "linux" {
 		var currentCamera string
 		for scanner.Scan() {
-			line := scanner.Text()
+			line := strings.TrimSpace(scanner.Text())
 			if strings.Contains(line, "(usb-") {
-				currentCamera = strings.TrimSpace(line)
+				currentCamera = strings.Split(line, " (usb-")[0]
 			} else if strings.HasPrefix(line, "/dev/video") && currentCamera != "" {
-				cameraNames = append(cameraNames, fmt.Sprintf("%s: %s", currentCamera, strings.TrimSpace(line)))
+				cameraNames = append(cameraNames, fmt.Sprintf("%s: %s", currentCamera, line))
 				currentCamera = ""
 			}
 		}
@@ -397,6 +397,7 @@ func ListCameras(window fyne.Window) {
 
 	cameraList := strings.Join(cameraNames, "\n")
 	textArea := widget.NewMultiLineEntry()
+	textArea.SetMinRowsVisible(4)
 	textArea.SetText(cameraList)
 	textArea.Wrapping = fyne.TextWrapWord
 
@@ -404,6 +405,6 @@ func ListCameras(window fyne.Window) {
 		widget.NewLabel("The following cameras were found on this system:"),
 		textArea,
 	), window)
-	dialog.Resize(fyne.NewSize(400, 300))
+	dialog.Resize(fyne.NewSize(400, 300)) // Increased height by 25%
 	dialog.Show()
 }
