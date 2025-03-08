@@ -15,33 +15,42 @@ recode = true # true = recode using libx264, false = copy streams without recomp
 
 # Platform-specific FFmpeg configurations
 
-# when using Linux (Rapberry Pi) devices are usually /dev/video0 /dev/video2 (even numbers)
-# to get a list, use
-#     v4l2-ctl --list-devices
-# you may need to have done an install beforehand: 
-#     sudo apt-get install v4l-utils
-# also add the user running the program to the video group
-#     sudo usermod -aG groupname username
+# use the Help > List Cameras menu item to get the device names
+# when using Linux (Rapberry Pi) devices are /dev/video0 /dev/video2 (even numbers)
 [linux]
-    ffmpegPath = '/usr/bin/ffmpeg'
     ffmpegCamera = '/dev/video0'
     format = 'v4l2'
     size = "1280x720"
     fps = 30
     params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
     recode = false # Default to false
+# for webcams that produce MJPEG streams (Logitech C920, C930 and older), 
+# you may try the following parameters if recording is choppy
+#     params = '-vcodec mjpeg -q:v 2 -loglevel quiet'
+#     recode = true
 
-# On Windows to find the camera name use:
-#   ffmpeg -hide_banner -f dshow -list_devices true -i dummy
-# the ffmpegCamera parameter must include  video=  before the name.
+# for additional cameras, add a new section, add 1 to the section name.
+# and the device name will usually be the next even number
+# [linux2]
+#     ffmpegCamera = '/dev/video2'
+#     format = 'v4l2'
+#     size = "1280x720"
+#     fps = 30
+#     params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
+#     recode = false
 
+# use the Help > List Cameras menu item to get the camera names
 [windows]
     ffmpegCamera = 'video=Logitech Webcam C930e'
     format = 'dshow'
     size = "1280x720"
     fps = 30
     params = '-vf "format=yuv420p" -preset medium -loglevel quiet'
-    recode = false # Default to false
+    recode = false
+# for webcams that produce MJPEG streams (Logitech C920, C930 and older), 
+# you may try the following parameters if recording is choppy
+#     params = '-vcodec mjpeg -q:v 2 -loglevel quiet'
+#     recode = true
 
 # for additional cameras, add a new section, add 1 to the section name.
 # [windows2]

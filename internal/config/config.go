@@ -123,6 +123,12 @@ func LoadConfig(configFile string) (*Config, error) {
 		} else {
 			pc.Recode = false // Default to false
 		}
+
+		// Add "video=" to ffmpegCamera if format is dshow and ffmpegCamera does not start with "video="
+		if pc.Format == "dshow" && !strings.HasPrefix(pc.FfmpegCamera, "video=") {
+			pc.FfmpegCamera = "video=" + pc.FfmpegCamera
+		}
+
 		return pc, nil
 	}
 
