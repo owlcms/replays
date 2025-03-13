@@ -101,17 +101,22 @@ func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
 
 // showPlatformSelection shows a dialog with platform selection dropdown
 func showPlatformSelection(cfg *config.Config, window fyne.Window) {
-	// Request fresh platform list
-	monitor.PublishConfig(cfg.Platform)
+	// Use the stored validated platforms if available
+	platforms := monitor.GetStoredPlatforms()
+	
+	// If no platforms are stored, request them
+	if len(platforms) == 0 {
+		// Request fresh platform list
+		monitor.PublishConfig(cfg.Platform)
 
-	// Wait up to 2 seconds for response
-	var platforms []string
-	select {
-	case platforms = <-monitor.PlatformListChan:
-		// got platforms
-	case <-time.After(2 * time.Second):
-		dialog.ShowInformation("Not Available", "No response from owlcms server", window)
-		return
+		// Wait up to 2 seconds for response
+		select {
+		case platforms = <-monitor.PlatformListChan:
+			// got platforms
+		case <-time.After(2 * time.Second):
+			dialog.ShowInformation("Not Available", "No response from owlcms server", window)
+			return
+		}
 	}
 
 	if len(platforms) == 0 {

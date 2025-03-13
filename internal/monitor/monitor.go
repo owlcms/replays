@@ -32,6 +32,8 @@ var (
 	ShowPlatformDialogFunc func()
 	lastConfigPayload      string
 	lastConfigTimestamp    time.Time
+	// Store the list of validated platforms
+	ValidatedPlatforms []string
 )
 
 // Monitor listens to the owlcms broker for specific messages
@@ -162,6 +164,8 @@ func GetValidatedPlatforms(cfg *config.Config) ([]string, bool) {
 	case platforms := <-PlatformListChan:
 		logging.InfoLogger.Printf("Retrieved platforms from MQTT config: %v", platforms)
 		isValid := validatePlatform(cfg, platforms)
+		// Store the validated platforms
+		ValidatedPlatforms = platforms
 		return platforms, isValid
 	case <-time.After(2 * time.Second):
 		logging.ErrorLogger.Printf("No response from MQTT broker for platform list")
@@ -231,6 +235,8 @@ func handleConfig(payload string) {
 
 	// Store available platforms
 	state.AvailablePlatforms = configMsg.Platforms
+	// Also update ValidatedPlatforms
+	ValidatedPlatforms = configMsg.Platforms
 
 	// Log the available platforms
 	logging.InfoLogger.Printf("Available platforms: %v", state.AvailablePlatforms)
@@ -365,4 +371,9 @@ func getLocalIP() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no IP address found")
+}
+
+// Add a getter function for ValidatedPlatforms
+func GetStoredPlatforms() []string {
+	return ValidatedPlatforms
 }
