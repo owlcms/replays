@@ -46,6 +46,9 @@ type TemplateData struct {
 	NoSessions           bool
 	Platform             string // Add Platform field
 	HasMultiplePlatforms bool
+	SortByAthlete        bool // Add field for athlete sorting option
+	ShowAll              bool // Add field for showing all videos
+	TotalCount           int  // Add field for total video count
 }
 
 type VideoCountMessage struct {
@@ -105,6 +108,16 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	if selectedSession == "" {
 		selectedSession = strings.ReplaceAll(state.CurrentSession, " ", "_")
 	}
+
+	// Get sorting preference from query parameter
+	sortByAthlete := r.URL.Query().Get("sortBy") == "athlete"
+
+	// Get time ordering preference (asc/desc) for athlete sorting
+	timeOrder := r.URL.Query().Get("timeOrder")
+	ascendingTime := timeOrder == "asc"
+
+	// Get showAll preference from query parameter
+	showAll := r.URL.Query().Get("showAll") == "true"
 
 	// Get list of sessions (subdirectories)
 	var sessions []string
@@ -182,8 +195,51 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Sort videos based on parameter
+	if sortByAthlete {
+		// Sort by athlete name, then by date and time
+		sort.Slice(videos, func(i, j int) bool {
+			// Extract athlete names from the DisplayName field
+			// Format: "date time - name - lift - attempt # - Camera #"
+			partsI := strings.Split(videos[i].DisplayName, " - ")
+			partsJ := strings.Split(videos[j].DisplayName, " - ")
+
+			if len(partsI) > 1 && len(partsJ) > 1 {
+				athleteNameI := partsI[1]
+				athleteNameJ := partsJ[1]
+
+				// If athlete names are the same, sort by date and time (which is the first part)
+				if athleteNameI == athleteNameJ {
+					// The date and time are the first part, so we can compare the original strings
+					if ascendingTime {
+						// Ascending order (older first)
+						return videos[i].Filename < videos[j].Filename
+					} else {
+						// Descending order (most recent first)
+						return videos[i].Filename > videos[j].Filename
+					}
+				}
+
+				// Otherwise sort by athlete name alphabetically
+				return strings.ToLower(athleteNameI) < strings.ToLower(athleteNameJ)
+			}
+
+			// Fallback to filename comparison if parsing fails
+			return videos[i].Filename > videos[j].Filename
+		})
+	} else {
+		// Already sorted in reverse order (most recent first) by the code above
+		// This is the default sort
+	}
+
+	// Apply pagination if not showing all videos
+	displayVideos := videos
+	if !showAll && len(videos) > 20 {
+		displayVideos = videos[:20]
+	}
+
 	data := TemplateData{
-		Videos:               videos,
+		Videos:               displayVideos,
 		StatusMsg:            statusMsg,
 		StatusCode:           statusCode,
 		Sessions:             sessions,
@@ -191,6 +247,9 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		ActiveSession:        state.CurrentSession, // Current competition session
 		Platform:             config.GetCurrentConfig().Platform,
 		HasMultiplePlatforms: len(state.AvailablePlatforms) > 1,
+		SortByAthlete:        sortByAthlete,
+		ShowAll:              showAll,
+		TotalCount:           len(videos),
 	}
 
 	// Remove the SendStatus call here as it's not needed

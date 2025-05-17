@@ -2,6 +2,7 @@
 
 > This version requires owlcms 56 or newer (use "additional versions" "show prereleases" to get)
 
+- 1.5.0 ability to sort the videos per athlete to make it easier to find replays after a session.
 - 1.4.0 Menu Entry to list cameras: Help > List Cameras
 - 1.4.0 Fixes for clock start/restart
 - 1.4.0 On Windows, ffmpeg is downloaded and the local copy is used, no install is necessary.
