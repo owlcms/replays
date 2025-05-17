@@ -22,6 +22,9 @@ func DiscoverBroker() (string, error) {
 	ones, bits := ipNet.Mask.Size()
 	numHosts := 1 << (bits - ones)
 
+	logging.InfoLogger.Printf("Local IP: %s, Netmask: %s, Number of hosts: %d\n", ipNet.IP.String(), ipNet.Mask.String(), numHosts)
+	// Check if the subnet is too large to scan
+
 	// Perform a scan if there are fewer than 255 machines in the subnet
 	if numHosts <= 256 {
 		return scanNetworkForBroker(ipNet)
@@ -40,11 +43,22 @@ func getLocalIPAndNetmask() (net.IP, *net.IPNet, error) {
 	for _, addr := range addrs {
 		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
 			if ipNet.IP.To4() != nil {
-				return ipNet.IP, ipNet, nil
+				// Skip link-local addresses (169.254.x.x)
+				if !isLinkLocal(ipNet.IP) {
+					return ipNet.IP, ipNet, nil
+				}
 			}
 		}
 	}
-	return nil, nil, fmt.Errorf("no IP address found")
+	return nil, nil, fmt.Errorf("no valid IP address found")
+}
+
+// isLinkLocal checks if an IP address is a link-local address (169.254.x.x)
+func isLinkLocal(ip net.IP) bool {
+	if ip.To4() != nil {
+		return ip.To4()[0] == 169 && ip.To4()[1] == 254
+	}
+	return false
 }
 
 // scanNetworkForBroker scans the network to find the MQTT broker address
