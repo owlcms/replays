@@ -79,6 +79,9 @@ func StartServer(port int, _ bool) {
 
 	router.HandleFunc("/", listFilesHandler)
 	router.HandleFunc("/ws", handleWebSocket)
+	// Accept /replay/{camera:[0-9]+} and /replay/{camera:[0-9]+}.mp4
+	router.HandleFunc("/replay/{camera:[0-9]+}", handleReplay)
+	router.HandleFunc("/replay/{camera:[0-9]+}.mp4", handleReplay).Name("replay-mp4")
 
 	addr := fmt.Sprintf(":%d", port)
 	Server = &http.Server{
@@ -338,4 +341,87 @@ func StopServer() {
 		}
 		logging.InfoLogger.Println("Server stopped")
 	}
+}
+
+// handleReplay serves the latest replay for the given camera number from the current session.
+// Example filename: 2025-03-29_03h34m34s_DARSIGNY_Shad_CLEANJERK_attempt3_Camera1.mp4
+func handleReplay(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	cameraNum := vars["camera"]
+
+	// Accept and strip a .mp4 extension if present in the URL
+	cameraNum = strings.TrimSuffix(cameraNum, ".mp4")
+
+	// Get current session
+	session := strings.ReplaceAll(state.CurrentSession, " ", "_")
+	if session == "" {
+		// No active session, find most recent directory under videos
+		videoDir := config.GetVideoDir()
+		entries, err := os.ReadDir(videoDir)
+		if err != nil {
+			http.Error(w, "No active session and failed to read video directory", http.StatusNotFound)
+			return
+		}
+		var dirs []os.DirEntry
+		for _, entry := range entries {
+			if entry.IsDir() && entry.Name() != "unsorted" {
+				dirs = append(dirs, entry)
+			}
+		}
+		if len(dirs) == 0 {
+			http.Error(w, "No active session and no session directories found", http.StatusNotFound)
+			return
+		}
+		// Sort directories by name descending (assuming session dirs are named so that latest is last alphabetically)
+		sort.Slice(dirs, func(i, j int) bool {
+			return dirs[i].Name() > dirs[j].Name()
+		})
+		session = dirs[0].Name()
+	}
+
+	// Build session directory path
+	sessionDir := filepath.Join(config.GetVideoDir(), session)
+	logging.InfoLogger.Printf("handleReplay: sessionDir = %s", sessionDir) // Use logger instead of fmt.Println
+	files, err := os.ReadDir(sessionDir)
+	if err != nil {
+		http.Error(w, "Session directory not found", http.StatusNotFound)
+		return
+	}
+
+	// Regex to match files for the current camera, e.g. 2025-03-29_03h34m34s_DARSIGNY_Shad_CLEANJERK_attempt3_Camera1.mp4
+	// Match: timestamp at start, anything in the middle, then attemptX_CameraY at the end
+	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_.*_attempt\d+_Camera` + cameraNum + `\.mp4$`)
+
+	var latestFile string
+	var latestTimestamp string
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		name := file.Name()
+		matches := re.FindStringSubmatch(name)
+		if len(matches) == 3 {
+			// Combine date and time for comparison
+			timestamp := matches[1] + "_" + matches[2]
+			if timestamp > latestTimestamp {
+				latestTimestamp = timestamp
+				latestFile = name
+			}
+		}
+	}
+
+	if latestFile == "" {
+		http.Error(w, "No replay found for camera "+cameraNum, http.StatusNotFound)
+		return
+	}
+
+	// Serve the file with correct MIME type for .mp4 and no caching headers
+	videoPath := filepath.Join(sessionDir, latestFile)
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Surrogate-Control", "no-store")
+	http.ServeFile(w, r, videoPath)
 }
