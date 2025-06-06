@@ -372,11 +372,25 @@ func handleReplay(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "No active session and no session directories found", http.StatusNotFound)
 			return
 		}
-		// Sort directories by name descending (assuming session dirs are named so that latest is last alphabetically)
-		sort.Slice(dirs, func(i, j int) bool {
-			return dirs[i].Name() > dirs[j].Name()
-		})
-		session = dirs[0].Name()
+		// Find the most recently modified directory
+		var latestDir os.DirEntry
+		var latestModTime time.Time
+		for _, dir := range dirs {
+			info, err := dir.Info()
+			if err != nil {
+				continue
+			}
+			modTime := info.ModTime()
+			if latestDir == nil || modTime.After(latestModTime) {
+				latestDir = dir
+				latestModTime = modTime
+			}
+		}
+		if latestDir == nil {
+			http.Error(w, "No active session and no session directories found", http.StatusNotFound)
+			return
+		}
+		session = latestDir.Name()
 	}
 
 	// Build session directory path
