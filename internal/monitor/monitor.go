@@ -330,8 +330,8 @@ func handleRefereesDecision() {
 			}
 		}()
 
-		// wait in case of manual decision reversal.
-		time.Sleep(5 * time.Second)
+		// wait to see the decision on the replay
+		time.Sleep(2 * time.Second)
 		if err := recording.StopRecordingAndTrim(state.LastDecisionTime); err != nil {
 			logging.ErrorLogger.Printf("Error during trimming: %v", err)
 			return
