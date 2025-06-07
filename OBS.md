@@ -8,7 +8,7 @@ The replays application exposes a `replay` endpoint.  Accessing the URL `.../rep
 
 You define a replay scene normally.  In this example, it is called `OwlcmsReplay`.  The scene will include a media source for playing the video.  In the following example, we define `owlcmsReplaySource`.   You need to replace `localhost` with the actual IP address of your replays server.
 
-Note that some of the options have been unselected as they add to the delay of running the video.
+Note that some of the options have been unselected as they add to the delay of running the video.  For example, we removed the buffering, and unselected hardware decoding.
 
 ![OBS_replays](docs/img/OBS_replays.png)
 
