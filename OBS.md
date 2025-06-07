@@ -1,5 +1,7 @@
 ## Showing the Replays in OBS
 
+Getting correctly trimmed replays in OBS automatically is very difficult.  Since the replay application already does the trimming, it is useful to fetch the replays from there.
+
 The replays application exposes a `replay` endpoint.  Accessing the URL `.../replay/1` will fetch the last replay captured on camera 1.  If you define a *media source* in OBS to open that URL, you can include a replay in any of your scenes.
 
 ### 1. Defining the Replay Scene
