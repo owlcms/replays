@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -141,7 +142,7 @@ func validatePlatform(cfg *config.Config, platforms []string) bool {
 // GetValidatedPlatforms returns the validated list of platforms and whether the current platform is valid
 func GetValidatedPlatforms(cfg *config.Config) ([]string, bool) {
 	if mqttClient == nil || !mqttClient.IsConnected() {
-		logging.ErrorLogger.Printf("MQTT client not initialized or not connected")
+		logging.ErrorLogger.Printf("MQTT client not initialized or not connected - cannot retrieve platform list")
 		return nil, false
 	}
 
@@ -175,6 +176,10 @@ func GetValidatedPlatforms(cfg *config.Config) ([]string, bool) {
 
 // PublishConfig simplified as it's now only used with the existing connection
 func PublishConfig(platform string) {
+	if mqttClient == nil || !mqttClient.IsConnected() {
+		logging.ErrorLogger.Printf("Cannot publish config request: MQTT client not connected")
+		return
+	}
 	topic := "owlcms/config"
 	token := mqttClient.Publish(topic, 0, false, "requesting configuration")
 	if token.Wait() && token.Error() != nil {
@@ -376,4 +381,30 @@ func getLocalIP() (string, error) {
 // Add a getter function for ValidatedPlatforms
 func GetStoredPlatforms() []string {
 	return ValidatedPlatforms
+}
+
+// DisconnectMQTT cleanly disconnects the MQTT client
+func DisconnectMQTT() {
+	if mqttClient != nil && mqttClient.IsConnected() {
+		logging.InfoLogger.Println("Disconnecting from MQTT broker")
+		mqttClient.Disconnect(250)
+	}
+}
+
+// GetPlatformsForSelection returns platforms for user selection, with appropriate error handling
+func GetPlatformsForSelection() ([]string, error) {
+	if mqttClient == nil || !mqttClient.IsConnected() {
+		return nil, errors.New("No connection to owlcms server. Please check that owlcms is running and the server address is correct.")
+	}
+
+	if len(ValidatedPlatforms) == 0 {
+		return nil, errors.New("No platforms available. Please ensure owlcms is properly configured with competition platforms.")
+	}
+
+	return ValidatedPlatforms, nil
+}
+
+// IsConnected returns whether the MQTT client is connected
+func IsConnected() bool {
+	return mqttClient != nil && mqttClient.IsConnected()
 }

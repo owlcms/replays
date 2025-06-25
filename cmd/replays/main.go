@@ -25,8 +25,36 @@ import (
 	"github.com/owlcms/replays/internal/recording"
 )
 
-var sigChan = make(chan os.Signal, 1)
 var titleLabel *widget.Label
+
+// shutdown gracefully shuts down all services
+func shutdown() {
+	logging.InfoLogger.Println("Shutting down application...")
+
+	// Stop any ongoing recordings
+	recording.TerminateRecordings()
+
+	// Stop HTTP server
+	httpServer.StopServer()
+
+	// Disconnect MQTT
+	monitor.DisconnectMQTT()
+
+	logging.InfoLogger.Println("Application shutdown complete")
+}
+
+// setupShutdownHook sets up signal handling for graceful shutdown
+func setupShutdownHook() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		logging.InfoLogger.Println("Interrupt signal received. Shutting down...")
+		shutdown()
+		os.Exit(0)
+	}()
+}
 
 // openApplicationDirectory opens the application directory in the file explorer
 func openApplicationDirectory() {
@@ -103,9 +131,15 @@ func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
 func showPlatformSelection(cfg *config.Config, window fyne.Window) {
 	// Use the stored validated platforms if available
 	platforms := monitor.GetStoredPlatforms()
-	
-	// If no platforms are stored, request them
+
+	// If no platforms are stored, try to request them
 	if len(platforms) == 0 {
+		// Check if we have a server connection before trying to request platforms
+		if cfg.OwlCMS == "" {
+			dialog.ShowInformation("No Server Connection", "Please configure the owlcms server address first.", window)
+			return
+		}
+
 		// Request fresh platform list
 		monitor.PublishConfig(cfg.Platform)
 
@@ -114,7 +148,7 @@ func showPlatformSelection(cfg *config.Config, window fyne.Window) {
 		case platforms = <-monitor.PlatformListChan:
 			// got platforms
 		case <-time.After(2 * time.Second):
-			dialog.ShowInformation("Not Available", "No response from owlcms server", window)
+			dialog.ShowInformation("Not Available", "No response from owlcms server. Please check server connection.", window)
 			return
 		}
 	}
@@ -161,19 +195,21 @@ func showPlatformSelection(cfg *config.Config, window fyne.Window) {
 
 // confirmAndQuit shows a confirmation dialog and quits if confirmed
 func confirmAndQuit(window fyne.Window) {
+	// Check if MQTT is connected - if not, shutdown immediately
+	if !monitor.IsConnected() {
+		logging.InfoLogger.Println("No MQTT connection - shutting down immediately")
+		shutdown()
+		window.Close()
+		return
+	}
+
 	confirmDialog := dialog.NewConfirm(
 		"Confirm Exit",
 		"Are you sure you want to exit? This will stop jury replays. Any ongoing recordings will be stopped.",
 		func(confirm bool) {
 			if confirm {
-				logging.InfoLogger.Println("Forced closing of replays recorder")
-
-				// Stop any ongoing recordings
-				recording.TerminateRecordings()
-
-				httpServer.StopServer()
-
-				// Close the window
+				logging.InfoLogger.Println("User requested application shutdown")
+				shutdown()
 				window.Close()
 			}
 		},
@@ -391,17 +427,13 @@ func main() {
 		}
 	}()
 
-	// Initialize signal handling
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	// Set up shutdown hook early in main
+	setupShutdownHook()
 
-	// Goroutine to handle interrupt signals
-	go func() {
-		<-sigChan
-		logging.InfoLogger.Println("Interrupt signal received. Shutting down...")
-		recording.TerminateRecordings()
-		httpServer.StopServer()
-		myApp.Quit()
-	}()
+	// Remove the duplicate signal handling code and replace with window close handler
+	window.SetCloseIntercept(func() {
+		confirmAndQuit(window)
+	})
 
 	window.ShowAndRun()
 }

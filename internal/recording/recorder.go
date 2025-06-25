@@ -344,12 +344,13 @@ func GetStartTimeMillis() string {
 // ListCameras lists available cameras using ffmpeg on Windows or v4l2-ctl on Linux and displays them in a Fyne text area
 func ListCameras(window fyne.Window) {
 	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		args := []string{"-list_devices", "true", "-f", "dshow", "-i", "dummy", "-hide_banner"}
 		cmd = CreateFfmpegCmd(args)
-	} else if runtime.GOOS == "linux" {
+	case "linux":
 		cmd = exec.Command("v4l2-ctl", "--list-devices")
-	} else {
+	default:
 		dialog.ShowInformation("Unsupported Platform", "Camera listing is not supported on this platform.", window)
 		return
 	}
@@ -366,7 +367,8 @@ func ListCameras(window fyne.Window) {
 
 	var cameraNames []string
 	scanner := bufio.NewScanner(&out)
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.Contains(line, "(video)") {
@@ -377,7 +379,7 @@ func ListCameras(window fyne.Window) {
 				}
 			}
 		}
-	} else if runtime.GOOS == "linux" {
+	case "linux":
 		var currentCamera string
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())

@@ -1,5 +1,8 @@
 **Change log**
 
+- 1.7.0 Fixed the processing when there is a space in the user name on Windows
+- 1.7.0 Fixed the camera lookup code to correctly use the locally copied ffmpeg on Windows
+- 1.7.0 Added code to correctly close ports on shutdown
 - 1.6.0 Additional endpoint for replays:
     - The URL .../replay/1.mp4 will give back the latest replay from camera1 (and so on for other cameras). Recording stops 2 seconds after decision is visible, allow 1 second more for trimming.
     - Use HDMI splitter(s) to feed OBS and the replay system. For webcams, OBS and replays each need their own.

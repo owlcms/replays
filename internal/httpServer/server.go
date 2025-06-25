@@ -333,13 +333,17 @@ func handleMessages() {
 
 // StopServer gracefully shuts down the HTTP server
 func StopServer() {
-	if Server != nil { // Use Server instead of server
+	if Server != nil {
+		logging.InfoLogger.Println("Shutting down HTTP server...")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
 		if err := Server.Shutdown(ctx); err != nil {
-			logging.ErrorLogger.Printf("Server forced to shutdown: %v", err)
+			logging.ErrorLogger.Printf("HTTP server forced shutdown: %v", err)
+		} else {
+			logging.InfoLogger.Println("HTTP server stopped gracefully")
 		}
-		logging.InfoLogger.Println("Server stopped")
+		Server = nil
 	}
 }
 
