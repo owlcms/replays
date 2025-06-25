@@ -13,6 +13,9 @@ videoDir = 'videos'
 # Video processing options
 recode = true # true = recode using libx264, false = copy streams without recompression
 
+# FFmpeg logging - set to true to create timestamped log files for ffmpeg output
+logFfmpeg = false
+
 # Platform-specific FFmpeg configurations
 # [linux...] is ignored on Windows, [windows...] is ignored on Linux
 

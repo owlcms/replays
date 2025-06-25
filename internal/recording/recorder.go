@@ -50,16 +50,18 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 	args := []string{
 		"-y",                // Overwrite output files
 		"-f", camera.Format, // Format
-		"-i", camera.FfmpegCamera,
 	}
 
-	// Add camera-specific resolution and FPS parameters
+	// Add camera-specific resolution and FPS parameters before input
 	if camera.Size != "" {
 		args = append(args, "-s", camera.Size) // Use -s for resolution
 	}
 	if camera.Fps > 0 {
 		args = append(args, "-r", fmt.Sprintf("%d", camera.Fps)) // Use -r for framerate
 	}
+
+	// Add input source
+	args = append(args, "-i", camera.FfmpegCamera)
 
 	// Add extra parameters if specified
 	if camera.Params != "" {
@@ -124,7 +126,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		args := buildRecordingArgs(fileName, camera)
 
 		if config.NoVideo {
-			cmd := CreateFfmpegCmd(args)
+			cmd := CreateFfmpegCmd(args, "recording")
 			logging.InfoLogger.Printf("Simulating start recording video for Camera %d: %s", i+1, cmd.String())
 			logging.InfoLogger.Printf("ffmpeg command for Camera %d: %s", i+1, cmd.String())
 			fileNames = append(fileNames, fileName)
@@ -132,7 +134,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 			continue
 		}
 
-		cmd := CreateFfmpegCmd(args)
+		cmd := CreateFfmpegCmd(args, "recording")
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return fmt.Errorf("failed to create stdin pipe for Camera %d: %w", i+1, err)
@@ -191,7 +193,7 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, trimDuration i
 	} else {
 		for j := 0; j < 5; j++ {
 			args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName, config.GetCameraConfigs()[i])
-			cmd := CreateFfmpegCmd(args)
+			cmd := CreateFfmpegCmd(args, "trimming")
 
 			if j == 0 {
 				logging.InfoLogger.Printf("Executing trim command for Camera %d: %s", i+1, cmd.String())
@@ -205,6 +207,7 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, trimDuration i
 			}
 			if j == 4 {
 				logging.ErrorLogger.Printf("Failed to open input video for Camera %d after 5 attempts: %v", i+1, err)
+				httpServer.SendStatus(httpServer.Ready, fmt.Sprintf("Error: Failed to trim video for Camera %d after 5 attempts", i+1))
 				return
 			}
 		}
@@ -347,7 +350,7 @@ func ListCameras(window fyne.Window) {
 	switch runtime.GOOS {
 	case "windows":
 		args := []string{"-list_devices", "true", "-f", "dshow", "-i", "dummy", "-hide_banner"}
-		cmd = CreateFfmpegCmd(args)
+		cmd = CreateFfmpegCmd(args, "listcameras")
 	case "linux":
 		cmd = exec.Command("v4l2-ctl", "--list-devices")
 	default:

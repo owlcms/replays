@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
@@ -63,17 +64,62 @@ func findFFmpeg() string {
 }
 
 // CreateFfmpegCmd creates an exec.Cmd for ffmpeg with Windows-specific process attributes
-func CreateFfmpegCmd(args []string) *exec.Cmd {
+func CreateFfmpegCmd(args []string, operation string) *exec.Cmd {
 	// Use the stored ffmpeg path from config
 	path := config.GetFFmpegPath()
 
+	// Handle loglevel based on logging preference
+	logFfmpeg := config.GetLogFfmpeg()
+	targetLoglevel := "quiet"
+	if logFfmpeg {
+		targetLoglevel = "info"
+	}
+
+	// Check if -loglevel already exists in args and update it, or add it
+	foundLoglevel := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-loglevel" {
+			args[i+1] = targetLoglevel
+			foundLoglevel = true
+			break
+		}
+	}
+
+	// If no loglevel found, add it at the beginning
+	if !foundLoglevel {
+		args = append([]string{"-loglevel", targetLoglevel}, args...)
+	}
+
 	// Log the command being executed for debugging
 	logging.InfoLogger.Printf("Creating ffmpeg command with path: %s", path)
-	logging.InfoLogger.Printf("FFmpeg args: %v", args)
+	logging.InfoLogger.Printf("FFmpeg args (%d total):", len(args))
+	for i, arg := range args {
+		logging.InfoLogger.Printf("  [%d]: %s", i, arg)
+	}
 
 	cmd := exec.Command(path, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
+
+	// Create logs directory and redirect ffmpeg output to timestamped files only if logFfmpeg is enabled
+	if logFfmpeg {
+		installDir := config.GetInstallDir()
+		logsDir := filepath.Join(installDir, "logs")
+		if err := os.MkdirAll(logsDir, 0755); err != nil {
+			logging.ErrorLogger.Printf("Failed to create logs directory: %v", err)
+		} else {
+			timestamp := time.Now().Format("20060102_150405")
+			logFile := filepath.Join(logsDir, fmt.Sprintf("ffmpeg_%s_%s.log", timestamp, operation))
+
+			if file, err := os.Create(logFile); err != nil {
+				logging.ErrorLogger.Printf("Failed to create ffmpeg log file %s: %v", logFile, err)
+			} else {
+				logging.InfoLogger.Printf("FFmpeg output will be logged to: %s", logFile)
+				cmd.Stdout = file
+				cmd.Stderr = file
+			}
+		}
 	}
 
 	return cmd

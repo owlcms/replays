@@ -26,14 +26,15 @@ type CameraConfiguration struct {
 
 // Config represents the configuration file structure
 type Config struct {
-	Port     int                   `toml:"port"`
-	VideoDir string                `toml:"videoDir"`
-	Width    int                   `toml:"width"`
-	Height   int                   `toml:"height"`
-	Fps      int                   `toml:"fps"`
-	OwlCMS   string                `toml:"owlcms"`
-	Platform string                `toml:"platform"`
-	Cameras  []CameraConfiguration `toml:"-"`
+	Port      int                   `toml:"port"`
+	VideoDir  string                `toml:"videoDir"`
+	Width     int                   `toml:"width"`
+	Height    int                   `toml:"height"`
+	Fps       int                   `toml:"fps"`
+	OwlCMS    string                `toml:"owlcms"`
+	Platform  string                `toml:"platform"`
+	LogFfmpeg bool                  `toml:"logFfmpeg"`
+	Cameras   []CameraConfiguration `toml:"-"`
 }
 
 var (
@@ -45,6 +46,7 @@ var (
 	Height        int
 	Fps           int
 	Recode        bool
+	LogFfmpeg     bool
 	CameraConfigs []CameraConfiguration
 	currentConfig *Config
 	ffmpegPath    string // Store the located ffmpeg path
@@ -205,6 +207,9 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	// Store the current config for later use
 	currentConfig = &config
+
+	// Set the global LogFfmpeg flag
+	LogFfmpeg = config.LogFfmpeg
 
 	return &config, nil
 }
@@ -432,4 +437,9 @@ func SetFFmpegPath(path string) {
 // GetFFmpegPath returns the ffmpeg executable path
 func GetFFmpegPath() string {
 	return ffmpegPath
+}
+
+// GetLogFfmpeg returns the logFfmpeg setting
+func GetLogFfmpeg() bool {
+	return LogFfmpeg
 }
