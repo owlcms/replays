@@ -1,5 +1,6 @@
 **Change log**
 
+- 1.7.2 Configuration file errors are now shown on startup
 - 1.7.1 Added logging option `logFfmpeg = true` to enable detailed logging of ffmpeg output for each invocation
 - 1.7.1 Fixed the ordering of the arguments to ffmpeg to ensure that the size parameter applied to the recording as opposed to resizing.
 - 1.7.0 Fixed the processing when there is a space in the user name on Windows
