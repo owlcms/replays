@@ -5,6 +5,7 @@ package config
 
 import (
 	_ "embed"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -21,12 +22,12 @@ func ExtractDefaultConfig(configPath string) error {
 
 		// Ensure directory exists
 		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-			return err
+			return fmt.Errorf("failed to create config directory '%s': %w", filepath.Dir(configPath), err)
 		}
 
 		// Write default config
 		if err := os.WriteFile(configPath, defaultConfig, 0644); err != nil {
-			return err
+			return fmt.Errorf("failed to write default config file '%s': %w", configPath, err)
 		}
 
 		logging.InfoLogger.Printf("Created default config file at %s", configPath)

@@ -98,7 +98,7 @@ func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
 				dialog.ShowError(err, window)
 				return
 			}
-			successDialog := dialog.NewInformation("Success", "OwlCMS server address updated. Restart the application.", window)
+			successDialog := dialog.NewInformation("Success", "OwlCMS server address updated. The application will now exit. Please restart it.", window)
 			successDialog.SetOnClosed(func() {
 				window.Close()
 				os.Exit(0)
@@ -181,7 +181,7 @@ func showPlatformSelection(cfg *config.Config, window fyne.Window) {
 					dialog.ShowError(err, window)
 					return
 				}
-				successDialog := dialog.NewInformation("Success", "Platform updated. Restart the application.", window)
+				successDialog := dialog.NewInformation("Success", "Platform updated. The application will now exit. Please restart it.", window)
 				successDialog.SetOnClosed(func() {
 					window.Close()
 					os.Exit(0)
@@ -229,18 +229,118 @@ func updateTitle() {
 	titleLabel.SetText(fmt.Sprintf("OWLCMS Jury Replays - Platform %s", platform))
 }
 
+// showConfigError displays configuration errors in a dialog and allows user to fix them
+func showConfigError(err error, window fyne.Window) {
+	errorMsg := fmt.Sprintf("Configuration Error:\n\n%v\n\nPlease check your config.toml file and fix the error, then click 'Retry' to reload the configuration.", err)
+
+	// Use a scrollable text widget instead of a label
+	content := widget.NewEntry()
+	content.SetText(errorMsg)
+	content.MultiLine = true
+	content.Wrapping = fyne.TextWrapWord
+	scrollableContent := container.NewScroll(content)
+	scrollableContent.SetMinSize(fyne.NewSize(640, 200))
+
+	var configDialog dialog.Dialog
+	retryBtn := widget.NewButton("Retry", func() {
+		// Attempt to reload configuration
+		configFile := filepath.Join(config.GetInstallDir(), "config.toml")
+		_, reloadErr := config.LoadConfig(configFile)
+		if reloadErr != nil {
+			// Still has errors, show again
+			configDialog.Hide()
+			showConfigError(reloadErr, window)
+			return
+		}
+
+		// Configuration loaded successfully, restart the application
+		dialog.ShowInformation("Success", "Configuration loaded successfully. The application will now exit. Please restart it.", window)
+		time.AfterFunc(2*time.Second, func() {
+			window.Close()
+			os.Exit(0)
+		})
+	})
+
+	openConfigBtn := widget.NewButton("Open Config File", func() {
+		openConfigFile()
+	})
+
+	exitBtn := widget.NewButton("Exit", func() {
+		configDialog.Hide()
+	})
+
+	buttonContainer := container.NewHBox(retryBtn, openConfigBtn, exitBtn)
+
+	dialogContent := container.NewVBox(
+		scrollableContent,
+		widget.NewSeparator(),
+		buttonContainer,
+	)
+
+	configDialog = dialog.NewCustom("Configuration Error", "", dialogContent, window)
+	configDialog.SetOnClosed(func() {
+		// User chose to exit instead of fixing
+		os.Exit(1)
+	})
+	configDialog.Resize(fyne.NewSize(690, 340))
+	configDialog.Show()
+}
+
+// openConfigFile opens the config.toml file in the default editor
+func openConfigFile() {
+	configPath := filepath.Join(config.GetInstallDir(), "config.toml")
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("notepad", configPath)
+	case "darwin":
+		cmd = exec.Command("open", "-t", configPath)
+	case "linux":
+		// Try common editors
+		editors := []string{"xdg-open", "gedit", "kate", "nano", "vim"}
+		for _, editor := range editors {
+			if _, err := exec.LookPath(editor); err == nil {
+				cmd = exec.Command(editor, configPath)
+				break
+			}
+		}
+	}
+
+	if cmd != nil {
+		if err := cmd.Start(); err != nil {
+			logging.ErrorLogger.Printf("Failed to open config file: %v", err)
+		}
+	}
+}
+
 func main() {
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
 
+	// Create the Fyne app and window first
+	myApp := app.New()
+	window := myApp.NewWindow("OWLCMS Jury Replays")
+
 	// Process command-line flags and load configuration
 	cfg, err := config.InitConfig()
 	if err != nil {
-		logging.ErrorLogger.Fatalf("Error processing flags: %v", err)
-	}
+		logging.ErrorLogger.Printf("Error processing flags or loading config: %v", err)
 
-	myApp := app.New()
-	window := myApp.NewWindow("OWLCMS Jury Replays")
+		// Show error dialog instead of fatal exit
+		showConfigError(err, window)
+
+		// Show a minimal window while error dialog is displayed
+		content := container.NewPadded(
+			widget.NewLabel("Loading configuration..."),
+		)
+		window.SetContent(content)
+		window.Resize(fyne.NewSize(900, 400))
+		window.CenterOnScreen()
+		window.Show()
+		window.ShowAndRun()
+		return
+	}
 
 	titleLabel = widget.NewLabel("")
 	titleLabel.TextStyle = fyne.TextStyle{Bold: true}

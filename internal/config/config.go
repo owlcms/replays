@@ -67,7 +67,7 @@ func LoadConfig(configFile string) (*Config, error) {
 	var config Config
 
 	if _, err := toml.DecodeFile(configFile, &config); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse config file '%s': %w\n\nPlease check the file syntax and ensure all values are properly formatted", configFile, err)
 	}
 
 	// Ensure VideoDir is absolute and default to "videos" if not specified
@@ -80,7 +80,7 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	// Create VideoDir if it doesn't exist
 	if err := os.MkdirAll(config.VideoDir, os.ModePerm); err != nil {
-		return nil, fmt.Errorf("failed to create video directory: %w", err)
+		return nil, fmt.Errorf("failed to create video directory '%s': %w", config.VideoDir, err)
 	}
 
 	// Log the video directory
@@ -89,7 +89,7 @@ func LoadConfig(configFile string) (*Config, error) {
 	// Load all raw config data for camera configs
 	var raw map[string]interface{}
 	if _, err := toml.DecodeFile(configFile, &raw); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse config file for camera configurations: %w", err)
 	}
 
 	platformKey := getPlatformName()
