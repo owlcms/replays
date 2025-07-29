@@ -1,4 +1,4 @@
-//go:build windows && !darwin && !linux
+//go:build windows
 
 package recording
 
@@ -64,15 +64,20 @@ func findFFmpeg() string {
 }
 
 // CreateFfmpegCmd creates an exec.Cmd for ffmpeg with Windows-specific process attributes
-func CreateFfmpegCmd(args []string, operation string) *exec.Cmd {
+func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) *exec.Cmd {
 	// Use the stored ffmpeg path from config
 	path := config.GetFFmpegPath()
 
-	// Handle loglevel based on logging preference
-	logFfmpeg := config.GetLogFfmpeg()
-	targetLoglevel := "quiet"
-	if logFfmpeg {
-		targetLoglevel = "info"
+	// Handle loglevel based on logging preference or forced level
+	var targetLoglevel string
+	if len(forcedLogLevel) > 0 && forcedLogLevel[0] != "" {
+		targetLoglevel = forcedLogLevel[0]
+	} else {
+		logFfmpeg := config.GetLogFfmpeg()
+		targetLoglevel = "quiet"
+		if logFfmpeg {
+			targetLoglevel = "info"
+		}
 	}
 
 	// Check if -loglevel already exists in args and update it, or add it
@@ -103,7 +108,7 @@ func CreateFfmpegCmd(args []string, operation string) *exec.Cmd {
 	}
 
 	// Create logs directory and redirect ffmpeg output to timestamped files only if logFfmpeg is enabled
-	if logFfmpeg {
+	if config.GetLogFfmpeg() {
 		installDir := config.GetInstallDir()
 		logsDir := filepath.Join(installDir, "logs")
 		if err := os.MkdirAll(logsDir, 0755); err != nil {

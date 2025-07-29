@@ -288,6 +288,8 @@ func GetInstallDir() string {
 	switch runtime.GOOS {
 	case "windows":
 		baseDir = filepath.Join(os.Getenv("APPDATA"), appName)
+		// TEMPORARY: Replace 'lamyj' with 'le test' in the path for testing
+		//baseDir = strings.ReplaceAll(baseDir, "lamyj", "le test")
 	case "darwin":
 		baseDir = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", appName)
 	case "linux":

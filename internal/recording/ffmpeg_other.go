@@ -1,4 +1,4 @@
-//go:build linux
+//go:build !windows && !linux
 
 package recording
 
@@ -7,21 +7,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
 )
 
-// InitializeFFmpeg finds and stores the ffmpeg path in config for Linux
+// InitializeFFmpeg finds and stores the ffmpeg path in config for other platforms
 func InitializeFFmpeg() error {
 	path := findFFmpeg()
 
 	// Verify the ffmpeg executable exists at the expected location
 	if _, err := os.Stat(path); err != nil {
 		logging.ErrorLogger.Printf("FFmpeg not found at %s: %v", path, err)
-		logging.ErrorLogger.Printf("Please install FFmpeg using your package manager")
+		logging.ErrorLogger.Printf("Please install FFmpeg using your package manager or from https://ffmpeg.org/")
 		// Still set the path - the application will handle the error when trying to use it
 		config.SetFFmpegPath(path)
 		return fmt.Errorf("ffmpeg not found at expected location: %s", path)
@@ -32,34 +31,20 @@ func InitializeFFmpeg() error {
 	return nil
 }
 
-// on Linux, we use the system-installed ffmpeg
+// on other platforms, we try to use the system-installed ffmpeg
 func findFFmpeg() string {
-	// Try common locations for ffmpeg
-	commonPaths := []string{
-		"/usr/bin/ffmpeg",
-		"/usr/local/bin/ffmpeg",
-		"/bin/ffmpeg",
-	}
-
-	for _, path := range commonPaths {
-		if _, err := os.Stat(path); err == nil {
-			logging.InfoLogger.Printf("Found ffmpeg at: %s", path)
-			return path
-		}
-	}
-
-	// If not found in common locations, try PATH
+	// Try to find ffmpeg in PATH
 	if path, err := exec.LookPath("ffmpeg"); err == nil {
 		logging.InfoLogger.Printf("Found ffmpeg in PATH at: %s", path)
 		return path
 	}
 
 	// Return default path if not found
-	logging.ErrorLogger.Printf("Could not find ffmpeg in common locations or PATH")
-	return "/usr/bin/ffmpeg"
+	logging.ErrorLogger.Printf("Could not find ffmpeg in PATH")
+	return "ffmpeg"
 }
 
-// CreateFfmpegCmd creates an exec.Cmd for ffmpeg on Linux
+// CreateFfmpegCmd creates an exec.Cmd for ffmpeg on other platforms
 func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) *exec.Cmd {
 	// Use the stored ffmpeg path from config
 	path := config.GetFFmpegPath()
@@ -99,10 +84,6 @@ func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) 
 	}
 
 	cmd := exec.Command(path, args...)
-	// Set up process group for proper cleanup on Linux
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
 
 	// Create logs directory and redirect ffmpeg output to timestamped files only if logFfmpeg is enabled
 	if config.GetLogFfmpeg() {
@@ -132,14 +113,5 @@ func forceKillCmd(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
-
-	// Kill the entire process group on Linux (equivalent to Windows /T flag)
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err == nil {
-		// Kill the process group
-		syscall.Kill(-pgid, syscall.SIGKILL)
-	}
-
-	// Also kill the main process as fallback
 	return cmd.Process.Kill()
 }
