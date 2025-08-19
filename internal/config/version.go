@@ -1,6 +1,6 @@
 package config
 
-var programVersion = "1.7.2"
+var programVersion = "1.8.0"
 
 // GetProgramVersion returns the current version of the program
 func GetProgramVersion() string {

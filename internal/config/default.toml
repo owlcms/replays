@@ -67,7 +67,7 @@ logFfmpeg = false
     outputParameters = '-c:v h264_amf -quality speed -b:v 5M -an'
 
     # Recode = true to re-encode using the specified hardware encoder.
-    recode = true
+    recode = false
 
 
 # =======================================================
