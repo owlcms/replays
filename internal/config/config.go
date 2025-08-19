@@ -15,13 +15,15 @@ import (
 
 // CameraConfiguration represents platform-specific configurations
 type CameraConfiguration struct {
-	FfmpegPath   string `toml:"ffmpegPath"`
-	FfmpegCamera string `toml:"ffmpegCamera"`
-	Format       string `toml:"format"`
-	Params       string `toml:"params"`
-	Size         string `toml:"size"`
-	Fps          int    `toml:"fps"`
-	Recode       bool   `toml:"recode"` // Add recode field
+	FfmpegPath       string `toml:"ffmpegPath"`
+	FfmpegCamera     string `toml:"ffmpegCamera"`
+	Format           string `toml:"format"`
+	Params           string `toml:"params"`
+	InputParameters  string `toml:"inputParameters"`
+	OutputParameters string `toml:"outputParameters"`
+	Size             string `toml:"size"`
+	Fps              int    `toml:"fps"`
+	Recode           bool   `toml:"recode"` // Add recode field
 }
 
 // Config represents the configuration file structure
@@ -120,6 +122,12 @@ func LoadConfig(configFile string) (*Config, error) {
 		}
 		if val, ok := m["params"].(string); ok {
 			pc.Params = val
+		}
+		if val, ok := m["inputParameters"].(string); ok {
+			pc.InputParameters = val
+		}
+		if val, ok := m["outputParameters"].(string); ok {
+			pc.OutputParameters = val
 		}
 		if val, ok := m["size"].(string); ok {
 			pc.Size = val

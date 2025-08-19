@@ -47,26 +47,29 @@ func cleanParams(params string) []string {
 
 // buildRecordingArgs builds the ffmpeg arguments for recording
 func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []string {
-	args := []string{
-		"-y",                // Overwrite output files
-		"-f", camera.Format, // Format
-	}
+	args := []string{"-y", "-f", camera.Format}
 
-	// Add camera-specific resolution and FPS parameters before input
+	// Input parameters (before -i)
+	if camera.InputParameters != "" {
+		args = append(args, cleanParams(camera.InputParameters)...)
+	}
 	if camera.Size != "" {
-		args = append(args, "-s", camera.Size) // Use -s for resolution
+		args = append(args, "-s", camera.Size)
 	}
 	if camera.Fps > 0 {
-		args = append(args, "-r", fmt.Sprintf("%d", camera.Fps)) // Use -r for framerate
+		args = append(args, "-r", fmt.Sprintf("%d", camera.Fps))
 	}
 
-	// Add input source
+	// Input source
 	args = append(args, "-i", camera.FfmpegCamera)
 
-	// Add extra parameters if specified
+	// Output parameters (after -i)
+	if camera.OutputParameters != "" {
+		args = append(args, cleanParams(camera.OutputParameters)...)
+	}
+	// Treat legacy params as additional output parameters
 	if camera.Params != "" {
-		params := cleanParams(camera.Params)
-		args = append(args, params...)
+		args = append(args, cleanParams(camera.Params)...)
 	}
 
 	args = append(args, fileName)
@@ -76,13 +79,28 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 // buildTrimmingArgs builds the ffmpeg arguments for trimming
 func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
 	args := []string{"-y"}
+	// Input parameters (before -i)
+	if camera.InputParameters != "" {
+		args = append(args, cleanParams(camera.InputParameters)...)
+	}
+	if trimDuration > 0 {
+		args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
+	}
+	// Input file
+	args = append(args, "-i", currentFileName)
+
+	// Output parameters (after -i)
+	if camera.OutputParameters != "" {
+		args = append(args, cleanParams(camera.OutputParameters)...)
+	}
+	// Treat legacy params as additional output parameters
+	if camera.Params != "" {
+		args = append(args, cleanParams(camera.Params)...)
+	}
+
 	if camera.Recode {
 		logging.InfoLogger.Printf("Recode is enabled for camera: %s", camera.FfmpegCamera)
-		if trimDuration > 0 {
-			args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
-		}
 		args = append(args,
-			"-i", currentFileName,
 			"-c:v", "libx264",
 			"-crf", "18",
 			"-preset", "medium",
@@ -90,13 +108,7 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 			"-pix_fmt", "yuv420p",
 		)
 	} else {
-		if trimDuration > 0 {
-			args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
-		}
-		args = append(args,
-			"-i", currentFileName,
-			"-c", "copy",
-		)
+		args = append(args, "-c", "copy", "-movflags", "faststart")
 	}
 
 	args = append(args, finalFileName)
