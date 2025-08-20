@@ -10,13 +10,8 @@ platform = "A"
 # Directory to store video files (can be an absolute path to store on a different drive)
 videoDir = 'videos'
 
-# Video processing options
-# recode = true to re-encode the stream, false to simply copy
-recode = false 
-
 # FFmpeg logging - set to true to create timestamped log files for ffmpeg output
 logFfmpeg = false
-
 
 # Use the `input_params` and `output_params` to manage your FFmpeg flags.
 #
@@ -30,6 +25,7 @@ logFfmpeg = false
 # Windows Camera Configurations
 # =======================================================
 
+# Webcam with software encoder
 [windows1]
     enabled = true
     camera = 'Logitech Webcam C930e'
@@ -37,36 +33,73 @@ logFfmpeg = false
     size = "1280x720"
     fps = 30
     
-    # Input parameters for this camera.
+    # Input parameters for the recording
     # Put flags that must come before `-i <camera name>` here.
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
-    
-    # Output parameters software encoder
+
+    # Output parameters: produce H.264 output using software encoder
     # Put flags that must come after `-i <camera name>` here.
     outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium'
     
-    # Recode = false to simply copy the streams from the camera's native format.
+    # When trimming the video and packaging in mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
     recode = false
 
 
-# The fixed configuration for the Hagibis camera.
-# This fixes the "real-time buffer" problem.
+# HDMI Camera with AMD GPU
 [windows2]
-    enabled = true
-    camera = 'Hagibis'
+    enabled = false
+    camera = 'HDMI_AMD_GPU'
     format = 'dshow'
     size = "1920x1080"
     fps = 60
     
-    # These input parameters solve the real-time buffer too full error.
+    # These input parameters prevent the real-time buffer too full error.
     # They must be on the input side (before -i).
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
     
-    # These are output parameters for the AMD hardware encoder.
-    # Note: `-quality speed` is the equivalent of `-preset ultrafast` for hardware encoders.
-    outputParameters = '-c:v h264_amf -quality speed -b:v 5M -an'
+    # Output parameters: produce H.264 output using AMD hardware encoder
+    outputParameters = '-c:v h264_amf -quality quality -rc qvbr -qvbr_quality_level 24 -b:v 0 -an'
 
-    # Recode = true to re-encode using the specified hardware encoder.
+    # When trimming the video and converting to mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
+    recode = false
+
+# HDMI Camera with NVIDIA GPU
+[windows3]
+    enabled = false
+    camera = 'HDMI_NVIDIA_GPU'
+    format = 'dshow'
+    size = "1920x1080"
+    fps = 60
+    
+    # These input parameters prevent the real-time buffer too full error.
+    # They must be on the input side (before -i).
+    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
+    
+    # Output parameters: produce H.264 output using NVIDIA hardware encoder
+    outputParameters = '-c:v h264_nvenc -preset p5 -rc vbr_hq -cq 23 -bf 3 -an'
+
+    # When trimming the video and converting to mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
+    recode = false
+
+# HDMI Camera with Intel GPU
+[windows4]
+    enabled = false
+    camera = 'HDMI_INTEL_GPU'
+    format = 'dshow'
+    size = "1920x1080"
+    fps = 60
+    
+    # QSV init must come first, followed by input parameters
+    inputParameters = '-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096'
+
+    # Output parameters: produce H.264 output using Intel QSV hardware encoder
+    outputParameters = '-c:v h264_qsv -preset slower -global_quality 23 -an'
+
+    # When trimming the video and converting to mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
     recode = false
 
 
@@ -74,32 +107,80 @@ logFfmpeg = false
 # Linux Camera Configurations
 # =======================================================
 
+# Webcam with software encoder
 [linux1]
     enabled = true
     camera = '/dev/video0'
     format = 'v4l2'
     size = "1280x720"
     fps = 30
-
-    # Input parameters for buffer management
+    
+    # Input parameters for the recording
+    # Put flags that must come before `-i <camera name>` here.
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
 
-    # Output parameters for a software encoder on Linux (e.g., for compatibility).
-    output_params = '-c:v libx264 -preset ultrafast -vf "format=yuv420p" -b:v 5M -an'
+    # Output parameters: produce H.264 output using software encoder (Linux)
+    # Put flags that must come after `-i <camera name>` here.
+    outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium -an'
     
-    # Recode = false when we produce x.264 or h.264
+    # When trimming the video and converting to mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
     recode = false
 
 
-# A disabled example for another Linux camera.
+# HDMI Camera with AMD GPU (Linux uses VAAPI, not AMF)
 [linux2]
     enabled = false
-    camera = '/dev/video2'
+    camera = '/dev/video2' # Video device (must be even-numbered, e.g., /dev/video2)
     format = 'v4l2'
-    size = "1280x720"
-    fps = 30
-    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
-    output_params = '-c:v libx264 -vf "format=yuv420p" -preset medium'
+    size = "1920x1080"
+    fps = 60
     
-    # Recode = false to simply copy.
+    # These input parameters initialize VAAPI and prevent the real-time buffer too full error.
+    # They must be on the input side (before -i).
+    inputParameters = '-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096'
+    
+    # Output parameters: produce H.264 output using VAAPI hardware encoder
+    outputParameters = '-c:v h264_vaapi -qp 23 -an'
+    
+    # When trimming the video and converting to mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
+    recode = false
+
+# HDMI Camera with NVIDIA GPU
+[linux3]
+    enabled = false
+    camera = '/dev/video4' # Video device (must be even-numbered, e.g., /dev/video4)
+    format = 'v4l2'
+    size = "1920x1080"
+    fps = 60
+    
+    # These input parameters prevent the real-time buffer too full error.
+    # They must be on the input side (before -i).
+    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
+    
+    # Output parameters: produce H.264 output using NVIDIA hardware encoder
+    outputParameters = '-c:v h264_nvenc -preset p5 -rc vbr_hq -cq 23 -bf 3 -an'
+    
+    # When trimming the video and converting to mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
+    recode = false
+
+# HDMI Camera with Intel GPU
+[linux4]
+    enabled = false
+    camera = '/dev/video6' # Video device (must be even-numbered, e.g., /dev/video6)
+    format = 'v4l2'
+    size = "1920x1080"
+    fps = 60
+    
+    # These input parameters initialize the Intel hardware device and prevent the real-time buffer too full error.
+    # QSV init must come first.
+    inputParameters = '-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096'
+    
+    # Output parameters: produce H.264 output using Intel QSV hardware encoder
+    outputParameters = '-c:v h264_qsv -preset slower -global_quality 23 -an'
+    
+    # When trimming the video and converting to mp4, we don't need to recode
+    # because the output parameters from the recording are already in H.264 format
     recode = false

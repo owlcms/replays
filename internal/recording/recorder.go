@@ -89,16 +89,15 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 	// Input file
 	args = append(args, "-i", currentFileName)
 
-	// Output parameters (after -i)
-	if camera.OutputParameters != "" {
-		args = append(args, cleanParams(camera.OutputParameters)...)
-	}
-	// Treat legacy params as additional output parameters
-	if camera.Params != "" {
-		args = append(args, cleanParams(camera.Params)...)
-	}
-
 	if camera.Recode {
+		// Output parameters (after -i)
+		if camera.OutputParameters != "" {
+			args = append(args, cleanParams(camera.OutputParameters)...)
+		}
+		// Treat legacy params as additional output parameters
+		if camera.Params != "" {
+			args = append(args, cleanParams(camera.Params)...)
+		}
 		logging.InfoLogger.Printf("Recode is enabled for camera: %s", camera.FfmpegCamera)
 		args = append(args,
 			"-c:v", "libx264",
