@@ -1,7 +1,7 @@
 **Change log**
 
 - 1.8.0  Changes in configuration file.  Ffmpeg requires a specific ordering of parameters, and this forces a split between inputParameters (how to read the camera) and outputParameters (how to format the output).  The previous params is treated as outputParameters.
-    - See [the new default.toml file](https://github.com/owlcms/replays/blob/5e9d8ee984f22cd88a010048cc8a6a6321ab93fc/internal/config/default.toml#L4) to adjust your configuration
+    - See [the new default.toml file](https://github.com/owlcms/replays/blob/main/internal/config/default.toml) to adjust your configuration
 
 - 1.7.2 Configuration file errors are now shown on startup
 - 1.7.1 Added logging option `logFfmpeg = true` to enable detailed logging of ffmpeg output for each invocation
