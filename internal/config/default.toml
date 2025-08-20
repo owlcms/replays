@@ -39,7 +39,7 @@ logFfmpeg = false
 
     # Output parameters: produce H.264 output using software encoder
     # Put flags that must come after `-i <camera name>` here.
-    outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium'
+    outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium -b:v 4M -g 30 -keyint_min 30 -vsync cfr -an'
     
     # When trimming the video and packaging in mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
@@ -59,7 +59,7 @@ logFfmpeg = false
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
     
     # Output parameters: produce H.264 output using AMD hardware encoder
-    outputParameters = '-c:v h264_amf -quality quality -rc qvbr -qvbr_quality_level 24 -b:v 0 -an'
+    outputParameters = '-vaapi_device /dev/dri/renderD128 -c:v h264_vaapi -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
 
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
@@ -78,7 +78,7 @@ logFfmpeg = false
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
     
     # Output parameters: produce H.264 output using NVIDIA hardware encoder
-    outputParameters = '-c:v h264_nvenc -preset p5 -rc vbr_hq -cq 23 -bf 3 -an'
+    outputParameters = '-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
 
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
@@ -96,7 +96,7 @@ logFfmpeg = false
     inputParameters = '-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096'
 
     # Output parameters: produce H.264 output using Intel QSV hardware encoder
-    outputParameters = '-c:v h264_qsv -preset slower -global_quality 23 -an'
+    outputParameters = '-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
 
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
@@ -121,7 +121,7 @@ logFfmpeg = false
 
     # Output parameters: produce H.264 output using software encoder (Linux)
     # Put flags that must come after `-i <camera name>` here.
-    outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium -an'
+    outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium -b:v 4M -g 30 -keyint_min 30 -vsync cfr -an'
     
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
@@ -160,7 +160,7 @@ logFfmpeg = false
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
     
     # Output parameters: produce H.264 output using NVIDIA hardware encoder
-    outputParameters = '-c:v h264_nvenc -preset p5 -rc vbr_hq -cq 23 -bf 3 -an'
+    outputParameters = '-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
     
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
@@ -179,7 +179,7 @@ logFfmpeg = false
     inputParameters = '-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096'
     
     # Output parameters: produce H.264 output using Intel QSV hardware encoder
-    outputParameters = '-c:v h264_qsv -preset slower -global_quality 23 -an'
+    outputParameters = '-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
     
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
