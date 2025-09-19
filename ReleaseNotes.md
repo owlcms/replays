@@ -1,5 +1,6 @@
 **Change log**
 
+- 1.8.1  Make sure the default config file is the latest one.
 - 1.8.0  Changes in configuration file.  Ffmpeg requires a specific ordering of parameters, and this forces a split between inputParameters (how to read the camera) and outputParameters (how to format the output).  The previous params is treated as outputParameters.
     - See [the new default.toml file](https://github.com/owlcms/replays/blob/main/internal/config/default.toml) to adjust your configuration
 
