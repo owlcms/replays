@@ -36,14 +36,13 @@ logFfmpeg = false
     # Input parameters for the recording
     # Put flags that must come before `-i <camera name>` here.
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
-
-    # Output parameters: produce H.264 output using software encoder
-    # Put flags that must come after `-i <camera name>` here.
-    outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium -b:v 4M -g 30 -keyint_min 30 -vsync cfr -an'
     
-    # When trimming the video and packaging in mp4, we don't need to recode
-    # because the output parameters from the recording are already in H.264 format
-    recode = false
+    # Output parameters: copy MJPEG stream directly (no re-encoding during recording)
+    # Put flags that must come after `-i <camera name>` here.
+    outputParameters = '-vcodec copy -an'
+    
+    # When trimming, re-encode to H.264 for browser playback
+    recode = true
 
 
 # HDMI Camera with AMD GPU

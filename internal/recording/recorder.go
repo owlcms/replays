@@ -102,7 +102,7 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 		args = append(args,
 			"-c:v", "libx264",
 			"-crf", "18",
-			"-preset", "medium",
+			"-preset", "ultrafast",
 			"-profile:v", "main",
 			"-pix_fmt", "yuv420p",
 		)
