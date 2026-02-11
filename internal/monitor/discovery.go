@@ -66,7 +66,7 @@ func scanNetworkForBroker(ipNet *net.IPNet) (string, error) {
 	ip := ipNet.IP.Mask(ipNet.Mask)
 	for ip := ip.Mask(ipNet.Mask); ipNet.Contains(ip); inc(ip) {
 		address := fmt.Sprintf("%s:1883", ip.String())
-		logging.InfoLogger.Printf("Trying address: %s", address)
+		logging.Trace("Trying address: %s", address)
 		if IsPortOpen(address) {
 			return ip.String(), nil
 		}
