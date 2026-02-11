@@ -63,14 +63,30 @@ jobs:
       if: ${{ env.BUILD_LINUX == 'true' }}
       run: |
         fyne-cross linux -arch amd64 -app-id app.owlcms.replays -icon Icon.png -output replays_amd64 ./cmd/replays
-        cp fyne-cross/bin/linux-amd64/replays_amd64 artifacts/replays_linux_amd64
+        echo "=== fyne-cross output structure ==="
+        find fyne-cross -type f 2>/dev/null || true
+        # Try bin/ first (older fyne-cross), fall back to extracting from dist/ tar.xz
+        if [[ -f fyne-cross/bin/linux-amd64/replays_amd64 ]]; then
+          cp fyne-cross/bin/linux-amd64/replays_amd64 artifacts/replays_linux_amd64
+        else
+          echo "Binary not in bin/, extracting from tar.xz..."
+          tar -xf fyne-cross/dist/linux-amd64/replays_amd64.tar.xz -C fyne-cross/dist/linux-amd64/
+          find fyne-cross/dist/linux-amd64/ -name "replays_amd64" -type f -exec cp {} artifacts/replays_linux_amd64 \;
+        fi
 
     # Raspberry Pi / Linux arm64 build
     - name: Build for Linux arm64
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       run: |
         fyne-cross linux -arch arm64 -app-id app.owlcms.replays -icon Icon.png -output replays_arm64 ./cmd/replays
-        cp fyne-cross/bin/linux-arm64/replays_arm64 artifacts/replays_linux_arm64
+        # Try bin/ first (older fyne-cross), fall back to extracting from dist/ tar.xz
+        if [[ -f fyne-cross/bin/linux-arm64/replays_arm64 ]]; then
+          cp fyne-cross/bin/linux-arm64/replays_arm64 artifacts/replays_linux_arm64
+        else
+          echo "Binary not in bin/, extracting from tar.xz..."
+          tar -xf fyne-cross/dist/linux-arm64/replays_arm64.tar.xz -C fyne-cross/dist/linux-arm64/
+          find fyne-cross/dist/linux-arm64/ -name "replays_arm64" -type f -exec cp {} artifacts/replays_linux_arm64 \;
+        fi
 
     # Save artifacts for release step
     - name: Upload build artifacts
