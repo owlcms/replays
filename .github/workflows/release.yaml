@@ -96,7 +96,7 @@ jobs:
     - name: Extract tag
       id: extract_tag
       run: |
-        echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        echo "TAG=${{ inputs.tag }}" >> $GITHUB_ENV
 
     - name: Create dist directory
       run: mkdir -p dist
