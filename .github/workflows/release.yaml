@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  build_crosscompile:
+  build_replays:
     runs-on: ubuntu-latest
     env:
       BUILD_WINDOWS: true
@@ -22,11 +22,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Install GitHub CLI
-      run: |
-        wget https://github.com/cli/cli/releases/download/v2.32.0/gh_2.32.0_linux_amd64.deb
-        sudo dpkg -i gh_2.32.0_linux_amd64.deb
 
     - name: Set up Go
       uses: actions/setup-go@v5
@@ -42,7 +37,6 @@ jobs:
       id: extract_tag
       run: |
         echo "TAG=${{ inputs.tag }}" >> $GITHUB_ENV
-        # Strip 'v' prefix for version string
         VERSION="${{ inputs.tag }}"
         VERSION="${VERSION#v}"
         echo "VERSION=${VERSION}" >> $GITHUB_ENV
@@ -53,46 +47,33 @@ jobs:
         sed -i "s/_TAG_/${TAG}/g" internal/config/version.go
         cat internal/config/version.go
 
-    # Linux amd64 build
-    - name: Build for Linux amd64
+    - name: Build replays for Linux amd64
       if: ${{ env.BUILD_LINUX == 'true' }}
       run: |
         mkdir -p artifacts
         fyne-cross linux -arch amd64 -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
-        # Binary is named 'replays' in bin/, copy immediately before next fyne-cross cleans it
         cp fyne-cross/bin/linux-amd64/replays artifacts/replays_linux_amd64
-        # Build cameras CLI (no GUI)
-        GOOS=linux GOARCH=amd64 go build -o artifacts/cameras_linux_amd64 ./cmd/cameras
 
-    # Raspberry Pi / Linux arm64 build
-    - name: Build for Linux arm64
+    - name: Build replays for Linux arm64
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       run: |
         fyne-cross linux -arch arm64 -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
-        # Binary is named 'replays' in bin/, copy immediately before next fyne-cross cleans it
         cp fyne-cross/bin/linux-arm64/replays artifacts/replays_linux_arm64
-        # Build cameras CLI (no GUI)
-        GOOS=linux GOARCH=arm64 go build -o artifacts/cameras_linux_arm64 ./cmd/cameras
 
-    # Windows build
-    - name: Build for Windows
+    - name: Build replays for Windows
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       run: |
         fyne-cross windows -arch amd64 -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
         cp fyne-cross/bin/windows-amd64/replays.exe artifacts/replays_windows.exe
-        # Build cameras CLI (no GUI)
-        GOOS=windows GOARCH=amd64 go build -o artifacts/cameras_windows.exe ./cmd/cameras
 
-    # Save artifacts for release step
-    - name: Upload build artifacts
+    - name: Upload replays artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build_artifacts
+        name: replays_artifacts
         path: artifacts/*
 
-  create_release:
+  build_cameras:
     runs-on: ubuntu-latest
-    needs: [build_crosscompile]
     env:
       BUILD_WINDOWS: true
       BUILD_RASPBERRY: true
@@ -101,6 +82,50 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Build cameras for Linux amd64
+      if: ${{ env.BUILD_LINUX == 'true' }}
+      run: |
+        mkdir -p artifacts
+        GOOS=linux GOARCH=amd64 go build -o artifacts/cameras_linux_amd64 ./cmd/cameras
+
+    - name: Build cameras for Linux arm64
+      if: ${{ env.BUILD_RASPBERRY == 'true' }}
+      run: |
+        GOOS=linux GOARCH=arm64 go build -o artifacts/cameras_linux_arm64 ./cmd/cameras
+
+    - name: Build cameras for Windows
+      if: ${{ env.BUILD_WINDOWS == 'true' }}
+      run: |
+        GOOS=windows GOARCH=amd64 go build -o artifacts/cameras_windows.exe ./cmd/cameras
+
+    - name: Upload cameras artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: cameras_artifacts
+        path: artifacts/*
+
+  create_release:
+    runs-on: ubuntu-latest
+    needs: [build_replays, build_cameras]
+    env:
+      BUILD_WINDOWS: true
+      BUILD_RASPBERRY: true
+      BUILD_LINUX: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install GitHub CLI
+      run: |
+        wget https://github.com/cli/cli/releases/download/v2.32.0/gh_2.32.0_linux_amd64.deb
+        sudo dpkg -i gh_2.32.0_linux_amd64.deb
 
     - name: Extract tag
       id: extract_tag
@@ -115,10 +140,16 @@ jobs:
         cp ReleaseNotes.md ./dist/ReleaseNotes.md
         sed -i "s/_TAG_/${TAG}/g" ./dist/ReleaseNotes.md
 
-    - name: Download build artifacts
+    - name: Download replays artifacts
       uses: actions/download-artifact@v4
       with:
-        name: build_artifacts
+        name: replays_artifacts
+        path: ./dist
+
+    - name: Download cameras artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: cameras_artifacts
         path: ./dist
 
     - name: List artifacts
@@ -140,27 +171,29 @@ jobs:
             --notes-file ./dist/ReleaseNotes.md
         fi
 
-    - name: Upload Windows executable
+    # Upload replays executables
+    - name: Upload Windows replays executable
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release upload ${{ env.TAG }} dist/replays_windows.exe
 
-    - name: Upload Linux amd64 executable
+    - name: Upload Linux amd64 replays executable
       if: ${{ env.BUILD_LINUX == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release upload ${{ env.TAG }} dist/replays_linux_amd64
 
-    - name: Upload Raspberry Pi arm64 executable
+    - name: Upload Raspberry Pi arm64 replays executable
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release upload ${{ env.TAG }} dist/replays_linux_arm64
 
+    # Upload cameras executables
     - name: Upload Windows cameras executable
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       env:
