@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -19,22 +18,22 @@ import (
 	"github.com/owlcms/replays/internal/logging"
 )
 
-// detectedCamera holds information about a detected camera device
-type detectedCamera struct {
-	name   string
-	device string // device path (Linux) or device name (Windows)
-	format string // v4l2 or dshow
-	pixFmt string // mjpeg, yuyv422, etc.
-	size   string // best resolution found
-	fps    int    // best fps for that resolution
+// DetectedCamera holds information about a detected camera device
+type DetectedCamera struct {
+	Name   string
+	Device string // device path (Linux) or device name (Windows)
+	Format string // v4l2 or dshow
+	PixFmt string // mjpeg, yuyv422, etc.
+	Size   string // best resolution found
+	Fps    int    // best fps for that resolution
 }
 
-// hwEncoder holds information about a detected hardware encoder
-type hwEncoder struct {
-	name             string // h264_nvenc, h264_vaapi, h264_amf, h264_qsv
-	description      string
-	inputParameters  string
-	outputParameters string
+// HwEncoder holds information about a detected hardware encoder
+type HwEncoder struct {
+	Name             string // h264_nvenc, h264_vaapi, h264_amf, h264_qsv
+	Description      string
+	InputParameters  string
+	OutputParameters string
 }
 
 // DetectAndWriteConfig probes cameras and GPU encoders, then writes auto.toml
@@ -50,12 +49,12 @@ func DetectAndWriteConfig(window fyne.Window) {
 
 		// Step 1: Detect available H.264 hardware encoders
 		progressLabel.SetText("Detecting hardware encoders...")
-		encoders := detectEncoders()
+		encoders := DetectEncoders()
 		logging.InfoLogger.Printf("Detected %d hardware encoders", len(encoders))
 
 		// Step 2: Detect cameras
 		progressLabel.SetText("Detecting cameras...")
-		cameras := detectCameras()
+		cameras := DetectCameras()
 		logging.InfoLogger.Printf("Detected %d cameras", len(cameras))
 
 		// Step 3: Write auto.toml (even with 0 cameras, to show detected encoders)
@@ -80,14 +79,14 @@ func DetectAndWriteConfig(window fyne.Window) {
 	}()
 }
 
-// detectEncoders probes ffmpeg for available H.264 hardware encoders
-func detectEncoders() []hwEncoder {
+// DetectEncoders probes ffmpeg for available H.264 hardware encoders
+func DetectEncoders() []HwEncoder {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
 	}
 
-	cmd := exec.Command(path, "-hide_banner", "-encoders")
+	cmd := CreateHiddenCmd(path, "-hide_banner", "-encoders")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -97,7 +96,7 @@ func detectEncoders() []hwEncoder {
 		return nil
 	}
 
-	var candidates []hwEncoder
+	var candidates []HwEncoder
 	scanner := bufio.NewScanner(&out)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -115,46 +114,46 @@ func detectEncoders() []hwEncoder {
 
 		switch encoderName {
 		case "h264_nvenc":
-			candidates = append(candidates, hwEncoder{
-				name:             "h264_nvenc",
-				description:      "NVIDIA GPU",
-				inputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
-				outputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
+			candidates = append(candidates, HwEncoder{
+				Name:             "h264_nvenc",
+				Description:      "NVIDIA GPU",
+				InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
+				OutputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M",
 			})
 		case "h264_amf":
-			candidates = append(candidates, hwEncoder{
-				name:             "h264_amf",
-				description:      "AMD GPU (AMF)",
-				inputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
-				outputParameters: "-c:v h264_amf -rc cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
+			candidates = append(candidates, HwEncoder{
+				Name:             "h264_amf",
+				Description:      "AMD GPU (AMF)",
+				InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
+				OutputParameters: "-c:v h264_amf -rc cbr -b:v 8M",
 			})
 		case "h264_vaapi":
 			if runtime.GOOS == "linux" {
-				candidates = append(candidates, hwEncoder{
-					name:             "h264_vaapi",
-					description:      "VAAPI (AMD/Intel on Linux)",
-					inputParameters:  "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
-					outputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
+				candidates = append(candidates, HwEncoder{
+					Name:             "h264_vaapi",
+					Description:      "VAAPI (AMD/Intel on Linux)",
+					InputParameters:  "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
+					OutputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M",
 				})
 			}
 		case "h264_qsv":
-			candidates = append(candidates, hwEncoder{
-				name:             "h264_qsv",
-				description:      "Intel GPU (QSV)",
-				inputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
-				outputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
+			candidates = append(candidates, HwEncoder{
+				Name:             "h264_qsv",
+				Description:      "Intel GPU (QSV)",
+				InputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
+				OutputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M",
 			})
 		}
 	}
 
 	// Verify each candidate encoder actually works on this hardware
-	var found []hwEncoder
+	var found []HwEncoder
 	for _, enc := range candidates {
-		if testEncoder(path, enc.name) {
-			logging.InfoLogger.Printf("Encoder %s verified working", enc.name)
+		if testEncoder(path, enc.Name) {
+			logging.InfoLogger.Printf("Encoder %s verified working", enc.Name)
 			found = append(found, enc)
 		} else {
-			logging.InfoLogger.Printf("Encoder %s compiled in but not functional on this hardware", enc.name)
+			logging.InfoLogger.Printf("Encoder %s compiled in but not functional on this hardware", enc.Name)
 		}
 	}
 	return found
@@ -178,7 +177,7 @@ func testEncoder(ffmpegPath, encoderName string) bool {
 		args = append(args, "-c:v", encoderName, "-f", "null", "-")
 	}
 
-	cmd := exec.Command(ffmpegPath, args...)
+	cmd := CreateHiddenCmd(ffmpegPath, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
@@ -190,7 +189,7 @@ func testEncoder(ffmpegPath, encoderName string) bool {
 }
 
 // detectCameras detects available camera devices and their capabilities
-func detectCameras() []detectedCamera {
+func DetectCameras() []DetectedCamera {
 	switch runtime.GOOS {
 	case "linux":
 		return detectCamerasLinux()
@@ -202,9 +201,9 @@ func detectCameras() []detectedCamera {
 }
 
 // detectCamerasLinux uses v4l2-ctl to detect cameras and their formats
-func detectCamerasLinux() []detectedCamera {
+func detectCamerasLinux() []DetectedCamera {
 	// First get the device list
-	cmd := exec.Command("v4l2-ctl", "--list-devices")
+	cmd := CreateHiddenCmd("v4l2-ctl", "--list-devices")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -242,7 +241,7 @@ func detectCamerasLinux() []detectedCamera {
 		}
 	}
 
-	var cameras []detectedCamera
+	var cameras []DetectedCamera
 	for _, dev := range devices {
 		cam := probeV4L2Device(dev.name, dev.device)
 		if cam != nil {
@@ -253,8 +252,8 @@ func detectCamerasLinux() []detectedCamera {
 }
 
 // probeV4L2Device probes a single v4l2 device for its best format
-func probeV4L2Device(name, device string) *detectedCamera {
-	cmd := exec.Command("v4l2-ctl", "-d", device, "--list-formats-ext")
+func probeV4L2Device(name, device string) *DetectedCamera {
+	cmd := CreateHiddenCmd("v4l2-ctl", "-d", device, "--list-formats-ext")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -282,7 +281,8 @@ func probeV4L2Device(name, device string) *detectedCamera {
 	var currentPixFmt string
 	var currentWidth, currentHeight int
 
-	formatRe := regexp.MustCompile(`'(MJPG|YUYV|H264)'`)
+	// Match common V4L2 pixel formats
+	formatRe := regexp.MustCompile(`'(MJPG|YUYV|H264|NV12|RGB3|BGR3|UYVY)'`)
 	sizeRe := regexp.MustCompile(`Size:\s+Discrete\s+(\d+)x(\d+)`)
 	fpsRe := regexp.MustCompile(`\((\d+)\.000\s+fps\)`)
 
@@ -298,12 +298,22 @@ func probeV4L2Device(name, device string) *detectedCamera {
 		// Check for format header
 		if m := formatRe.FindStringSubmatch(line); m != nil {
 			switch m[1] {
+			// Compressed formats
 			case "MJPG":
 				currentPixFmt = "mjpeg"
-			case "YUYV":
-				currentPixFmt = "yuyv422"
 			case "H264":
 				currentPixFmt = "h264"
+			// Raw formats - no decode needed
+			case "YUYV":
+				currentPixFmt = "yuyv422"
+			case "NV12":
+				currentPixFmt = "nv12"
+			case "RGB3":
+				currentPixFmt = "rgb24"
+			case "BGR3":
+				currentPixFmt = "bgr24"
+			case "UYVY":
+				currentPixFmt = "uyvy422"
 			}
 			currentWidth = 0
 			currentHeight = 0
@@ -402,25 +412,25 @@ func probeV4L2Device(name, device string) *detectedCamera {
 		}
 	}
 
-	return &detectedCamera{
-		name:   name,
-		device: device,
-		format: "v4l2",
-		pixFmt: best.pixFmt,
-		size:   fmt.Sprintf("%dx%d", best.width, best.height),
-		fps:    best.fps,
+	return &DetectedCamera{
+		Name:   name,
+		Device: device,
+		Format: "v4l2",
+		PixFmt: best.pixFmt,
+		Size:   fmt.Sprintf("%dx%d", best.width, best.height),
+		Fps:    best.fps,
 	}
 }
 
 // detectCamerasWindows uses ffmpeg dshow to detect cameras
-func detectCamerasWindows() []detectedCamera {
+func detectCamerasWindows() []DetectedCamera {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
 	}
 
 	// List devices
-	cmd := exec.Command(path, "-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy")
+	cmd := CreateHiddenCmd(path, "-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -439,7 +449,7 @@ func detectCamerasWindows() []detectedCamera {
 		}
 	}
 
-	var cameras []detectedCamera
+	var cameras []DetectedCamera
 	for _, name := range cameraNames {
 		cam := probeDshowDevice(path, name)
 		if cam != nil {
@@ -450,8 +460,8 @@ func detectCamerasWindows() []detectedCamera {
 }
 
 // probeDshowDevice probes a single dshow device for its capabilities
-func probeDshowDevice(ffmpegPath, name string) *detectedCamera {
-	cmd := exec.Command(ffmpegPath, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", fmt.Sprintf("video=%s", name))
+func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
+	cmd := CreateHiddenCmd(ffmpegPath, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", fmt.Sprintf("video=%s", name))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -476,10 +486,28 @@ func probeDshowDevice(ffmpegPath, name string) *detectedCamera {
 		line := scanner.Text()
 		// Determine pixel format from the line
 		var pixFmt string
+		// Compressed formats
 		if strings.Contains(line, "pixel_format=mjpeg") || strings.Contains(line, "vcodec=mjpeg") {
 			pixFmt = "mjpeg"
+		} else if strings.Contains(line, "vcodec=h264") {
+			pixFmt = "h264"
+			// Raw formats - no decode needed, just encode
 		} else if strings.Contains(line, "pixel_format=yuyv422") || strings.Contains(line, "pixel_format=yuyv") {
 			pixFmt = "yuyv422"
+		} else if strings.Contains(line, "pixel_format=nv12") {
+			pixFmt = "nv12"
+		} else if strings.Contains(line, "pixel_format=rgb24") {
+			pixFmt = "rgb24"
+		} else if strings.Contains(line, "pixel_format=bgr24") {
+			pixFmt = "bgr24"
+		} else if strings.Contains(line, "pixel_format=uyvy422") {
+			pixFmt = "uyvy422"
+		} else if strings.Contains(line, "pixel_format=") {
+			// Catch other raw formats generically
+			re := regexp.MustCompile(`pixel_format=(\w+)`)
+			if m := re.FindStringSubmatch(line); m != nil {
+				pixFmt = m[1]
+			}
 		} else {
 			continue
 		}
@@ -502,13 +530,13 @@ func probeDshowDevice(ffmpegPath, name string) *detectedCamera {
 
 	if len(options) == 0 {
 		// Camera found but couldn't parse formats; add with defaults
-		return &detectedCamera{
-			name:   name,
-			device: name,
-			format: "dshow",
-			pixFmt: "unknown",
-			size:   "1280x720",
-			fps:    30,
+		return &DetectedCamera{
+			Name:   name,
+			Device: name,
+			Format: "dshow",
+			PixFmt: "unknown",
+			Size:   "1280x720",
+			Fps:    30,
 		}
 	}
 
@@ -564,18 +592,18 @@ func probeDshowDevice(ffmpegPath, name string) *detectedCamera {
 		}
 	}
 
-	return &detectedCamera{
-		name:   name,
-		device: name,
-		format: "dshow",
-		pixFmt: best.pixFmt,
-		size:   fmt.Sprintf("%dx%d", best.width, best.height),
-		fps:    best.fps,
+	return &DetectedCamera{
+		Name:   name,
+		Device: name,
+		Format: "dshow",
+		PixFmt: best.pixFmt,
+		Size:   fmt.Sprintf("%dx%d", best.width, best.height),
+		Fps:    best.fps,
 	}
 }
 
 // writeAutoConfig generates auto.toml from detected hardware
-func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwEncoder) error {
+func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return err
 	}
@@ -602,55 +630,66 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 	buf.WriteString("# Review and copy desired sections to config.toml\n\n")
 
 	// Pick the best hardware encoder (prefer GPU over software)
-	bestEncoder := pickBestEncoder(encoders)
+	bestEncoder := PickBestEncoder(encoders)
 
 	for i, cam := range cameras {
 		sectionName := fmt.Sprintf("camera%d", i+1)
 		buf.WriteString(fmt.Sprintf("[%s]\n", sectionName))
-		buf.WriteString(fmt.Sprintf("    description = \"%s (%s, %s)\"\n", cam.name, cam.pixFmt, cam.size))
+		buf.WriteString(fmt.Sprintf("    description = \"%s (%s, %s)\"\n", cam.Name, cam.PixFmt, cam.Size))
 		buf.WriteString("    enabled = true\n")
 
-		if cam.format == "dshow" {
-			buf.WriteString(fmt.Sprintf("    camera = 'video=%s'\n", cam.device))
+		if cam.Format == "dshow" {
+			buf.WriteString(fmt.Sprintf("    camera = 'video=%s'\n", cam.Device))
 		} else {
-			buf.WriteString(fmt.Sprintf("    camera = '%s'\n", cam.device))
+			buf.WriteString(fmt.Sprintf("    camera = '%s'\n", cam.Device))
 		}
 
-		buf.WriteString(fmt.Sprintf("    format = '%s'\n", cam.format))
-		buf.WriteString(fmt.Sprintf("    size = \"%s\"\n", cam.size))
-		buf.WriteString(fmt.Sprintf("    fps = %d\n", cam.fps))
+		buf.WriteString(fmt.Sprintf("    format = '%s'\n", cam.Format))
+		buf.WriteString(fmt.Sprintf("    size = \"%s\"\n", cam.Size))
+		buf.WriteString(fmt.Sprintf("    fps = %d\n", cam.Fps))
 		buf.WriteString("\n")
 
-		switch cam.pixFmt {
-		case "mjpeg":
-			// MJPEG: copy during recording, recode on trim
-			if cam.format == "dshow" {
-				buf.WriteString("    inputParameters = '-pixel_format mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
-			} else {
-				buf.WriteString("    inputParameters = '-input_format mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
+		// Determine if format is compressed (needs decode) or raw (no decode needed)
+		isCompressed := cam.PixFmt == "mjpeg" || cam.PixFmt == "h264"
+
+		if isCompressed {
+			// Compressed formats: copy during recording
+			switch cam.PixFmt {
+			case "mjpeg":
+				// MJPEG: copy during recording, recode on trim
+				if cam.Format == "dshow" {
+					buf.WriteString("    inputParameters = '-pixel_format mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
+				} else {
+					buf.WriteString("    inputParameters = '-input_format mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
+				}
+				buf.WriteString("    outputParameters = '-vcodec copy -an'\n")
+				buf.WriteString("    recode = true\n")
+			case "h264":
+				// H.264: copy during recording, no recode
+				buf.WriteString("    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'\n")
+				buf.WriteString("    outputParameters = '-c:v copy -an'\n")
+				buf.WriteString("    recode = false\n")
 			}
-			buf.WriteString("    outputParameters = '-vcodec copy -an'\n")
-			buf.WriteString("    recode = true\n")
-		case "h264":
-			// Camera outputs H.264 directly: copy during recording, no recode
-			buf.WriteString("    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'\n")
-			buf.WriteString("    outputParameters = '-c:v copy -an'\n")
-			buf.WriteString("    recode = false\n")
-		default:
-			// YUV or unknown: must encode during recording
+		} else {
+			// Raw formats (yuyv422, nv12, rgb24, etc.): no decode needed, just encode
+			// Use camera's fps for GOP size and output frame rate
+			fpsParams := fmt.Sprintf("-g %d -keyint_min %d -r %d -vsync cfr -an", cam.Fps, cam.Fps, cam.Fps)
+			inputParams := "-rtbufsize 512M -thread_queue_size 4096"
+
+			// Specify the pixel format for proper raw input handling
+			if cam.Format == "dshow" {
+				inputParams = fmt.Sprintf("-pixel_format %s %s", cam.PixFmt, inputParams)
+			} else {
+				inputParams = fmt.Sprintf("-input_format %s %s", cam.PixFmt, inputParams)
+			}
+
+			buf.WriteString(fmt.Sprintf("    inputParameters = '%s'\n", inputParams))
+
 			if bestEncoder != nil {
-				buf.WriteString(fmt.Sprintf("    inputParameters = '%s'\n", bestEncoder.inputParameters))
-				buf.WriteString(fmt.Sprintf("    outputParameters = '%s'\n", bestEncoder.outputParameters))
+				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", bestEncoder.OutputParameters, fpsParams))
 			} else {
 				// Software fallback
-				inputParams := "-rtbufsize 512M -thread_queue_size 4096"
-				if cam.format == "dshow" {
-					inputParams = "-pixel_format yuyv422 " + inputParams
-				} else {
-					inputParams = "-input_format yuyv422 " + inputParams
-				}
-				buf.WriteString(fmt.Sprintf("    inputParameters = '%s'\n", inputParams))
-				buf.WriteString("    outputParameters = '-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -an'\n")
+				buf.WriteString(fmt.Sprintf("    outputParameters = '-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p %s'\n", fpsParams))
 			}
 			buf.WriteString("    recode = false\n")
 		}
@@ -689,7 +728,7 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 		buf.WriteString("# None found - only software encoding (libx264) is available\n")
 	}
 	for _, enc := range encoders {
-		buf.WriteString(fmt.Sprintf("# %s - %s\n", enc.name, enc.description))
+		buf.WriteString(fmt.Sprintf("# %s - %s\n", enc.Name, enc.Description))
 	}
 	buf.WriteString("# libx264 - Software encoder (always available)\n")
 
@@ -702,12 +741,12 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 }
 
 // pickBestEncoder selects the best available hardware encoder
-func pickBestEncoder(encoders []hwEncoder) *hwEncoder {
+func PickBestEncoder(encoders []HwEncoder) *HwEncoder {
 	// Preference order: nvenc > amf > vaapi > qsv
 	preference := []string{"h264_nvenc", "h264_amf", "h264_vaapi", "h264_qsv"}
 	for _, pref := range preference {
 		for i := range encoders {
-			if encoders[i].name == pref {
+			if encoders[i].Name == pref {
 				return &encoders[i]
 			}
 		}
@@ -716,15 +755,15 @@ func pickBestEncoder(encoders []hwEncoder) *hwEncoder {
 }
 
 // buildSummary creates a human-readable summary of detected hardware
-func buildSummary(cameras []detectedCamera, encoders []hwEncoder, outputPath string) string {
+func buildSummary(cameras []DetectedCamera, encoders []HwEncoder, outputPath string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Configuration written to:\n%s\n\n", outputPath))
 
 	sb.WriteString("Cameras detected:\n")
 	for i, cam := range cameras {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, cam.name))
-		sb.WriteString(fmt.Sprintf("     Device: %s\n", cam.device))
-		sb.WriteString(fmt.Sprintf("     Format: %s  Size: %s  FPS: %d\n", cam.pixFmt, cam.size, cam.fps))
+		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, cam.Name))
+		sb.WriteString(fmt.Sprintf("     Device: %s\n", cam.Device))
+		sb.WriteString(fmt.Sprintf("     Format: %s  Size: %s  FPS: %d\n", cam.PixFmt, cam.Size, cam.Fps))
 	}
 
 	sb.WriteString("\nH.264 encoders available:\n")
@@ -732,7 +771,7 @@ func buildSummary(cameras []detectedCamera, encoders []hwEncoder, outputPath str
 		sb.WriteString("  (none - software encoding only)\n")
 	}
 	for _, enc := range encoders {
-		sb.WriteString(fmt.Sprintf("  - %s (%s)\n", enc.name, enc.description))
+		sb.WriteString(fmt.Sprintf("  - %s (%s)\n", enc.Name, enc.Description))
 	}
 	sb.WriteString("  - libx264 (software, always available)\n")
 

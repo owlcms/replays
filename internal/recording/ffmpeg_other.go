@@ -115,3 +115,9 @@ func forceKillCmd(cmd *exec.Cmd) error {
 	}
 	return cmd.Process.Kill()
 }
+
+// CreateHiddenCmd creates a command. On non-Windows platforms, no special handling
+// is needed as there's no console window to hide.
+func CreateHiddenCmd(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}

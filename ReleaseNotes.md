@@ -1,5 +1,9 @@
 **Change log**
 
+- 1.9.0 added a new command-line interface (cameras is the executable) to start a multicast UDP H.264 stream for each of the detected cameras
+  - use `-includeraw` to include the laptop built-in cameras during testing.
+- 1.9.0 Add Auto-detection of cameras: an auto.toml file is written that can be edited, and has priority over config.toml.
+
 - 1.8.1  Make sure the default config file is the latest one.
 - 1.8.0  Changes in configuration file.  Ffmpeg requires a specific ordering of parameters, and this forces a split between inputParameters (how to read the camera) and outputParameters (how to format the output).  The previous params is treated as outputParameters.
     - See [the new default.toml file](https://github.com/owlcms/replays/blob/main/internal/config/default.toml) to adjust your configuration

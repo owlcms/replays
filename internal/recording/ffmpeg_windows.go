@@ -138,3 +138,13 @@ func forceKillCmd(cmd *exec.Cmd) error {
 	kill := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid))
 	return kill.Run()
 }
+
+// CreateHiddenCmd creates a command that runs without a visible console window on Windows.
+// Use this for any external commands during auto-detection or background operations.
+func CreateHiddenCmd(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
+	return cmd
+}

@@ -3,43 +3,31 @@
 # Review and copy desired sections to config.toml
 
 [camera1]
-    description = "Integrated_Webcam_HD: Integrate (mjpeg, 1280x720)"
+    description = "OV01A (yuyv422, 1280x720)"
     enabled = true
-    camera = '/dev/video4'
-    format = 'v4l2'
+    camera = 'video=OV01A'
+    format = 'dshow'
     size = "1280x720"
     fps = 30
 
-    inputParameters = '-input_format mjpeg -rtbufsize 512M -thread_queue_size 4096'
-    outputParameters = '-vcodec copy -an'
-    recode = true
-
-[camera2]
-    description = "UVC Camera (h264, 1920x1080)"
-    enabled = true
-    camera = '/dev/video2'
-    format = 'v4l2'
-    size = "1920x1080"
-    fps = 60
-
-    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
-    outputParameters = '-c:v copy -an'
+    inputParameters = '-pixel_format yuyv422 -rtbufsize 512M -thread_queue_size 4096'
+    outputParameters = '-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 30 -keyint_min 30 -r 30 -vsync cfr -an'
     recode = false
 
-[camera3]
-    description = "UHA-UTCA: UHA-UTCA (mjpeg, 1920x1080)"
+[camera2]
+    description = "OBS Virtual Camera (nv12, 1920x1080)"
     enabled = true
-    camera = '/dev/video0'
-    format = 'v4l2'
+    camera = 'video=OBS Virtual Camera'
+    format = 'dshow'
     size = "1920x1080"
     fps = 60
 
-    inputParameters = '-input_format mjpeg -rtbufsize 512M -thread_queue_size 4096'
-    outputParameters = '-vcodec copy -an'
-    recode = true
+    inputParameters = '-pixel_format nv12 -rtbufsize 512M -thread_queue_size 4096'
+    outputParameters = '-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
+    recode = false
 
 # =======================================================
 # Detected H.264 encoders on this system
 # =======================================================
-# h264_vaapi - VAAPI (AMD/Intel on Linux)
+# h264_qsv - Intel GPU (QSV)
 # libx264 - Software encoder (always available)

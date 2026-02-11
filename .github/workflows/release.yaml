@@ -61,6 +61,8 @@ jobs:
         fyne-cross linux -arch amd64 -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
         # Binary is named 'replays' in bin/, copy immediately before next fyne-cross cleans it
         cp fyne-cross/bin/linux-amd64/replays artifacts/replays_linux_amd64
+        # Build cameras CLI (no GUI)
+        GOOS=linux GOARCH=amd64 go build -o artifacts/cameras_linux_amd64 ./cmd/cameras
 
     # Raspberry Pi / Linux arm64 build
     - name: Build for Linux arm64
@@ -69,6 +71,8 @@ jobs:
         fyne-cross linux -arch arm64 -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
         # Binary is named 'replays' in bin/, copy immediately before next fyne-cross cleans it
         cp fyne-cross/bin/linux-arm64/replays artifacts/replays_linux_arm64
+        # Build cameras CLI (no GUI)
+        GOOS=linux GOARCH=arm64 go build -o artifacts/cameras_linux_arm64 ./cmd/cameras
 
     # Windows build
     - name: Build for Windows
@@ -76,6 +80,8 @@ jobs:
       run: |
         fyne-cross windows -arch amd64 -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
         cp fyne-cross/bin/windows-amd64/replays.exe artifacts/replays_windows.exe
+        # Build cameras CLI (no GUI)
+        GOOS=windows GOARCH=amd64 go build -o artifacts/cameras_windows.exe ./cmd/cameras
 
     # Save artifacts for release step
     - name: Upload build artifacts
@@ -154,3 +160,24 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release upload ${{ env.TAG }} dist/replays_linux_arm64
+
+    - name: Upload Windows cameras executable
+      if: ${{ env.BUILD_WINDOWS == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/cameras_windows.exe
+
+    - name: Upload Linux amd64 cameras executable
+      if: ${{ env.BUILD_LINUX == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/cameras_linux_amd64
+
+    - name: Upload Raspberry Pi arm64 cameras executable
+      if: ${{ env.BUILD_RASPBERRY == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/cameras_linux_arm64
