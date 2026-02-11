@@ -49,15 +49,21 @@ func cleanParams(params string) []string {
 func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []string {
 	args := []string{"-y", "-f", camera.Format}
 
+	// Check if the source is a UDP stream
+	isUdpSource := strings.HasPrefix(camera.FfmpegCamera, "udp:")
+
 	// Input parameters (before -i)
 	if camera.InputParameters != "" {
 		args = append(args, cleanParams(camera.InputParameters)...)
 	}
-	if camera.Size != "" {
-		args = append(args, "-s", camera.Size)
-	}
-	if camera.Fps > 0 {
-		args = append(args, "-r", fmt.Sprintf("%d", camera.Fps))
+	// Skip size and fps for UDP sources as they are pre-formatted
+	if !isUdpSource {
+		if camera.Size != "" {
+			args = append(args, "-s", camera.Size)
+		}
+		if camera.Fps > 0 {
+			args = append(args, "-r", fmt.Sprintf("%d", camera.Fps))
+		}
 	}
 
 	// Input source
@@ -79,10 +85,8 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 // buildTrimmingArgs builds the ffmpeg arguments for trimming
 func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
 	args := []string{"-y"}
-	// Input parameters (before -i)
-	if camera.InputParameters != "" {
-		args = append(args, cleanParams(camera.InputParameters)...)
-	}
+	// Note: InputParameters are NOT used during trimming as they are for camera capture only
+	
 	if trimDuration > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
 	}
@@ -90,14 +94,8 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 	args = append(args, "-i", currentFileName)
 
 	if camera.Recode {
-		// Output parameters (after -i)
-		if camera.OutputParameters != "" {
-			args = append(args, cleanParams(camera.OutputParameters)...)
-		}
-		// Treat legacy params as additional output parameters
-		if camera.Params != "" {
-			args = append(args, cleanParams(camera.Params)...)
-		}
+		// When recoding, use software encoder to convert to H.264
+		// Do NOT use OutputParameters here as they are for recording, not transcoding
 		logging.InfoLogger.Printf("Recode is enabled for camera: %s", camera.FfmpegCamera)
 		args = append(args,
 			"-c:v", "libx264",
@@ -107,6 +105,7 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 			"-pix_fmt", "yuv420p",
 		)
 	} else {
+		// When not recoding, just copy the stream (already in H.264 format)
 		args = append(args, "-c", "copy", "-movflags", "faststart")
 	}
 

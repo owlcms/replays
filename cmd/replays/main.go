@@ -462,6 +462,11 @@ func main() {
 					recording.ListCameras(window)
 				}
 			}),
+			fyne.NewMenuItem("Auto-Detect Hardware", func() {
+				if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+					recording.DetectAndWriteConfig(window)
+				}
+			}),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("About", func() {
 				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)

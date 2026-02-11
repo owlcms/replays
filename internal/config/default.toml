@@ -13,21 +13,14 @@ videoDir = 'videos'
 # FFmpeg logging - set to true to create timestamped log files for ffmpeg output
 logFfmpeg = false
 
-# Use the `input_params` and `output_params` to manage your FFmpeg flags.
-#
-# A note on FFmpeg command order:
-# [global flags] [input flags] -i <input_source> [output flags] <output_file>
-#
-# This configuration is designed to generate the command in the correct order.
-
 
 # =======================================================
 # Windows Camera Configurations
 # =======================================================
 
-# Webcam with software encoder
 [windows1]
-    enabled = true
+    description = "Webcam (MJPEG copy, re-encoded on trim)"
+    enabled = false
     camera = 'Logitech Webcam C930e'
     format = 'dshow'
     size = "1280x720"
@@ -45,8 +38,8 @@ logFfmpeg = false
     recode = true
 
 
-# HDMI Camera with AMD GPU
 [windows2]
+    description = "HDMI Camera with AMD GPU"
     enabled = false
     camera = 'HDMI_AMD_GPU'
     format = 'dshow'
@@ -57,15 +50,15 @@ logFfmpeg = false
     # They must be on the input side (before -i).
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
     
-    # Output parameters: produce H.264 output using AMD hardware encoder
-    outputParameters = '-vaapi_device /dev/dri/renderD128 -c:v h264_vaapi -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
+    # Output parameters: produce H.264 output using AMD AMF hardware encoder
+    outputParameters = '-c:v h264_amf -rc cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
 
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
     recode = false
 
-# HDMI Camera with NVIDIA GPU
 [windows3]
+    description = "HDMI Camera with NVIDIA GPU"
     enabled = false
     camera = 'HDMI_NVIDIA_GPU'
     format = 'dshow'
@@ -83,8 +76,8 @@ logFfmpeg = false
     # because the output parameters from the recording are already in H.264 format
     recode = false
 
-# HDMI Camera with Intel GPU
 [windows4]
+    description = "HDMI Camera with Intel GPU"
     enabled = false
     camera = 'HDMI_INTEL_GPU'
     format = 'dshow'
@@ -106,9 +99,9 @@ logFfmpeg = false
 # Linux Camera Configurations
 # =======================================================
 
-# Webcam with software encoder
 [linux1]
-    enabled = true
+    description = "Webcam (MJPEG copy, re-encoded on trim)"
+    enabled = false
     camera = '/dev/video0'
     format = 'v4l2'
     size = "1280x720"
@@ -118,17 +111,16 @@ logFfmpeg = false
     # Put flags that must come before `-i <camera name>` here.
     inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
 
-    # Output parameters: produce H.264 output using software encoder (Linux)
+    # Output parameters: copy MJPEG stream directly (no re-encoding during recording)
     # Put flags that must come after `-i <camera name>` here.
-    outputParameters = '-c:v libx264 -vf "format=yuv420p" -preset medium -b:v 4M -g 30 -keyint_min 30 -vsync cfr -an'
+    outputParameters = '-vcodec copy -an'
     
-    # When trimming the video and converting to mp4, we don't need to recode
-    # because the output parameters from the recording are already in H.264 format
-    recode = false
+    # When trimming, re-encode to H.264 for browser playback
+    recode = true
 
 
-# HDMI Camera with AMD GPU (Linux uses VAAPI, not AMF)
 [linux2]
+    description = "HDMI Camera with AMD GPU"
     enabled = false
     camera = '/dev/video2' # Video device (must be even-numbered, e.g., /dev/video2)
     format = 'v4l2'
@@ -140,14 +132,14 @@ logFfmpeg = false
     inputParameters = '-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096'
     
     # Output parameters: produce H.264 output using VAAPI hardware encoder
-    outputParameters = '-c:v h264_vaapi -qp 23 -an'
+    outputParameters = '-c:v h264_vaapi -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
     
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
     recode = false
 
-# HDMI Camera with NVIDIA GPU
 [linux3]
+    description = "HDMI Camera with NVIDIA GPU"
     enabled = false
     camera = '/dev/video4' # Video device (must be even-numbered, e.g., /dev/video4)
     format = 'v4l2'
@@ -165,8 +157,8 @@ logFfmpeg = false
     # because the output parameters from the recording are already in H.264 format
     recode = false
 
-# HDMI Camera with Intel GPU
 [linux4]
+    description = "HDMI Camera with Intel GPU"
     enabled = false
     camera = '/dev/video6' # Video device (must be even-numbered, e.g., /dev/video6)
     format = 'v4l2'
@@ -182,4 +174,62 @@ logFfmpeg = false
     
     # When trimming the video and converting to mp4, we don't need to recode
     # because the output parameters from the recording are already in H.264 format
+    recode = false
+
+# =======================================================
+# Linux UDP Stream Configurations
+# =======================================================
+#
+# These are usedd when the cameras are attached to other laptops on the
+# network (for example, gaming laptops with GPU to encode MJPEG)
+
+[linux5]
+    description = "UDP Stream from Center Camera (Camera 1)"
+    enabled = false
+    camera = 'udp://239.255.0.1:9001'  # Multicast UDP stream from FFmpeg #1
+    format = 'mpegts'
+    size = "1920x1080"
+    fps = 60
+    
+    # Input parameters: none needed - reading from multicast UDP stream
+    inputParameters = ''
+    
+    # Output parameters: copy H.264 stream directly (already encoded by camera)
+    outputParameters = '-c:v copy -an'
+    
+    # No recoding needed - stream is already H.264
+    recode = false
+
+[linux6]
+    description = "UDP Stream from Side Camera (Camera 2)"
+    enabled = false
+    camera = 'udp://239.255.0.1:9002'  # Multicast UDP stream from FFmpeg #1
+    format = 'mpegts'
+    size = "1920x1080"
+    fps = 60
+    
+    # Input parameters: none needed - reading from multicast UDP stream
+    inputParameters = ''
+    
+    # Output parameters: copy H.264 stream directly (already encoded by camera)
+    outputParameters = '-c:v copy -an'
+    
+    # No recoding needed - stream is already H.264
+    recode = false
+
+[linux7]
+    description = "UDP Stream from Side Camera (Camera 3)"
+    enabled = true
+    camera = 'udp://239.255.0.1:9003'  # Multicast UDP stream from FFmpeg #1
+    format = 'mpegts'
+    size = "1920x1080"
+    fps = 60
+    
+    # Input parameters: none needed - reading from multicast UDP stream
+    inputParameters = ''
+    
+    # Output parameters: copy H.264 stream directly (encoded by FFmpeg #1)
+    outputParameters = '-c:v copy -an'
+    
+    # No recoding needed - stream is already H.264
     recode = false
