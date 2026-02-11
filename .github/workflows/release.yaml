@@ -1,0 +1,151 @@
+name: Release owlcms-replays
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., 1.9.0, 1.9.0-beta1)'
+        required: true
+        type: string
+
+jobs:
+  build_crosscompile:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_WINDOWS: true
+      BUILD_RASPBERRY: true
+      BUILD_LINUX: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install GitHub CLI
+      run: |
+        wget https://github.com/cli/cli/releases/download/v2.32.0/gh_2.32.0_linux_amd64.deb
+        sudo dpkg -i gh_2.32.0_linux_amd64.deb
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Install fyne-cross
+      run: |
+        go install github.com/fyne-io/fyne-cross@latest
+        echo "${HOME}/go/bin" >> $GITHUB_PATH
+
+    - name: Extract tag
+      id: extract_tag
+      run: |
+        echo "TAG=${{ inputs.tag }}" >> $GITHUB_ENV
+        # Strip 'v' prefix for version string
+        VERSION="${{ inputs.tag }}"
+        VERSION="${VERSION#v}"
+        echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+    - name: Substitute tag in version.go
+      run: |
+        cp dist/version.go.template internal/config/version.go
+        sed -i "s/_TAG_/${TAG}/g" internal/config/version.go
+        cat internal/config/version.go
+
+    # Windows build
+    - name: Build for Windows
+      if: ${{ env.BUILD_WINDOWS == 'true' }}
+      run: |
+        fyne-cross windows -arch amd64 -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
+        mkdir -p artifacts
+        mv fyne-cross/bin/windows-amd64/replays.exe artifacts/replays_windows.exe
+
+    # Linux amd64 build
+    - name: Build for Linux amd64
+      if: ${{ env.BUILD_LINUX == 'true' }}
+      run: |
+        fyne-cross linux -arch amd64 -app-id app.owlcms.replays -icon Icon.png -output replays_amd64 ./cmd/replays
+        cp fyne-cross/bin/linux-amd64/replays_amd64 artifacts/replays_linux_amd64
+
+    # Raspberry Pi / Linux arm64 build
+    - name: Build for Linux arm64
+      if: ${{ env.BUILD_RASPBERRY == 'true' }}
+      run: |
+        fyne-cross linux -arch arm64 -app-id app.owlcms.replays -icon Icon.png -output replays_arm64 ./cmd/replays
+        cp fyne-cross/bin/linux-arm64/replays_arm64 artifacts/replays_linux_arm64
+
+    # Save artifacts for release step
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build_artifacts
+        path: artifacts/*
+
+  create_release:
+    runs-on: ubuntu-latest
+    needs: [build_crosscompile]
+    env:
+      BUILD_WINDOWS: true
+      BUILD_RASPBERRY: true
+      BUILD_LINUX: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Extract tag
+      id: extract_tag
+      run: |
+        echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+    - name: Create dist directory
+      run: mkdir -p dist
+
+    - name: Prepare release notes
+      run: |
+        cp ReleaseNotes.md ./dist/ReleaseNotes.md
+        sed -i "s/_TAG_/${TAG}/g" ./dist/ReleaseNotes.md
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build_artifacts
+        path: ./dist
+
+    - name: List artifacts
+      run: ls -la ./dist
+
+    - name: Create GitHub Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: bash
+      run: |
+        if [[ "${TAG}" == *"-"* ]]; then
+          gh release create ${{ env.TAG }} \
+            --title "owlcms jury replays ${{ env.TAG }}" \
+            --notes-file ./dist/ReleaseNotes.md \
+            --prerelease
+        else
+          gh release create ${{ env.TAG }} \
+            --title "owlcms jury replays ${{ env.TAG }}" \
+            --notes-file ./dist/ReleaseNotes.md
+        fi
+
+    - name: Upload Windows executable
+      if: ${{ env.BUILD_WINDOWS == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/replays_windows.exe
+
+    - name: Upload Linux amd64 executable
+      if: ${{ env.BUILD_LINUX == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/replays_linux_amd64
+
+    - name: Upload Raspberry Pi arm64 executable
+      if: ${{ env.BUILD_RASPBERRY == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/replays_linux_arm64
