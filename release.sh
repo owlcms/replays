@@ -46,6 +46,13 @@ if [[ "${CURRENT_BRANCH}" == "HEAD" ]]; then
 fi
 GIT_REF="${CURRENT_BRANCH}"
 
+# Check if release already exists
+if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+  echo "ERROR: Release '${TAG}' already exists at https://github.com/${REPO}/releases/tag/${TAG}" >&2
+  echo "       Delete it first if you want to recreate: gh release delete ${TAG} --repo ${REPO} --yes" >&2
+  exit 1
+fi
+
 echo "Repo:      ${REPO}"
 echo "Workflow:  ${WORKFLOW_FILE}"
 echo "Tag:       ${TAG}"
