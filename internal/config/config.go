@@ -42,6 +42,8 @@ type Config struct {
 var (
 	Verbose       bool
 	NoVideo       bool
+	NoMQTT        bool
+	AutoTomlDir   string
 	InstallDir    string
 	videoDir      string
 	Width         int
@@ -149,30 +151,61 @@ func LoadConfig(configFile string) (*Config, error) {
 		return pc, nil
 	}
 
-	// Look for keys: "platformKey", "platformKey2", "platformKey3", ...
-	for i := 1; ; i++ {
-		key := platformKey
-		if i > 1 {
-			key = platformKey + strconv.Itoa(i)
-		}
-		confRaw, exists := raw[key]
-		if !exists {
-			// Check for aliases
-			if platformKey == "windows" && i == 1 {
-				confRaw, exists = raw["windows1"]
-			} else if platformKey == "linux" && i == 1 {
-				confRaw, exists = raw["linux1"]
+	// Check for auto.toml first (takes precedence over config.toml camera sections)
+	autoTomlPath := filepath.Join(GetInstallDir(), "auto.toml")
+	if _, err := os.Stat(autoTomlPath); err == nil {
+		logging.InfoLogger.Printf("Found auto.toml, loading camera configurations from it")
+		var autoRaw map[string]interface{}
+		if _, err := toml.DecodeFile(autoTomlPath, &autoRaw); err == nil {
+			// Look for camera1, camera2, camera3, ...
+			for i := 1; ; i++ {
+				key := "camera" + strconv.Itoa(i)
+				confRaw, exists := autoRaw[key]
+				if !exists {
+					break
+				}
+				pc, err := decodePlatformConfig(key, confRaw)
+				if err != nil {
+					continue
+				}
+				cameras = append(cameras, pc)
 			}
-			if !exists {
-				break
+			if len(cameras) > 0 {
+				logging.InfoLogger.Printf("Loaded %d camera configurations from auto.toml", len(cameras))
 			}
+		} else {
+			logging.ErrorLogger.Printf("Failed to parse auto.toml: %v", err)
 		}
-		pc, err := decodePlatformConfig(key, confRaw)
-		if err != nil {
-			continue // Skip disabled camera configurations
-		}
-		cameras = append(cameras, pc)
 	}
+
+	// Fall back to platform-specific sections in config.toml if auto.toml didn't provide cameras
+	if len(cameras) == 0 {
+		// Look for keys: "platformKey", "platformKey2", "platformKey3", ...
+		for i := 1; ; i++ {
+			key := platformKey
+			if i > 1 {
+				key = platformKey + strconv.Itoa(i)
+			}
+			confRaw, exists := raw[key]
+			if !exists {
+				// Check for aliases
+				if platformKey == "windows" && i == 1 {
+					confRaw, exists = raw["windows1"]
+				} else if platformKey == "linux" && i == 1 {
+					confRaw, exists = raw["linux1"]
+				}
+				if !exists {
+					break
+				}
+			}
+			pc, err := decodePlatformConfig(key, confRaw)
+			if err != nil {
+				continue // Skip disabled camera configurations
+			}
+			cameras = append(cameras, pc)
+		}
+	}
+
 	config.Cameras = cameras
 
 	// Set remaining recording package configurations
@@ -246,6 +279,8 @@ An absolute path can be provded if needed.`, GetInstallDir()))
 	verbose := flag.Bool("v", false, "enable verbose logging")
 	verboseAlt := flag.Bool("verbose", false, "enable verbose logging")
 	flag.BoolVar(&NoVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
+	flag.BoolVar(&NoMQTT, "noMQTT", false, "disable MQTT autodiscovery and monitoring")
+	flag.StringVar(&AutoTomlDir, "autoTomlDir", "", "directory for auto.toml output (default: install dir)")
 	flag.Parse()
 
 	// Set verbose mode in logging package

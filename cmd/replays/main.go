@@ -514,23 +514,28 @@ func main() {
 	window.Show()
 
 	// Discover or verify MQTT broker after window is shown
-	go func() {
-		broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
-			statusLabel.SetText(fmt.Sprintf("Error: Could not find owlcms server - %v", err))
-			statusLabel.TextStyle = fyne.TextStyle{Bold: true}
-			statusLabel.Refresh()
-		} else {
-			cfg.OwlCMS = broker
-			statusLabel.SetText("Ready")
-			statusLabel.TextStyle = fyne.TextStyle{Bold: false}
-			statusLabel.Refresh()
+	if config.NoMQTT {
+		logging.InfoLogger.Println("MQTT autodiscovery disabled via -noMQTT flag")
+		statusLabel.SetText("MQTT disabled")
+	} else {
+		go func() {
+			broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
+			if err != nil {
+				logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
+				statusLabel.SetText(fmt.Sprintf("Error: Could not find owlcms server - %v", err))
+				statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+				statusLabel.Refresh()
+			} else {
+				cfg.OwlCMS = broker
+				statusLabel.SetText("Ready")
+				statusLabel.TextStyle = fyne.TextStyle{Bold: false}
+				statusLabel.Refresh()
 
-			// Start MQTT monitor which handles platform list retrieval
-			go monitor.Monitor(cfg)
-		}
-	}()
+				// Start MQTT monitor which handles platform list retrieval
+				go monitor.Monitor(cfg)
+			}
+		}()
+	}
 
 	// Set up shutdown hook early in main
 	setupShutdownHook()

@@ -31,9 +31,9 @@ type detectedCamera struct {
 
 // hwEncoder holds information about a detected hardware encoder
 type hwEncoder struct {
-	name            string // h264_nvenc, h264_vaapi, h264_amf, h264_qsv
-	description     string
-	inputParameters string
+	name             string // h264_nvenc, h264_vaapi, h264_amf, h264_qsv
+	description      string
+	inputParameters  string
 	outputParameters string
 }
 
@@ -60,7 +60,13 @@ func DetectAndWriteConfig(window fyne.Window) {
 
 		// Step 3: Write auto.toml (even with 0 cameras, to show detected encoders)
 		progressLabel.SetText("Writing auto.toml...")
-		outputPath := filepath.Join(config.GetInstallDir(), "auto.toml")
+		// Output to autoTomlDir if set, otherwise install dir
+		var outputPath string
+		if config.AutoTomlDir != "" {
+			outputPath = filepath.Join(config.AutoTomlDir, "auto.toml")
+		} else {
+			outputPath = filepath.Join(config.GetInstallDir(), "auto.toml")
+		}
 		err := writeAutoConfig(outputPath, cameras, encoders)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to write auto.toml: %v", err)
@@ -110,32 +116,32 @@ func detectEncoders() []hwEncoder {
 		switch encoderName {
 		case "h264_nvenc":
 			candidates = append(candidates, hwEncoder{
-				name:            "h264_nvenc",
-				description:     "NVIDIA GPU",
-				inputParameters: "-rtbufsize 512M -thread_queue_size 4096",
+				name:             "h264_nvenc",
+				description:      "NVIDIA GPU",
+				inputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
 				outputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
 			})
 		case "h264_amf":
 			candidates = append(candidates, hwEncoder{
-				name:            "h264_amf",
-				description:     "AMD GPU (AMF)",
-				inputParameters: "-rtbufsize 512M -thread_queue_size 4096",
+				name:             "h264_amf",
+				description:      "AMD GPU (AMF)",
+				inputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
 				outputParameters: "-c:v h264_amf -rc cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
 			})
 		case "h264_vaapi":
 			if runtime.GOOS == "linux" {
 				candidates = append(candidates, hwEncoder{
-					name:            "h264_vaapi",
-					description:     "VAAPI (AMD/Intel on Linux)",
-					inputParameters: "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
+					name:             "h264_vaapi",
+					description:      "VAAPI (AMD/Intel on Linux)",
+					inputParameters:  "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
 					outputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
 				})
 			}
 		case "h264_qsv":
 			candidates = append(candidates, hwEncoder{
-				name:            "h264_qsv",
-				description:     "Intel GPU (QSV)",
-				inputParameters: "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
+				name:             "h264_qsv",
+				description:      "Intel GPU (QSV)",
+				inputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
 				outputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an",
 			})
 		}
@@ -162,12 +168,12 @@ func testEncoder(ffmpegPath, encoderName string) bool {
 	// Some encoders need special init flags
 	switch encoderName {
 	case "h264_vaapi":
-		args = append([]string{"-hide_banner", "-loglevel", "error",
+		args = []string{"-hide_banner", "-loglevel", "error",
 			"-init_hw_device", "vaapi=va:/dev/dri/renderD128",
 			"-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
-			"-vf", "format=nv12,hwupload"}, // VAAPI needs hwupload
-		)
-		args = append(args, "-c:v", encoderName, "-f", "null", "-")
+			"-vf", "format=nv12,hwupload", // VAAPI needs hwupload
+			"-c:v", encoderName, "-f", "null", "-",
+		}
 	default:
 		args = append(args, "-c:v", encoderName, "-f", "null", "-")
 	}
@@ -365,19 +371,29 @@ func probeV4L2Device(name, device string) *detectedCamera {
 		candidates = formats
 	}
 
-	// Selection priority: MJPEG > others, then highest fps, then highest resolution
+	// Selection priority: H264 > MJPEG > others, then highest fps, then highest resolution
 	var best *formatInfo
+	formatPriority := func(pixFmt string) int {
+		switch pixFmt {
+		case "h264":
+			return 3
+		case "mjpeg":
+			return 2
+		default:
+			return 1
+		}
+	}
 	for i := range candidates {
 		f := &candidates[i]
 		if best == nil {
 			best = f
 			continue
 		}
-		// Prefer MJPEG over other formats
-		if f.pixFmt == "mjpeg" && best.pixFmt != "mjpeg" {
+		// Prefer H264 > MJPEG > other formats
+		if formatPriority(f.pixFmt) > formatPriority(best.pixFmt) {
 			best = f
-		} else if f.pixFmt == best.pixFmt {
-			// Same format: prefer higher fps first, then higher resolution
+		} else if formatPriority(f.pixFmt) == formatPriority(best.pixFmt) {
+			// Same format priority: prefer higher fps first, then higher resolution
 			if f.fps > best.fps {
 				best = f
 			} else if f.fps == best.fps && f.width*f.height > best.width*best.height {
@@ -519,17 +535,27 @@ func probeDshowDevice(ffmpegPath, name string) *detectedCamera {
 		candidates = options
 	}
 
-	// Selection priority: MJPEG > others, then highest fps, then highest resolution
+	// Selection priority: H264 > MJPEG > others, then highest fps, then highest resolution
 	var best *optionInfo
+	formatPriority := func(pixFmt string) int {
+		switch pixFmt {
+		case "h264":
+			return 3
+		case "mjpeg":
+			return 2
+		default:
+			return 1
+		}
+	}
 	for i := range candidates {
 		o := &candidates[i]
 		if best == nil {
 			best = o
 			continue
 		}
-		if o.pixFmt == "mjpeg" && best.pixFmt != "mjpeg" {
+		if formatPriority(o.pixFmt) > formatPriority(best.pixFmt) {
 			best = o
-		} else if o.pixFmt == best.pixFmt {
+		} else if formatPriority(o.pixFmt) == formatPriority(best.pixFmt) {
 			if o.fps > best.fps {
 				best = o
 			} else if o.fps == best.fps && o.width*o.height > best.width*best.height {
@@ -554,6 +580,21 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 		return err
 	}
 
+	// Backup existing auto.toml with versioned suffix (.1, .2, .3, ...)
+	if _, err := os.Stat(outputPath); err == nil {
+		for i := 1; ; i++ {
+			backup := fmt.Sprintf("%s.%d", outputPath, i)
+			if _, err := os.Stat(backup); os.IsNotExist(err) {
+				if err := os.Rename(outputPath, backup); err != nil {
+					logging.ErrorLogger.Printf("Failed to backup auto.toml to %s: %v", backup, err)
+				} else {
+					logging.InfoLogger.Printf("Backed up existing auto.toml to %s", backup)
+				}
+				break
+			}
+		}
+	}
+
 	var buf bytes.Buffer
 
 	buf.WriteString("# Auto-detected camera configuration\n")
@@ -567,7 +608,7 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 		sectionName := fmt.Sprintf("camera%d", i+1)
 		buf.WriteString(fmt.Sprintf("[%s]\n", sectionName))
 		buf.WriteString(fmt.Sprintf("    description = \"%s (%s, %s)\"\n", cam.name, cam.pixFmt, cam.size))
-		buf.WriteString(fmt.Sprintf("    enabled = true\n"))
+		buf.WriteString("    enabled = true\n")
 
 		if cam.format == "dshow" {
 			buf.WriteString(fmt.Sprintf("    camera = 'video=%s'\n", cam.device))
@@ -580,7 +621,8 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 		buf.WriteString(fmt.Sprintf("    fps = %d\n", cam.fps))
 		buf.WriteString("\n")
 
-		if cam.pixFmt == "mjpeg" {
+		switch cam.pixFmt {
+		case "mjpeg":
 			// MJPEG: copy during recording, recode on trim
 			if cam.format == "dshow" {
 				buf.WriteString("    inputParameters = '-pixel_format mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
@@ -589,12 +631,12 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 			}
 			buf.WriteString("    outputParameters = '-vcodec copy -an'\n")
 			buf.WriteString("    recode = true\n")
-		} else if cam.pixFmt == "h264" {
+		case "h264":
 			// Camera outputs H.264 directly: copy during recording, no recode
 			buf.WriteString("    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'\n")
 			buf.WriteString("    outputParameters = '-c:v copy -an'\n")
 			buf.WriteString("    recode = false\n")
-		} else {
+		default:
 			// YUV or unknown: must encode during recording
 			if bestEncoder != nil {
 				buf.WriteString(fmt.Sprintf("    inputParameters = '%s'\n", bestEncoder.inputParameters))
@@ -608,11 +650,35 @@ func writeAutoConfig(outputPath string, cameras []detectedCamera, encoders []hwE
 					inputParams = "-input_format yuyv422 " + inputParams
 				}
 				buf.WriteString(fmt.Sprintf("    inputParameters = '%s'\n", inputParams))
-				buf.WriteString(fmt.Sprintf("    outputParameters = '-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -an'\n"))
+				buf.WriteString("    outputParameters = '-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p -an'\n")
 			}
 			buf.WriteString("    recode = false\n")
 		}
 		buf.WriteString("\n")
+	}
+
+	// If no local cameras were detected, add UDP stream templates
+	if len(cameras) == 0 {
+		buf.WriteString("# No local cameras detected.\n")
+		buf.WriteString("# Sample UDP stream configurations for cameras attached to other machines on the network.\n\n")
+		for i := 1; i <= 3; i++ {
+			buf.WriteString(fmt.Sprintf("[camera%d]\n", i))
+			buf.WriteString(fmt.Sprintf("    description = \"UDP Stream from Camera %d\"\n", i))
+			buf.WriteString("    enabled = false\n")
+			buf.WriteString(fmt.Sprintf("    camera = 'udp://239.255.0.1:900%d'\n", i))
+			buf.WriteString("    format = 'mpegts'\n")
+			buf.WriteString("    size = \"1920x1080\"\n")
+			buf.WriteString("    fps = 60\n")
+			buf.WriteString("\n")
+			buf.WriteString("    # Input parameters: none needed - reading from multicast UDP stream\n")
+			buf.WriteString("    inputParameters = ''\n")
+			buf.WriteString("\n")
+			buf.WriteString("    # Output parameters: copy H.264 stream directly (already encoded by sender)\n")
+			buf.WriteString("    outputParameters = '-c:v copy -an'\n")
+			buf.WriteString("\n")
+			buf.WriteString("    # No recoding needed - stream is already H.264\n")
+			buf.WriteString("    recode = false\n\n")
+		}
 	}
 
 	// Append detected encoders as reference
@@ -675,7 +741,7 @@ func buildSummary(cameras []detectedCamera, encoders []hwEncoder, outputPath str
 }
 
 // showAutoDetectResults shows the detection summary in a dialog
-func showAutoDetectResults(summary, outputPath string, window fyne.Window) {
+func showAutoDetectResults(summary, _ string, window fyne.Window) {
 	textArea := widget.NewMultiLineEntry()
 	textArea.SetText(summary)
 	textArea.Wrapping = fyne.TextWrapWord

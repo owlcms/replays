@@ -28,7 +28,7 @@ logFfmpeg = false
     
     # Input parameters for the recording
     # Put flags that must come before `-i <camera name>` here.
-    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
+    inputParameters = '-pixel_format mjpeg -rtbufsize 512M -thread_queue_size 4096'
     
     # Output parameters: copy MJPEG stream directly (no re-encoding during recording)
     # Put flags that must come after `-i <camera name>` here.
@@ -36,6 +36,26 @@ logFfmpeg = false
     
     # When trimming, re-encode to H.264 for browser playback
     recode = true
+
+
+[windows1b]
+    description = "USB Camera with H.264 output (copy, no recode)"
+    enabled = false
+    camera = 'USB H.264 Camera'
+    format = 'dshow'
+    size = "1920x1080"
+    fps = 30
+    
+    # Input parameters for the recording
+    # Put flags that must come before `-i <camera name>` here.
+    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
+    
+    # Output parameters: copy H.264 stream directly (camera outputs H.264)
+    # Put flags that must come after `-i <camera name>` here.
+    outputParameters = '-c:v copy -an'
+    
+    # No recoding needed - camera already outputs H.264
+    recode = false
 
 
 [windows2]
@@ -109,7 +129,7 @@ logFfmpeg = false
     
     # Input parameters for the recording
     # Put flags that must come before `-i <camera name>` here.
-    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
+    inputParameters = '-input_format mjpeg -rtbufsize 512M -thread_queue_size 4096'
 
     # Output parameters: copy MJPEG stream directly (no re-encoding during recording)
     # Put flags that must come after `-i <camera name>` here.
@@ -117,6 +137,26 @@ logFfmpeg = false
     
     # When trimming, re-encode to H.264 for browser playback
     recode = true
+
+
+[linux1b]
+    description = "USB Camera with H.264 output (copy, no recode)"
+    enabled = false
+    camera = '/dev/video0'
+    format = 'v4l2'
+    size = "1920x1080"
+    fps = 30
+    
+    # Input parameters for the recording
+    # Put flags that must come before `-i <camera name>` here.
+    inputParameters = '-rtbufsize 512M -thread_queue_size 4096'
+    
+    # Output parameters: copy H.264 stream directly (camera outputs H.264)
+    # Put flags that must come after `-i <camera name>` here.
+    outputParameters = '-c:v copy -an'
+    
+    # No recoding needed - camera already outputs H.264
+    recode = false
 
 
 [linux2]

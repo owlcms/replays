@@ -2,11 +2,6 @@
     "go.useLanguageServer": true,
     "go.toolsManagement.autoUpdate": true,
     "go.formatTool": "gofmt",
-    "go.buildTags": "windows",
-    "go.toolsEnvVars": {
-        "GOOS": "windows",
-        "GOARCH": "amd64"
-    },
     "[go]": {
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
