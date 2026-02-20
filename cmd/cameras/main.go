@@ -50,6 +50,7 @@ type cameraStream struct {
 	frame      string
 	bitrate    string
 	speed      string
+	lastStderr string
 	lastUpdate time.Time
 }
 
@@ -325,6 +326,12 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
+			lastErr := stream.getLastStderr()
+			if lastErr != "" {
+				logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v | last stderr: %s", stream.camera.Name, stream.udpDest, err, lastErr)
+			} else {
+				logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+			}
 			stream.setStopped(fmt.Sprintf("stopped: %v", err))
 			return
 		}
@@ -376,6 +383,12 @@ func monitorFFmpegStats(stream *cameraStream, stderr io.Reader) {
 			continue
 		}
 
+		stream.setLastStderr(line)
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "unable") || strings.Contains(lower, "invalid") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "device or resource busy") {
+			logging.ErrorLogger.Printf("ffmpeg stderr [%s]: %s", stream.camera.Name, line)
+		}
+
 		if strings.Contains(line, "frame=") || strings.Contains(line, "fps=") {
 			stream.updateStats(line)
 		}
@@ -406,6 +419,18 @@ func (s *cameraStream) setStopped(status string) {
 	s.lastUpdate = time.Now()
 }
 
+func (s *cameraStream) setLastStderr(line string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastStderr = line
+}
+
+func (s *cameraStream) getLastStderr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastStderr
+}
+
 func (s *cameraStream) updateStats(line string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -428,7 +453,21 @@ func (s *cameraStream) updateStats(line string) {
 	s.lastUpdate = time.Now()
 }
 
-func (s *cameraStream) snapshotRow() [8]string {
+func formatFPSValue(raw string) string {
+	if raw == "" || raw == "-" {
+		return raw
+	}
+	if !strings.Contains(raw, ".") {
+		return raw
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return raw
+	}
+	return fmt.Sprintf("%.2f", value)
+}
+
+func (s *cameraStream) snapshotRow() [9]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -437,40 +476,146 @@ func (s *cameraStream) snapshotRow() [8]string {
 		age = strconv.Itoa(int(time.Since(s.lastUpdate).Seconds())) + "s"
 	}
 
-	return [8]string{
+	return [9]string{
 		s.camera.Name,
 		s.camera.PixFmt,
 		s.camera.Size,
 		s.udpDest,
-		s.fps,
-		s.frame,
+		formatFPSValue(s.fps),
+		"Preview",
+		"Record 10s",
 		s.status,
 		age,
 	}
 }
 
+func parseResolution(size string) (int, int, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
+	height, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errW != nil || errH != nil || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func launchPreview(stream *cameraStream) error {
+	args := []string{"-fflags", "nobuffer", "-flags", "low_delay"}
+	if width, height, ok := parseResolution(stream.camera.Size); ok {
+		args = append(args, "-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
+	}
+	args = append(args, stream.udpDest)
+
+	cmd := exec.Command("ffplay", args...)
+	return cmd.Start()
+}
+
+func sanitizeFilePart(value string) string {
+	replacer := strings.NewReplacer(" ", "_", "/", "_", "\\", "_", ":", "_", ";", "_", "|", "_", "?", "_", "*", "_")
+	cleaned := replacer.Replace(strings.TrimSpace(value))
+	if cleaned == "" {
+		return "camera"
+	}
+	return cleaned
+}
+
+func buildClipPath(stream *cameraStream) string {
+	timestamp := time.Now().Format("20060102-150405")
+	cameraName := sanitizeFilePart(stream.camera.Name)
+	return fmt.Sprintf("/tmp/%s_%s.mp4", cameraName, timestamp)
+}
+
+func recordClip(stream *cameraStream) (string, error) {
+	outputPath := buildClipPath(stream)
+	args := []string{
+		"-y",
+		"-t", "10",
+		"-i", stream.udpDest,
+		"-c", "copy",
+		"-movflags", "+faststart",
+		outputPath,
+	}
+
+	cmd := exec.Command("ffmpeg", args...)
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return outputPath, nil
+}
+
 func runUI(streams []*cameraStream) {
 	myApp := app.New()
 	window := myApp.NewWindow("Camera Multicast Streams")
-	window.Resize(fyne.NewSize(1200, 460))
+	window.Resize(fyne.NewSize(1320, 460))
 
-	headers := []string{"Camera", "Format", "Size", "Multicast", "FPS", "Frame", "Status", "Last"}
+	headers := []string{"Camera", "Format", "Size", "Multicast", "FPS", "Preview", "Record", "Status", "Last"}
+	actionStatus := widget.NewLabel("Preview/Record: ready")
 	table := widget.NewTable(
 		func() (int, int) {
 			return len(streams) + 1, len(headers)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			label := widget.NewLabel("template")
+			button := widget.NewButton("Preview", nil)
+			button.Hide()
+			return container.NewMax(label, button)
 		},
 		func(id widget.TableCellID, obj fyne.CanvasObject) {
-			label := obj.(*widget.Label)
+			cell := obj.(*fyne.Container)
+			label := cell.Objects[0].(*widget.Label)
+			button := cell.Objects[1].(*widget.Button)
+
 			if id.Row == 0 {
+				button.Hide()
 				label.TextStyle = fyne.TextStyle{Bold: true}
+				label.Show()
 				label.SetText(headers[id.Col])
 				return
 			}
-			label.TextStyle = fyne.TextStyle{}
+
 			row := streams[id.Row-1].snapshotRow()
+			if id.Col == 5 {
+				label.Hide()
+				button.Show()
+				button.SetText("Preview")
+				stream := streams[id.Row-1]
+				button.OnTapped = func() {
+					if err := launchPreview(stream); err != nil {
+						actionStatus.SetText(fmt.Sprintf("Preview failed: %v", err))
+						logging.ErrorLogger.Printf("Failed to start ffplay preview for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+						return
+					}
+					actionStatus.SetText(fmt.Sprintf("Previewing: %s (%s)", stream.camera.Name, stream.camera.Size))
+				}
+				return
+			}
+
+			if id.Col == 6 {
+				label.Hide()
+				button.Show()
+				button.SetText("Record 10s")
+				stream := streams[id.Row-1]
+				button.OnTapped = func() {
+					actionStatus.SetText(fmt.Sprintf("Recording 10s: %s", stream.camera.Name))
+					go func(s *cameraStream) {
+						outputPath, err := recordClip(s)
+						if err != nil {
+							actionStatus.SetText(fmt.Sprintf("Record failed: %v", err))
+							logging.ErrorLogger.Printf("Failed to record clip for %s (%s): %v", s.camera.Name, s.udpDest, err)
+							return
+						}
+						actionStatus.SetText(fmt.Sprintf("Saved clip: %s", outputPath))
+					}(stream)
+				}
+				return
+			}
+
+			button.Hide()
+			label.Show()
+			label.TextStyle = fyne.TextStyle{}
 			label.SetText(row[id.Col])
 		},
 	)
@@ -480,9 +625,10 @@ func runUI(streams []*cameraStream) {
 	table.SetColumnWidth(2, 90)
 	table.SetColumnWidth(3, 250)
 	table.SetColumnWidth(4, 70)
-	table.SetColumnWidth(5, 70)
-	table.SetColumnWidth(6, 220)
-	table.SetColumnWidth(7, 60)
+	table.SetColumnWidth(5, 90)
+	table.SetColumnWidth(6, 110)
+	table.SetColumnWidth(7, 220)
+	table.SetColumnWidth(8, 60)
 
 	stopAll := func() {
 		for _, stream := range streams {
@@ -527,7 +673,10 @@ func runUI(streams []*cameraStream) {
 	})
 
 	content := container.NewBorder(
-		widget.NewLabel("Live ffmpeg stream stats (FPS from ffmpeg stderr progress lines)"),
+		container.NewVBox(
+			widget.NewLabel("Live ffmpeg stream stats (FPS from ffmpeg stderr progress lines)"),
+			actionStatus,
+		),
 		nil,
 		nil,
 		nil,
