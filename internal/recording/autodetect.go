@@ -533,6 +533,13 @@ func pickBestCameraMode(allModes []cameraMode) cameraMode {
 		candidates = allModes
 	}
 
+	if config.GetMjpeg720pOnly() {
+		filtered := filterMjpegToMax720p(candidates)
+		if len(filtered) > 0 {
+			candidates = filtered
+		}
+	}
+
 	best := candidates[0]
 	for _, mode := range candidates[1:] {
 		if modePreferredOver(mode, best) {
@@ -541,6 +548,17 @@ func pickBestCameraMode(allModes []cameraMode) cameraMode {
 	}
 
 	return best
+}
+
+func filterMjpegToMax720p(modes []cameraMode) []cameraMode {
+	var filtered []cameraMode
+	for _, mode := range modes {
+		if mode.pixFmt == "mjpeg" && (mode.width > 1280 || mode.height > 720) {
+			continue
+		}
+		filtered = append(filtered, mode)
+	}
+	return filtered
 }
 
 func modePreferredOver(candidate, current cameraMode) bool {

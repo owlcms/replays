@@ -88,21 +88,29 @@ jobs:
       with:
         go-version: '1.23'
 
+    - name: Install fyne-cross
+      run: |
+        go install github.com/fyne-io/fyne-cross@latest
+        echo "${HOME}/go/bin" >> $GITHUB_PATH
+
     - name: Build cameras for Linux amd64
       if: ${{ env.BUILD_LINUX == 'true' }}
       run: |
         mkdir -p artifacts
-        GOOS=linux GOARCH=amd64 go build -o artifacts/cameras_linux_amd64 ./cmd/cameras
+        fyne-cross linux -arch amd64 -app-id app.owlcms.cameras -icon Icon.png ./cmd/cameras
+        cp fyne-cross/bin/linux-amd64/cameras artifacts/cameras_linux_amd64
 
     - name: Build cameras for Linux arm64
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       run: |
-        GOOS=linux GOARCH=arm64 go build -o artifacts/cameras_linux_arm64 ./cmd/cameras
+        fyne-cross linux -arch arm64 -app-id app.owlcms.cameras -icon Icon.png ./cmd/cameras
+        cp fyne-cross/bin/linux-arm64/cameras artifacts/cameras_linux_arm64
 
     - name: Build cameras for Windows
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       run: |
-        GOOS=windows GOARCH=amd64 go build -o artifacts/cameras_windows.exe ./cmd/cameras
+        fyne-cross windows -arch amd64 -app-id app.owlcms.cameras -icon Icon.png ./cmd/cameras
+        cp fyne-cross/bin/windows-amd64/cameras.exe artifacts/cameras_windows.exe
 
     - name: Upload cameras artifacts
       uses: actions/upload-artifact@v4

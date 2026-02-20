@@ -51,6 +51,7 @@ var (
 	Fps           int
 	Recode        bool
 	LogFfmpeg     bool
+	Mjpeg720pOnly = IsLinuxARM()
 	CameraConfigs []CameraConfiguration
 	currentConfig *Config
 	ffmpegPath    string // Store the located ffmpeg path
@@ -366,6 +367,14 @@ func getPlatformName() string {
 	return runtime.GOOS
 }
 
+// IsLinuxARM reports whether the process is running on Linux ARM/ARM64.
+func IsLinuxARM() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	return runtime.GOARCH == "arm" || runtime.GOARCH == "arm64"
+}
+
 func UpdateConfigFile(configFile, owlcmsAddress string) error {
 	content, err := os.ReadFile(configFile)
 	if err != nil {
@@ -487,4 +496,9 @@ func GetFFmpegPath() string {
 // GetLogFfmpeg returns the logFfmpeg setting
 func GetLogFfmpeg() bool {
 	return LogFfmpeg
+}
+
+// GetMjpeg720pOnly returns whether MJPEG mode selection should avoid >720p.
+func GetMjpeg720pOnly() bool {
+	return Mjpeg720pOnly
 }

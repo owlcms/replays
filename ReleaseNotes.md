@@ -1,6 +1,6 @@
 **Change log**
 
-- 1.9.0 added a new command-line interface (cameras is the executable) to start a multicast UDP H.264 stream for each of the detected cameras
+- 1.9.0 added a new `cameras` (`cameras.exe` on windows) to start a multicast UDP H.264 stream for each of the detected cameras
   - use `-includeraw` to include the laptop built-in cameras during testing.
 - 1.9.0 Add Auto-detection of cameras: an auto.toml file is written that can be edited, and has priority over config.toml.
 
