@@ -30,6 +30,9 @@ import (
 var (
 	includeAll bool
 	startPort  int
+
+	previewMu   sync.Mutex
+	previewCmds []*exec.Cmd
 )
 
 const (
@@ -66,6 +69,11 @@ func main() {
 	flag.BoolVar(&includeAll, "all", false, "Include all cameras, including raw formats (typically integrated cameras)")
 	flag.IntVar(&startPort, "startport", 9001, "Starting port for multicast allocation")
 	flag.Parse()
+
+	// Create a job object so child processes die with us
+	if err := initJobObject(); err != nil {
+		fmt.Printf("Warning: Failed to create job object: %v\n", err)
+	}
 
 	// Initialize logging to current directory
 	if err := logging.InitWithFile(".", "cameras.log"); err != nil {
@@ -243,12 +251,12 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	switch cam.Format {
 	case "dshow":
 		args = append(args, "-f", "dshow")
-		// Add pixel format for input
+		// For dshow on Windows: compressed camera modes use -vcodec, raw modes use -pixel_format
 		switch cam.PixFmt {
 		case "mjpeg":
-			args = append(args, "-pixel_format", "mjpeg")
+			args = append(args, "-vcodec", "mjpeg")
 		case "h264":
-			// No special pixel format needed
+			// Do not force h264 input codec for dshow; device negotiation is more reliable without it.
 		default:
 			args = append(args, "-pixel_format", cam.PixFmt)
 		}
@@ -275,7 +283,7 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	// Build output arguments based on input format
 	switch cam.PixFmt {
 	case "h264":
-		// Already H.264 - just copy to MPEG-TS
+		// Camera already outputs H.264 — just remux, no re-encode needed.
 		args = append(args, "-c:v", "copy")
 
 	case "mjpeg":
@@ -320,6 +328,10 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 
 	if err := cmd.Start(); err != nil {
 		return nil, err
+	}
+
+	if err := assignToJobObject(cmd); err != nil {
+		logging.ErrorLogger.Printf("Failed to assign ffmpeg to job object: %v", err)
 	}
 
 	go monitorFFmpegStats(stream, stderr)
@@ -502,6 +514,56 @@ func parseResolution(size string) (int, int, bool) {
 	return width, height, true
 }
 
+func resolveFFplayPath() string {
+	ffmpegPath := config.GetFFmpegPath()
+	if ffmpegPath == "" {
+		if runtime.GOOS == "windows" {
+			return "ffplay.exe"
+		}
+		return "ffplay"
+	}
+
+	ffplayName := "ffplay"
+	if runtime.GOOS == "windows" {
+		ffplayName = "ffplay.exe"
+	}
+
+	candidate := filepath.Join(filepath.Dir(ffmpegPath), ffplayName)
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+
+	return ffplayName
+}
+
+func registerPreviewCmd(cmd *exec.Cmd) {
+	previewMu.Lock()
+	previewCmds = append(previewCmds, cmd)
+	previewMu.Unlock()
+}
+
+func unregisterPreviewCmd(cmd *exec.Cmd) {
+	previewMu.Lock()
+	defer previewMu.Unlock()
+
+	for i, existing := range previewCmds {
+		if existing == cmd {
+			previewCmds = append(previewCmds[:i], previewCmds[i+1:]...)
+			return
+		}
+	}
+}
+
+func stopAllPreviews() {
+	previewMu.Lock()
+	cmds := append([]*exec.Cmd(nil), previewCmds...)
+	previewMu.Unlock()
+
+	for _, cmd := range cmds {
+		stopProcess(cmd)
+	}
+}
+
 func launchPreview(stream *cameraStream) error {
 	args := []string{"-fflags", "nobuffer", "-flags", "low_delay"}
 	if width, height, ok := parseResolution(stream.camera.Size); ok {
@@ -509,8 +571,23 @@ func launchPreview(stream *cameraStream) error {
 	}
 	args = append(args, stream.udpDest)
 
-	cmd := exec.Command("ffplay", args...)
-	return cmd.Start()
+	ffplayPath := resolveFFplayPath()
+	cmd := recording.CreateHiddenCmd(ffplayPath, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	if err := assignToJobObject(cmd); err != nil {
+		logging.ErrorLogger.Printf("Failed to assign ffplay to job object: %v", err)
+	}
+
+	registerPreviewCmd(cmd)
+	go func() {
+		_ = cmd.Wait()
+		unregisterPreviewCmd(cmd)
+	}()
+
+	return nil
 }
 
 func sanitizeFilePart(value string) string {
@@ -631,6 +708,7 @@ func runUI(streams []*cameraStream) {
 	table.SetColumnWidth(8, 60)
 
 	stopAll := func() {
+		stopAllPreviews()
 		for _, stream := range streams {
 			if stream.cmd != nil && stream.cmd.Process != nil {
 				stopProcess(stream.cmd)

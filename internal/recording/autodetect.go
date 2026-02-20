@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -436,8 +437,12 @@ func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
 	}
 
 	var options []optionInfo
-	sizeRe := regexp.MustCompile(`s=(\d+)x(\d+)`)
-	fpsRe := regexp.MustCompile(`fps=(\d+)`)
+	// dshow -list_options lines have the form:
+	//   vcodec=h264  min s=1920x1080 fps=15 max s=1920x1080 fps=60.0002
+	// We want the MAX size and fps from each line.
+	maxSizeFpsRe := regexp.MustCompile(`max\s+s=(\d+)x(\d+)\s+fps=([0-9.]+)`)
+	// Fallback for lines without min/max (just a single s=... fps=...)
+	fallbackSizeFpsRe := regexp.MustCompile(`s=(\d+)x(\d+)\s+fps=([0-9.]+)`)
 
 	scanner := bufio.NewScanner(&out)
 	for scanner.Scan() {
@@ -470,19 +475,18 @@ func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
 			continue
 		}
 
-		sizeMatch := sizeRe.FindStringSubmatch(line)
-		fpsMatch := fpsRe.FindStringSubmatch(line)
-		if sizeMatch == nil {
+		// Try to match the "max" portion first; fall back to first s=...fps=...
+		m := maxSizeFpsRe.FindStringSubmatch(line)
+		if m == nil {
+			m = fallbackSizeFpsRe.FindStringSubmatch(line)
+		}
+		if m == nil {
 			continue
 		}
 
-		w := atoi(sizeMatch[1])
-		h := atoi(sizeMatch[2])
-		fps := 30
-		if fpsMatch != nil {
-			fps = atoi(fpsMatch[1])
-		}
-
+		w := atoi(m[1])
+		h := atoi(m[2])
+		fps := parseFps(m[3])
 		options = append(options, optionInfo{pixFmt: pixFmt, width: w, height: h, fps: fps})
 	}
 
@@ -813,4 +817,14 @@ func atoi(s string) int {
 		}
 	}
 	return n
+}
+
+// parseFps parses a possibly-decimal fps string (e.g. "60.0002", "29.97")
+// and returns the nearest integer, rounding to handle NTSC-style fractional values.
+func parseFps(s string) int {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return atoi(s)
+	}
+	return int(f + 0.5)
 }
