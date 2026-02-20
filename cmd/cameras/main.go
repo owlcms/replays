@@ -23,6 +23,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/jobutil"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/recording"
 )
@@ -71,7 +72,7 @@ func main() {
 	flag.Parse()
 
 	// Create a job object so child processes die with us
-	if err := initJobObject(); err != nil {
+	if err := jobutil.Init(); err != nil {
 		fmt.Printf("Warning: Failed to create job object: %v\n", err)
 	}
 
@@ -330,7 +331,7 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		return nil, err
 	}
 
-	if err := assignToJobObject(cmd); err != nil {
+	if err := jobutil.Assign(cmd); err != nil {
 		logging.ErrorLogger.Printf("Failed to assign ffmpeg to job object: %v", err)
 	}
 
@@ -577,7 +578,7 @@ func launchPreview(stream *cameraStream) error {
 		return err
 	}
 
-	if err := assignToJobObject(cmd); err != nil {
+	if err := jobutil.Assign(cmd); err != nil {
 		logging.ErrorLogger.Printf("Failed to assign ffplay to job object: %v", err)
 	}
 
