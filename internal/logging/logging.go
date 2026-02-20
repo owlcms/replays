@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 var (
@@ -32,6 +31,11 @@ func SetVerbose(verbose bool) {
 
 // Init initializes the loggers
 func Init(logDirectory string) error {
+	return InitWithFile(logDirectory, "replays.log")
+}
+
+// InitWithFile initializes the loggers with a custom log file name
+func InitWithFile(logDirectory, logFileName string) error {
 	logDir = logDirectory
 
 	// Create logs directory if it doesn't exist
@@ -42,23 +46,21 @@ func Init(logDirectory string) error {
 
 	// Open log file with O_SYNC to ensure no buffering
 	var err error
-	logFile, err = os.OpenFile(filepath.Join(logDir, "replays.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0666)
+	logFile, err = os.OpenFile(filepath.Join(logDir, logFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0666)
 	if err != nil {
 		return err
 	}
 
 	// Initialize writers based on platform
 	var infoWriter, warnWriter, errorWriter io.Writer
-	if runtime.GOOS == "windows" {
-		// Windows: write to file only because of console behavior
-		infoWriter = io.MultiWriter(logFile)
-		warnWriter = io.MultiWriter(logFile)
-		errorWriter = io.MultiWriter(logFile)
-	} else {
-		// Linux/WSL: write to both console and file
+	if hasConsole() {
 		infoWriter = io.MultiWriter(os.Stdout, logFile)
 		warnWriter = io.MultiWriter(os.Stdout, logFile)
 		errorWriter = io.MultiWriter(os.Stderr, logFile)
+	} else {
+		infoWriter = logFile
+		warnWriter = logFile
+		errorWriter = logFile
 	}
 
 	// Initialize loggers with timestamps and source file info
@@ -68,6 +70,25 @@ func Init(logDirectory string) error {
 	ErrorLogger = log.New(errorWriter, "ERROR: ", flags)
 
 	return nil
+}
+
+func hasConsole() bool {
+	stdoutHasConsole := fileHasConsole(os.Stdout)
+	stderrHasConsole := fileHasConsole(os.Stderr)
+	return stdoutHasConsole || stderrHasConsole
+}
+
+func fileHasConsole(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+
+	return (stat.Mode() & os.ModeCharDevice) != 0
 }
 
 // Close closes the log file

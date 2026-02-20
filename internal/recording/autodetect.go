@@ -36,6 +36,13 @@ type HwEncoder struct {
 	OutputParameters string
 }
 
+type cameraMode struct {
+	pixFmt string
+	width  int
+	height int
+	fps    int
+}
+
 // DetectAndWriteConfig probes cameras and GPU encoders, then writes auto.toml
 func DetectAndWriteConfig(window fyne.Window) {
 	logging.InfoLogger.Println("Starting hardware auto-detection...")
@@ -356,61 +363,12 @@ func probeV4L2Device(name, device string) *DetectedCamera {
 		return nil
 	}
 
-	// For replays: cap at 1080p, require decent fps, prefer MJPEG
-	const maxWidth = 1920
-	const maxHeight = 1080
-	const minFps = 24
-
-	// Filter: only formats at or below 1080p with acceptable fps
-	var candidates []formatInfo
+	var modes []cameraMode
 	for _, f := range formats {
-		if f.width <= maxWidth && f.height <= maxHeight && f.fps >= minFps {
-			candidates = append(candidates, f)
-		}
-	}
-	// If no candidates meet the criteria, relax fps requirement but keep resolution cap
-	if len(candidates) == 0 {
-		for _, f := range formats {
-			if f.width <= maxWidth && f.height <= maxHeight {
-				candidates = append(candidates, f)
-			}
-		}
-	}
-	// If still nothing (all formats exceed 1080p), use all formats
-	if len(candidates) == 0 {
-		candidates = formats
+		modes = append(modes, cameraMode{pixFmt: f.pixFmt, width: f.width, height: f.height, fps: f.fps})
 	}
 
-	// Selection priority: H264 > MJPEG > others, then highest fps, then highest resolution
-	var best *formatInfo
-	formatPriority := func(pixFmt string) int {
-		switch pixFmt {
-		case "h264":
-			return 3
-		case "mjpeg":
-			return 2
-		default:
-			return 1
-		}
-	}
-	for i := range candidates {
-		f := &candidates[i]
-		if best == nil {
-			best = f
-			continue
-		}
-		// Prefer H264 > MJPEG > other formats
-		if formatPriority(f.pixFmt) > formatPriority(best.pixFmt) {
-			best = f
-		} else if formatPriority(f.pixFmt) == formatPriority(best.pixFmt) {
-			// Same format priority: prefer higher fps first, then higher resolution
-			if f.fps > best.fps {
-				best = f
-			} else if f.fps == best.fps && f.width*f.height > best.width*best.height {
-				best = f
-			}
-		}
-	}
+	best := pickBestCameraMode(modes)
 
 	return &DetectedCamera{
 		Name:   name,
@@ -540,57 +498,12 @@ func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
 		}
 	}
 
-	// For replays: cap at 1080p, require decent fps, prefer MJPEG
-	const maxW = 1920
-	const maxH = 1080
-	const minFps = 24
-
-	// Filter: only options at or below 1080p with acceptable fps
-	var candidates []optionInfo
+	var modes []cameraMode
 	for _, o := range options {
-		if o.width <= maxW && o.height <= maxH && o.fps >= minFps {
-			candidates = append(candidates, o)
-		}
-	}
-	if len(candidates) == 0 {
-		for _, o := range options {
-			if o.width <= maxW && o.height <= maxH {
-				candidates = append(candidates, o)
-			}
-		}
-	}
-	if len(candidates) == 0 {
-		candidates = options
+		modes = append(modes, cameraMode{pixFmt: o.pixFmt, width: o.width, height: o.height, fps: o.fps})
 	}
 
-	// Selection priority: H264 > MJPEG > others, then highest fps, then highest resolution
-	var best *optionInfo
-	formatPriority := func(pixFmt string) int {
-		switch pixFmt {
-		case "h264":
-			return 3
-		case "mjpeg":
-			return 2
-		default:
-			return 1
-		}
-	}
-	for i := range candidates {
-		o := &candidates[i]
-		if best == nil {
-			best = o
-			continue
-		}
-		if formatPriority(o.pixFmt) > formatPriority(best.pixFmt) {
-			best = o
-		} else if formatPriority(o.pixFmt) == formatPriority(best.pixFmt) {
-			if o.fps > best.fps {
-				best = o
-			} else if o.fps == best.fps && o.width*o.height > best.width*best.height {
-				best = o
-			}
-		}
-	}
+	best := pickBestCameraMode(modes)
 
 	return &DetectedCamera{
 		Name:   name,
@@ -599,6 +512,85 @@ func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
 		PixFmt: best.pixFmt,
 		Size:   fmt.Sprintf("%dx%d", best.width, best.height),
 		Fps:    best.fps,
+	}
+}
+
+func pickBestCameraMode(allModes []cameraMode) cameraMode {
+	if len(allModes) == 0 {
+		return cameraMode{pixFmt: "unknown", width: 1280, height: 720, fps: 30}
+	}
+
+	const maxWidth = 1920
+	const maxHeight = 1080
+
+	var candidates []cameraMode
+	for _, mode := range allModes {
+		if mode.width <= maxWidth && mode.height <= maxHeight {
+			candidates = append(candidates, mode)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = allModes
+	}
+
+	best := candidates[0]
+	for _, mode := range candidates[1:] {
+		if modePreferredOver(mode, best) {
+			best = mode
+		}
+	}
+
+	return best
+}
+
+func modePreferredOver(candidate, current cameraMode) bool {
+	candidateFormat := modeFormatPriority(candidate.pixFmt)
+	currentFormat := modeFormatPriority(current.pixFmt)
+	if candidateFormat != currentFormat {
+		return candidateFormat > currentFormat
+	}
+
+	candidateProfile := modeProfilePriority(candidate)
+	currentProfile := modeProfilePriority(current)
+	if candidateProfile != currentProfile {
+		return candidateProfile > currentProfile
+	}
+
+	if candidate.fps != current.fps {
+		return candidate.fps > current.fps
+	}
+
+	candidatePixels := candidate.width * candidate.height
+	currentPixels := current.width * current.height
+	return candidatePixels > currentPixels
+}
+
+func modeFormatPriority(pixFmt string) int {
+	switch pixFmt {
+	case "h264":
+		return 3
+	case "mjpeg":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func modeProfilePriority(mode cameraMode) int {
+	isFullHD := mode.width == 1920 && mode.height == 1080
+	isHD := mode.width == 1280 && mode.height == 720
+
+	switch {
+	case isFullHD && mode.fps >= 59:
+		return 4
+	case isHD && mode.fps >= 59:
+		return 3
+	case isFullHD && mode.fps >= 29:
+		return 2
+	case isHD && mode.fps >= 29:
+		return 1
+	default:
+		return 0
 	}
 }
 
