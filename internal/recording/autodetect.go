@@ -45,7 +45,10 @@ type cameraMode struct {
 	fps    int
 }
 
-// DetectAndWriteConfig probes cameras and GPU encoders, then writes auto.toml
+// DetectAndWriteConfig probes cameras and GPU encoders, then writes auto.toml.
+// It loads cameras.toml configuration so auto.toml benefits from the same
+// intelligent encoder definitions, format priorities, and mode priorities
+// used by the cameras program.
 func DetectAndWriteConfig(window fyne.Window) {
 	logging.InfoLogger.Println("Starting hardware auto-detection...")
 
@@ -56,14 +59,20 @@ func DetectAndWriteConfig(window fyne.Window) {
 	go func() {
 		defer progressDialog.Hide()
 
-		// Step 1: Detect available H.264 hardware encoders
+		// Load cameras.toml so we use config-driven encoder & priority logic
+		cameraCfg, cfgErr := config.LoadCamerasConfig()
+		if cfgErr != nil {
+			logging.WarningLogger.Printf("Could not load cameras.toml, using legacy defaults: %v", cfgErr)
+		}
+
+		// Step 1: Detect available H.264 hardware encoders (config-driven when available)
 		progressLabel.SetText("Detecting hardware encoders...")
-		encoders := DetectEncoders()
+		encoders := DetectEncodersWithConfig(cameraCfg)
 		logging.InfoLogger.Printf("Detected %d hardware encoders", len(encoders))
 
-		// Step 2: Detect cameras
+		// Step 2: Detect cameras (using config-driven mode priorities)
 		progressLabel.SetText("Detecting cameras...")
-		cameras := DetectCameras()
+		cameras := DetectCamerasWithConfig(cameraCfg)
 		logging.InfoLogger.Printf("Detected %d cameras", len(cameras))
 
 		// Step 3: Write auto.toml (even with 0 cameras, to show detected encoders)
@@ -75,7 +84,7 @@ func DetectAndWriteConfig(window fyne.Window) {
 		} else {
 			outputPath = filepath.Join(config.GetInstallDir(), "auto.toml")
 		}
-		err := writeAutoConfig(outputPath, cameras, encoders)
+		err := writeAutoConfig(outputPath, cameras, encoders, cameraCfg)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to write auto.toml: %v", err)
 			dialog.ShowError(fmt.Errorf("failed to write auto.toml: %v", err), window)
@@ -168,31 +177,31 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 	if available["h264_nvenc"] {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_nvenc", Description: "NVIDIA GPU",
-			InputParameters: "-rtbufsize 512M -thread_queue_size 4096",
+			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
 			OutputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M",
 		})
 	}
 	if available["h264_amf"] {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_amf", Description: "AMD GPU (AMF)",
-			InputParameters: "-rtbufsize 512M -thread_queue_size 4096",
+			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
 			OutputParameters: "-c:v h264_amf -rc cbr -b:v 8M",
 		})
 	}
 	if available["h264_vaapi"] && runtime.GOOS == "linux" {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_vaapi", Description: "VAAPI (AMD/Intel on Linux)",
-			InputParameters: "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
+			InputParameters:  "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
 			OutputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M",
-			TestInit: "-init_hw_device vaapi=va:/dev/dri/renderD128",
+			TestInit:         "-init_hw_device vaapi=va:/dev/dri/renderD128",
 		})
 	}
 	if available["h264_qsv"] {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_qsv", Description: "Intel GPU (QSV)",
-			InputParameters: "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
+			InputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
 			OutputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M",
-			TestInit: "-init_hw_device qsv=hw -filter_hw_device hw",
+			TestInit:         "-init_hw_device qsv=hw -filter_hw_device hw",
 		})
 	}
 	return candidates
@@ -229,20 +238,27 @@ func testEncoderWithInit(ffmpegPath string, enc HwEncoder) bool {
 	return true
 }
 
-// detectCameras detects available camera devices and their capabilities
+// DetectCameras detects available camera devices and their capabilities.
+// It uses legacy hardcoded priorities for mode selection.
 func DetectCameras() []DetectedCamera {
+	return DetectCamerasWithConfig(nil)
+}
+
+// DetectCamerasWithConfig detects cameras using config-driven mode priorities
+// when cfg is non-nil; falls back to legacy hardcoded priorities otherwise.
+func DetectCamerasWithConfig(cfg *config.CamerasConfig) []DetectedCamera {
 	switch runtime.GOOS {
 	case "linux":
-		return detectCamerasLinux()
+		return detectCamerasLinux(cfg)
 	case "windows":
-		return detectCamerasWindows()
+		return detectCamerasWindows(cfg)
 	default:
 		return nil
 	}
 }
 
 // detectCamerasLinux uses v4l2-ctl to detect cameras and their formats
-func detectCamerasLinux() []DetectedCamera {
+func detectCamerasLinux(cfg *config.CamerasConfig) []DetectedCamera {
 	// First get the device list
 	cmd := CreateHiddenCmd("v4l2-ctl", "--list-devices")
 	var out bytes.Buffer
@@ -284,7 +300,7 @@ func detectCamerasLinux() []DetectedCamera {
 
 	var cameras []DetectedCamera
 	for _, dev := range devices {
-		cam := probeV4L2Device(dev.name, dev.device)
+		cam := probeV4L2Device(dev.name, dev.device, cfg)
 		if cam != nil {
 			cameras = append(cameras, *cam)
 		}
@@ -293,7 +309,7 @@ func detectCamerasLinux() []DetectedCamera {
 }
 
 // probeV4L2Device probes a single v4l2 device for its best format
-func probeV4L2Device(name, device string) *DetectedCamera {
+func probeV4L2Device(name, device string, cfg *config.CamerasConfig) *DetectedCamera {
 	cmd := CreateHiddenCmd("v4l2-ctl", "-d", device, "--list-formats-ext")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -402,7 +418,7 @@ func probeV4L2Device(name, device string) *DetectedCamera {
 		modes = append(modes, cameraMode{pixFmt: f.pixFmt, width: f.width, height: f.height, fps: f.fps})
 	}
 
-	best := pickBestCameraMode(modes)
+	best := PickBestCameraModeWithConfig(modes, cfg)
 
 	return &DetectedCamera{
 		Name:   name,
@@ -415,7 +431,7 @@ func probeV4L2Device(name, device string) *DetectedCamera {
 }
 
 // detectCamerasWindows uses ffmpeg dshow to detect cameras
-func detectCamerasWindows() []DetectedCamera {
+func detectCamerasWindows(cfg *config.CamerasConfig) []DetectedCamera {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
@@ -443,7 +459,7 @@ func detectCamerasWindows() []DetectedCamera {
 
 	var cameras []DetectedCamera
 	for _, name := range cameraNames {
-		cam := probeDshowDevice(path, name)
+		cam := probeDshowDevice(path, name, cfg)
 		if cam != nil {
 			cameras = append(cameras, *cam)
 		}
@@ -452,7 +468,7 @@ func detectCamerasWindows() []DetectedCamera {
 }
 
 // probeDshowDevice probes a single dshow device for its capabilities
-func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
+func probeDshowDevice(ffmpegPath, name string, cfg *config.CamerasConfig) *DetectedCamera {
 	cmd := CreateHiddenCmd(ffmpegPath, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", fmt.Sprintf("video=%s", name))
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -540,7 +556,7 @@ func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
 		modes = append(modes, cameraMode{pixFmt: o.pixFmt, width: o.width, height: o.height, fps: o.fps})
 	}
 
-	best := pickBestCameraMode(modes)
+	best := PickBestCameraModeWithConfig(modes, cfg)
 
 	return &DetectedCamera{
 		Name:   name,
@@ -550,10 +566,6 @@ func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
 		Size:   fmt.Sprintf("%dx%d", best.width, best.height),
 		Fps:    best.fps,
 	}
-}
-
-func pickBestCameraMode(allModes []cameraMode) cameraMode {
-	return PickBestCameraModeWithConfig(allModes, nil)
 }
 
 // PickBestCameraModeWithConfig selects the best camera mode using config-driven priorities.
@@ -666,8 +678,10 @@ func modeProfilePriority(mode cameraMode) int {
 	}
 }
 
-// writeAutoConfig generates auto.toml from detected hardware
-func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder) error {
+// writeAutoConfig generates auto.toml from detected hardware.
+// When cfg is non-nil, encoder output parameters and format logic come from
+// the cameras.toml configuration; otherwise legacy hardcoded values are used.
+func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder, cfg *config.CamerasConfig) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return err
 	}
@@ -695,6 +709,12 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 
 	// Pick the best hardware encoder (prefer GPU over software)
 	bestEncoder := PickBestEncoder(encoders)
+
+	// Resolve the software fallback string from config or hardcoded default
+	softwareFallback := "-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p"
+	if cfg != nil && cfg.Software.OutputParameters != "" {
+		softwareFallback = cfg.Software.OutputParameters
+	}
 
 	for i, cam := range cameras {
 		sectionName := fmt.Sprintf("camera%d", i+1)
@@ -752,8 +772,8 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 			if bestEncoder != nil {
 				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", bestEncoder.OutputParameters, fpsParams))
 			} else {
-				// Software fallback
-				buf.WriteString(fmt.Sprintf("    outputParameters = '-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p %s'\n", fpsParams))
+				// Software fallback (from cameras.toml or hardcoded default)
+				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", softwareFallback, fpsParams))
 			}
 			buf.WriteString("    recode = false\n")
 		}
