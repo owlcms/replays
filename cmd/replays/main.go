@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
+	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/downloadutils"
 	"github.com/owlcms/replays/internal/httpServer"
@@ -27,6 +28,81 @@ import (
 )
 
 var titleLabel *widget.Label
+
+func setAppIcon(myApp fyne.App) {
+	if assets.IconResource != nil && len(assets.IconResource.Content()) > 0 {
+		myApp.SetIcon(assets.IconResource)
+		return
+	}
+
+	iconCandidates := make([]string, 0, 2)
+
+	if exePath, err := os.Executable(); err == nil {
+		iconCandidates = append(iconCandidates, filepath.Join(filepath.Dir(exePath), "Icon.png"))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		iconCandidates = append(iconCandidates, filepath.Join(wd, "Icon.png"))
+	}
+
+	for _, iconPath := range iconCandidates {
+		res, err := fyne.LoadResourceFromPath(iconPath)
+		if err == nil {
+			myApp.SetIcon(res)
+			return
+		}
+	}
+}
+
+func maybeExtractConfigAndExit() bool {
+	var extract bool
+	for _, arg := range os.Args[1:] {
+		if arg == "--extractConfig" {
+			extract = true
+			break
+		}
+	}
+	if !extract {
+		return false
+	}
+
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		if arg == "--configDir" && i+1 < len(os.Args) {
+			config.ConfigDir = os.Args[i+1]
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--configDir=") {
+			config.ConfigDir = strings.TrimPrefix(arg, "--configDir=")
+		}
+	}
+
+	if config.ConfigDir != "" {
+		if absConfigDir, err := filepath.Abs(config.ConfigDir); err == nil {
+			config.ConfigDir = absConfigDir
+		}
+	}
+
+	configPath := filepath.Join(config.GetInstallDir(), "config.toml")
+	if err := config.ExtractDefaultConfig(configPath); err != nil {
+		fmt.Printf("Failed to extract config.toml: %v\n", err)
+		os.Exit(1)
+	}
+
+	multicastPath := filepath.Join(config.GetInstallDir(), "multicast.toml")
+	if err := config.ExtractDefaultMulticastConfig(multicastPath); err != nil {
+		fmt.Printf("Failed to extract multicast.toml: %v\n", err)
+		os.Exit(1)
+	}
+
+	if p := config.ExtractDefaultCamerasConfig(); p == "" {
+		fmt.Println("Failed to extract camera config files")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Extracted config files in: %s\n", config.GetInstallDir())
+	return true
+}
 
 // shutdown gracefully shuts down all services
 func shutdown() {
@@ -346,19 +422,47 @@ func toggleMulticast(cfg *config.Config, window fyne.Window) {
 
 // showMulticastConfig shows a dialog to configure the multicast IP and port mapping.
 func showMulticastConfig(cfg *config.Config, window fyne.Window) {
-	m := &cfg.Multicast
+	m := cfg.Multicast
+	portToText := func(port int) string {
+		if port <= 0 {
+			return ""
+		}
+		return strconv.Itoa(port)
+	}
+	parseOptionalPort := func(name, text string) (int, error) {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return 0, nil
+		}
+		port, err := strconv.Atoi(trimmed)
+		if err != nil || port < 1 || port > 65535 {
+			return 0, fmt.Errorf("%s must be empty or a number between 1 and 65535", name)
+		}
+		return port, nil
+	}
+
+	multicastPath := filepath.Join(config.GetInstallDir(), "multicast.toml")
+	if err := config.ExtractDefaultMulticastConfig(multicastPath); err == nil {
+		if loaded, err := config.LoadMulticastConfig(multicastPath); err == nil {
+			m.IP = loaded.IP
+			m.Camera1Port = loaded.Camera1Port
+			m.Camera2Port = loaded.Camera2Port
+			m.Camera3Port = loaded.Camera3Port
+			m.Camera4Port = loaded.Camera4Port
+		}
+	}
 
 	ipEntry := widget.NewEntry()
 	ipEntry.SetText(m.IP)
 
 	port1Entry := widget.NewEntry()
-	port1Entry.SetText(strconv.Itoa(m.Camera1Port))
+	port1Entry.SetText(portToText(m.Camera1Port))
 	port2Entry := widget.NewEntry()
-	port2Entry.SetText(strconv.Itoa(m.Camera2Port))
+	port2Entry.SetText(portToText(m.Camera2Port))
 	port3Entry := widget.NewEntry()
-	port3Entry.SetText(strconv.Itoa(m.Camera3Port))
+	port3Entry.SetText(portToText(m.Camera3Port))
 	port4Entry := widget.NewEntry()
-	port4Entry.SetText(strconv.Itoa(m.Camera4Port))
+	port4Entry.SetText(portToText(m.Camera4Port))
 
 	form := widget.NewForm(
 		widget.NewFormItem("Multicast IP", ipEntry),
@@ -368,7 +472,7 @@ func showMulticastConfig(cfg *config.Config, window fyne.Window) {
 		widget.NewFormItem("Camera 4 port", port4Entry),
 	)
 
-	hint := widget.NewLabel("Set port to 0 to disable a camera slot.")
+	hint := widget.NewLabel("Clear to turn off. If a port is empty, the corresponding multicast camera is turned off.")
 	hint.Wrapping = fyne.TextWrapWord
 	content := container.NewVBox(form, hint)
 
@@ -382,10 +486,26 @@ func showMulticastConfig(cfg *config.Config, window fyne.Window) {
 			if ip == "" {
 				ip = "239.255.0.1"
 			}
-			p1, _ := strconv.Atoi(strings.TrimSpace(port1Entry.Text))
-			p2, _ := strconv.Atoi(strings.TrimSpace(port2Entry.Text))
-			p3, _ := strconv.Atoi(strings.TrimSpace(port3Entry.Text))
-			p4, _ := strconv.Atoi(strings.TrimSpace(port4Entry.Text))
+			p1, err := parseOptionalPort("Camera 1 port", port1Entry.Text)
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+			p2, err := parseOptionalPort("Camera 2 port", port2Entry.Text)
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+			p3, err := parseOptionalPort("Camera 3 port", port3Entry.Text)
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
+			p4, err := parseOptionalPort("Camera 4 port", port4Entry.Text)
+			if err != nil {
+				dialog.ShowError(err, window)
+				return
+			}
 
 			m.IP = ip
 			m.Camera1Port = p1
@@ -393,13 +513,18 @@ func showMulticastConfig(cfg *config.Config, window fyne.Window) {
 			m.Camera3Port = p3
 			m.Camera4Port = p4
 
-			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-			if err := config.UpdateMulticastConfig(configFilePath, *m); err != nil {
+			cfg.Multicast.IP = m.IP
+			cfg.Multicast.Camera1Port = m.Camera1Port
+			cfg.Multicast.Camera2Port = m.Camera2Port
+			cfg.Multicast.Camera3Port = m.Camera3Port
+			cfg.Multicast.Camera4Port = m.Camera4Port
+
+			if err := config.UpdateMulticastMappingFile(multicastPath, m); err != nil {
 				dialog.ShowError(fmt.Errorf("failed to save multicast config: %w", err), window)
 				return
 			}
 
-			successDialog := dialog.NewInformation("Success", "Multicast mapping updated. The application will now exit. Please restart it.", window)
+			successDialog := dialog.NewInformation("Success", "Multicast mapping updated in multicast.toml. The application will now exit. Please restart it.", window)
 			successDialog.SetOnClosed(func() {
 				window.Close()
 				os.Exit(0)
@@ -419,11 +544,16 @@ func multicastToggleLabel(enabled bool) string {
 }
 
 func main() {
+	if maybeExtractConfigAndExit() {
+		return
+	}
+
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
 
 	// Create the Fyne app and window first
 	myApp := app.New()
+	setAppIcon(myApp)
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
 	// Process command-line flags and load configuration

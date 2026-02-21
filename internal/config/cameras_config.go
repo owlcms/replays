@@ -13,8 +13,13 @@ import (
 	"github.com/owlcms/replays/internal/logging"
 )
 
+//go:embed cameras_config.toml
+var defaultSharedCamerasConfig []byte
+
 //go:embed cameras.toml
-var defaultCamerasConfig []byte
+var defaultInstanceCamerasConfig []byte
+
+var camerasConfigSourcePath string
 
 // CamerasConfig is the top-level configuration for the cameras program.
 type CamerasConfig struct {
@@ -67,67 +72,183 @@ type ModePriorityEntry struct {
 	MinFps int
 }
 
-// LoadCamerasConfig loads the cameras configuration.
-// It looks for cameras.toml next to the executable first, then in the
-// shared install directory, and falls back to the embedded default.
+// LoadCamerasConfig loads the cameras configuration by merging:
+// 1) Shared settings (cameras_config.toml / camera_configs.toml), then
+// 2) Instance settings (cameras.toml)
+//
+// This allows shared encoder/OS behavior across applications while keeping
+// per-instance runtime settings (like multicast start port) separate.
 func LoadCamerasConfig() (*CamerasConfig, error) {
-	// Search order:
-	// 1. cameras.toml next to the executable (or cwd for dev)
-	// 2. <installDir>/cameras.toml
-	// 3. Embedded default
-	searchPaths := []string{}
-
-	// Next to executable
-	if exe, err := os.Executable(); err == nil {
-		searchPaths = append(searchPaths, filepath.Join(filepath.Dir(exe), "cameras.toml"))
-	}
-	// Current working directory (for development)
-	if cwd, err := os.Getwd(); err == nil {
-		searchPaths = append(searchPaths, filepath.Join(cwd, "cameras.toml"))
-	}
-	// Install directory
-	searchPaths = append(searchPaths, filepath.Join(GetInstallDir(), "cameras.toml"))
-
 	var cfg CamerasConfig
 
-	for _, path := range searchPaths {
-		if _, err := os.Stat(path); err == nil {
-			logging.InfoLogger.Printf("Loading cameras config from %s", path)
-			if _, err := toml.DecodeFile(path, &cfg); err != nil {
-				return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+	baseDirs := []string{}
+	if exe, err := os.Executable(); err == nil {
+		baseDirs = append(baseDirs, filepath.Dir(exe))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		baseDirs = append(baseDirs, cwd)
+	}
+	baseDirs = append(baseDirs, GetInstallDir())
+
+	sharedFilenames := []string{"cameras_config.toml", "camera_configs.toml"}
+	instanceFilename := "cameras.toml"
+
+	sharedLoaded := false
+	for _, dir := range baseDirs {
+		for _, name := range sharedFilenames {
+			path := filepath.Join(dir, name)
+			if _, err := os.Stat(path); err == nil {
+				logging.InfoLogger.Printf("Loading shared cameras config from %s", path)
+				if _, err := toml.DecodeFile(path, &cfg); err != nil {
+					return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+				}
+				sharedLoaded = true
+				break
 			}
-			cfg.filterEncodersForPlatform()
-			cfg.applyDefaults()
-			return &cfg, nil
+		}
+		if sharedLoaded {
+			break
 		}
 	}
 
-	// Fall back to embedded default
-	logging.InfoLogger.Println("No cameras.toml found, using embedded defaults")
-	if _, err := toml.Decode(string(defaultCamerasConfig), &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse embedded cameras.toml: %w", err)
+	if !sharedLoaded {
+		logging.InfoLogger.Println("No cameras_config.toml found, using embedded shared defaults")
+		if _, err := toml.Decode(string(defaultSharedCamerasConfig), &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse embedded cameras_config.toml: %w", err)
+		}
 	}
+
+	camerasConfigSourcePath = ""
+	for _, dir := range baseDirs {
+		path := filepath.Join(dir, instanceFilename)
+		if _, err := os.Stat(path); err == nil {
+			logging.InfoLogger.Printf("Loading cameras instance config from %s", path)
+			if _, err := toml.DecodeFile(path, &cfg); err != nil {
+				return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+			}
+			camerasConfigSourcePath = path
+			break
+		}
+	}
+
+	if camerasConfigSourcePath == "" {
+		logging.InfoLogger.Println("No cameras.toml found, using embedded instance defaults")
+		if _, err := toml.Decode(string(defaultInstanceCamerasConfig), &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse embedded cameras.toml: %w", err)
+		}
+	}
+
 	cfg.filterEncodersForPlatform()
 	cfg.applyDefaults()
 	return &cfg, nil
 }
 
-// ExtractDefaultCamerasConfig writes the embedded cameras.toml to the
-// install directory if it doesn't already exist.
+// GetCamerasConfigSourcePath returns the file path used by LoadCamerasConfig.
+// Empty string means defaults were loaded from embedded config.
+func GetCamerasConfigSourcePath() string {
+	return camerasConfigSourcePath
+}
+
+// SaveCamerasStartPort updates multicast.startPort in the loaded cameras.toml file.
+func SaveCamerasStartPort(startPort int) error {
+	if startPort < 1 || startPort > 65535 {
+		return fmt.Errorf("invalid startPort %d", startPort)
+	}
+
+	configPath := GetCamerasConfigSourcePath()
+	if configPath == "" {
+		return fmt.Errorf("cameras config loaded from embedded defaults")
+	}
+
+	input, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read cameras config: %w", err)
+	}
+
+	lines := strings.Split(string(input), "\n")
+	multicastStart := -1
+	multicastEnd := len(lines)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[multicast]" {
+			multicastStart = i
+			for j := i + 1; j < len(lines); j++ {
+				t := strings.TrimSpace(lines[j])
+				if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+					multicastEnd = j
+					break
+				}
+			}
+			break
+		}
+	}
+
+	startPortLine := fmt.Sprintf("    startPort = %d", startPort)
+
+	if multicastStart == -1 {
+		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines,
+			"[multicast]",
+			startPortLine,
+		)
+	} else {
+		updated := false
+		for i := multicastStart + 1; i < multicastEnd; i++ {
+			trimmed := strings.TrimSpace(lines[i])
+			if strings.HasPrefix(trimmed, "startPort") {
+				indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+				lines[i] = fmt.Sprintf("%sstartPort = %d", indent, startPort)
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			newLines := make([]string, 0, len(lines)+1)
+			newLines = append(newLines, lines[:multicastStart+1]...)
+			newLines = append(newLines, startPortLine)
+			newLines = append(newLines, lines[multicastStart+1:]...)
+			lines = newLines
+		}
+	}
+
+	if err := os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		return fmt.Errorf("failed to write cameras config: %w", err)
+	}
+
+	return nil
+}
+
+// ExtractDefaultCamerasConfig writes default cameras config files
+// to the install directory if they don't already exist.
 func ExtractDefaultCamerasConfig() string {
-	destPath := filepath.Join(GetInstallDir(), "cameras.toml")
-	if _, err := os.Stat(destPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-			logging.ErrorLogger.Printf("Failed to create directory for cameras.toml: %v", err)
+	installDir := GetInstallDir()
+	if err := os.MkdirAll(installDir, 0755); err != nil {
+		logging.ErrorLogger.Printf("Failed to create directory for cameras config files: %v", err)
+		return ""
+	}
+
+	sharedPath := filepath.Join(installDir, "cameras_config.toml")
+	if _, err := os.Stat(sharedPath); os.IsNotExist(err) {
+		if err := os.WriteFile(sharedPath, defaultSharedCamerasConfig, 0644); err != nil {
+			logging.ErrorLogger.Printf("Failed to write cameras_config.toml: %v", err)
 			return ""
 		}
-		if err := os.WriteFile(destPath, defaultCamerasConfig, 0644); err != nil {
+		logging.InfoLogger.Printf("Wrote default cameras_config.toml to %s", sharedPath)
+	}
+
+	instancePath := filepath.Join(installDir, "cameras.toml")
+	if _, err := os.Stat(instancePath); os.IsNotExist(err) {
+		if err := os.WriteFile(instancePath, defaultInstanceCamerasConfig, 0644); err != nil {
 			logging.ErrorLogger.Printf("Failed to write cameras.toml: %v", err)
 			return ""
 		}
-		logging.InfoLogger.Printf("Wrote default cameras.toml to %s", destPath)
+		logging.InfoLogger.Printf("Wrote default cameras.toml to %s", instancePath)
 	}
-	return destPath
+
+	return instancePath
 }
 
 // filterEncodersForPlatform removes encoder entries that don't match the current OS.

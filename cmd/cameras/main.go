@@ -22,6 +22,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
+	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/jobutil"
 	"github.com/owlcms/replays/internal/logging"
@@ -29,15 +30,41 @@ import (
 )
 
 var (
-	includeAll bool
-	startPort  int
+	includeAll    bool
+	startPort     int
+	extractConfig bool
 
 	previewMu   sync.Mutex
 	previewCmds []*exec.Cmd
 
-	// camerasConfig is loaded at startup from cameras.toml
+	// camerasConfig is loaded at startup from shared cameras_config.toml
+	// overlaid with instance cameras.toml settings.
 	camerasConfig *config.CamerasConfig
 )
+
+func setAppIcon(myApp fyne.App) {
+	if assets.IconResource != nil && len(assets.IconResource.Content()) > 0 {
+		myApp.SetIcon(assets.IconResource)
+		return
+	}
+
+	iconCandidates := make([]string, 0, 2)
+
+	if exePath, err := os.Executable(); err == nil {
+		iconCandidates = append(iconCandidates, filepath.Join(filepath.Dir(exePath), "Icon.png"))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		iconCandidates = append(iconCandidates, filepath.Join(wd, "Icon.png"))
+	}
+
+	for _, iconPath := range iconCandidates {
+		res, err := fyne.LoadResourceFromPath(iconPath)
+		if err == nil {
+			myApp.SetIcon(res)
+			return
+		}
+	}
+}
 
 type cameraStream struct {
 	camera  recording.DetectedCamera
@@ -68,7 +95,24 @@ func main() {
 	// Parse command-line flags
 	flag.BoolVar(&includeAll, "all", false, "Include all cameras, including raw formats (typically integrated cameras)")
 	flag.IntVar(&startPort, "startport", 0, "Starting port for multicast allocation (overrides cameras.toml)")
+	flag.BoolVar(&extractConfig, "extractConfig", false, "extract default editable config files to configDir/install dir and exit")
+	flag.StringVar(&config.ConfigDir, "configDir", "", "directory containing editable camera config files")
 	flag.Parse()
+
+	if config.ConfigDir != "" {
+		if absConfigDir, err := filepath.Abs(config.ConfigDir); err == nil {
+			config.ConfigDir = absConfigDir
+		}
+	}
+
+	if extractConfig {
+		if p := config.ExtractDefaultCamerasConfig(); p == "" {
+			fmt.Println("Failed to extract camera config files")
+			os.Exit(1)
+		}
+		fmt.Printf("Extracted camera config files in: %s\n", config.GetInstallDir())
+		return
+	}
 
 	// Create a job object so child processes die with us
 	if err := jobutil.Init(); err != nil {
@@ -83,10 +127,10 @@ func main() {
 		fmt.Printf("Writing logs to: %s\n", filepath.Join(logDir, "cameras.log"))
 	}
 
-	// Load cameras.toml configuration
+	// Load merged cameras configuration (shared + instance)
 	cfg, err := config.LoadCamerasConfig()
 	if err != nil {
-		fmt.Printf("Error loading cameras.toml: %v\n", err)
+		fmt.Printf("Error loading cameras config: %v\n", err)
 		fmt.Println("Using built-in defaults.")
 		cfg = &config.CamerasConfig{}
 	}
@@ -641,6 +685,7 @@ func recordClip(stream *cameraStream) (string, error) {
 
 func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder *recording.HwEncoder) {
 	myApp := app.New()
+	setAppIcon(myApp)
 	window := myApp.NewWindow("Camera Multicast Streams")
 	window.Resize(fyne.NewSize(1320, 500))
 
@@ -656,11 +701,16 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		}
 		return nil
 	}
+	portEntryField := container.NewGridWrap(
+		fyne.NewSize(140, portEntry.MinSize().Height),
+		portEntry,
+	)
 
 	// We need a mutable reference so the table and restart can update it
 	currentStreams := &streams
 
 	restartBtn := widget.NewButton("Restart Streams", nil)
+	saveBtn := widget.NewButton("Save", nil)
 
 	table := widget.NewTable(
 		func() (int, int) {
@@ -782,6 +832,20 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		actionStatus.SetText(fmt.Sprintf("%d stream(s) restarted on port %d+", len(newStreams), newPort))
 	}
 
+	// Save current starting port to cameras.toml if it was loaded from a file.
+	// If config is from embedded defaults, saving fails and is ignored.
+	saveBtn.OnTapped = func() {
+		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
+		if err != nil || newPort < 1 || newPort > 65535 {
+			actionStatus.SetText("Invalid starting port")
+			return
+		}
+
+		camerasConfig.Multicast.StartPort = newPort
+		_ = config.SaveCamerasStartPort(newPort)
+		actionStatus.SetText(fmt.Sprintf("Starting port set to %d", newPort))
+	}
+
 	stopped := false
 	stopOnce := sync.Once{}
 	closeFn := func() {
@@ -818,7 +882,8 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 
 	portRow := container.NewHBox(
 		widget.NewLabel("Starting port:"),
-		portEntry,
+		portEntryField,
+		saveBtn,
 		restartBtn,
 	)
 

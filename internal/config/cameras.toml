@@ -1,12 +1,11 @@
 # =========================================================================
-# cameras.toml — configuration for the cameras multicast streaming program
+# cameras.toml — per-instance runtime configuration for cameras
 # =========================================================================
 #
-# The cameras program auto-detects attached cameras and the best available
-# GPU encoder. This file controls multicast settings, encoder parameters,
-# and preference order. Edit as needed for your hardware.
+# This file controls settings for the current cameras instance.
+# Shared encoder/OS behavior is in cameras_config.toml.
 #
-# Place this file next to cameras.exe (or in ~/.local/share/replays/ on Linux).
+# Place this file next to cameras executable (or in ~/.local/share/replays/ on Linux).
 
 # =========================================================================
 # Multicast Settings
@@ -22,94 +21,6 @@
     # UDP packet size for MPEG-TS
     pktSize = 1316
 
-# =========================================================================
-# Camera Selection
-# =========================================================================
-
 [cameras]
-    # Include all detected camera modes (including raw/YUV formats from
-    # integrated webcams). Default false = only H.264 and MJPEG modes.
+    # Include integrated/raw webcam modes for this instance.
     includeAll = false
-    
-    # Preferred camera input format priority (highest to lowest).
-    # h264 cameras are remuxed with -c:v copy (no encoding needed).
-    # mjpeg and raw cameras are encoded to H.264 using the best encoder.
-    formatPriority = ["h264", "mjpeg"]
-    
-    # Preferred resolution/fps ladder (highest to lowest priority).
-    # Format: "WIDTHxHEIGHT@FPS" — fps uses >= threshold (59 matches 60, 29 matches 30).
-    modePriority = [
-        "1920x1080@59",
-        "1280x720@59",
-        "1920x1080@29",
-        "1280x720@29",
-    ]
-
-# =========================================================================
-# Software Encoder Fallback
-# =========================================================================
-# Used when no hardware encoder is available or functional.
-
-[software]
-    outputParameters = "-c:v libx264 -preset ultrafast -tune zerolatency -b:v 4M"
-
-# =========================================================================
-# GPU Encoder Definitions
-# =========================================================================
-#
-# Each [[encoder]] block defines parameters for one hardware encoder.
-# The program probes ffmpeg for available encoders, then verifies each
-# one actually works on the current hardware. The first working encoder  
-# (in the order listed here) is used for all cameras that need encoding.
-#
-# Fields:
-#   name             — ffmpeg encoder name (must match ffmpeg -encoders output)
-#   description      — human-readable label for UI/logs
-#   inputParameters  — extra ffmpeg flags placed BEFORE -i (hw init, buffers)  
-#   outputParameters — ffmpeg flags placed AFTER -i (codec, bitrate, etc.)
-#   testInit         — extra ffmpeg flags needed to test-encode a blank frame
-#                      (optional, only needed for hwaccel init like VAAPI/QSV)
-
-[[encoder]]
-    name = "h264_nvenc"
-    description = "NVIDIA GPU (NVENC)"
-    inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
-    outputParameters = "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M"
-    testInit = ""
-
-[[encoder]]
-    name = "h264_amf"
-    description = "AMD GPU (AMF)"
-    inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
-    outputParameters = "-c:v h264_amf -rc cbr -b:v 8M"
-    testInit = ""
-
-[[encoder]]
-    name = "h264_vaapi"
-    description = "VAAPI (AMD/Intel on Linux)"
-    # The vaapi_device path may differ on some systems (check ls /dev/dri/)
-    inputParameters = "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096"
-    outputParameters = "-c:v h264_vaapi -rc_mode CBR -b:v 8M"
-    testInit = "-init_hw_device vaapi=va:/dev/dri/renderD128"
-    # Only applicable on Linux (ignored on Windows)
-    platform = "linux"
-
-[[encoder]]
-    name = "h264_qsv"
-    description = "Intel GPU (QSV / Xe)"
-    inputParameters = "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096"
-    outputParameters = "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M"
-    testInit = "-init_hw_device qsv=hw -filter_hw_device hw"
-    
-# =========================================================================
-# Common Output Settings (appended after encoder output parameters)
-# =========================================================================
-
-[output]
-    # GOP size and minimum keyframe interval are set to the camera's fps
-    # automatically (e.g. -g 60 -keyint_min 60 for a 60fps camera).
-    # These can be overridden here if needed:
-    # gopMultiplier = 1     # GOP = fps * multiplier
-    
-    # Additional output flags appended to every stream
-    extraFlags = "-an -f mpegts"

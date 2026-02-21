@@ -46,7 +46,7 @@ type cameraMode struct {
 }
 
 // DetectAndWriteConfig probes cameras and GPU encoders, then writes auto.toml.
-// It loads cameras.toml configuration so auto.toml benefits from the same
+// It loads cameras_config.toml configuration so auto.toml benefits from the same
 // intelligent encoder definitions, format priorities, and mode priorities
 // used by the cameras program.
 func DetectAndWriteConfig(window fyne.Window) {
@@ -59,10 +59,10 @@ func DetectAndWriteConfig(window fyne.Window) {
 	go func() {
 		defer progressDialog.Hide()
 
-		// Load cameras.toml so we use config-driven encoder & priority logic
+		// Load shared cameras config so we use config-driven encoder & priority logic
 		cameraCfg, cfgErr := config.LoadCamerasConfig()
 		if cfgErr != nil {
-			logging.WarningLogger.Printf("Could not load cameras.toml, using legacy defaults: %v", cfgErr)
+			logging.WarningLogger.Printf("Could not load cameras shared config, using legacy defaults: %v", cfgErr)
 		}
 
 		// Step 1: Detect available H.264 hardware encoders (config-driven when available)
@@ -680,7 +680,7 @@ func modeProfilePriority(mode cameraMode) int {
 
 // writeAutoConfig generates auto.toml from detected hardware.
 // When cfg is non-nil, encoder output parameters and format logic come from
-// the cameras.toml configuration; otherwise legacy hardcoded values are used.
+// the shared cameras configuration; otherwise legacy hardcoded values are used.
 func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder, cfg *config.CamerasConfig) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return err
@@ -772,7 +772,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 			if bestEncoder != nil {
 				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", bestEncoder.OutputParameters, fpsParams))
 			} else {
-				// Software fallback (from cameras.toml or hardcoded default)
+				// Software fallback (from shared cameras config or hardcoded default)
 				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", softwareFallback, fpsParams))
 			}
 			buf.WriteString("    recode = false\n")

@@ -1,0 +1,9 @@
+# Multicast camera mapping for replays
+# Used when [multicast].enabled = true in config.toml
+
+[multicast]
+    ip = "239.255.0.1"
+    camera1Port = 9001
+    camera2Port = 0
+    camera3Port = 0
+    camera4Port = 0

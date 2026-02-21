@@ -1,0 +1,82 @@
+# =========================================================================
+# cameras_config.toml — shared cameras/replays detection + encoder config
+# =========================================================================
+#
+# This file defines shared encoder and camera-selection behavior used by:
+#  - cameras (standalone multicast producer)
+#  - replays auto.toml generation (hardware auto-detect)
+#
+# Keep instance-specific runtime values (multicast IP/startPort) in cameras.toml.
+
+# =========================================================================
+# Camera Selection Priorities
+# =========================================================================
+
+[cameras]
+    # Preferred camera input format priority (highest to lowest).
+    # h264 cameras are remuxed with -c:v copy (no encoding needed).
+    # mjpeg and raw cameras are encoded to H.264 using the best encoder.
+    formatPriority = ["h264", "mjpeg"]
+
+    # Preferred resolution/fps ladder (highest to lowest priority).
+    # Format: "WIDTHxHEIGHT@FPS" — fps uses >= threshold (59 matches 60, 29 matches 30).
+    modePriority = [
+        "1920x1080@59",
+        "1280x720@59",
+        "1920x1080@29",
+        "1280x720@29",
+    ]
+
+# =========================================================================
+# Software Encoder Fallback
+# =========================================================================
+# Used when no hardware encoder is available or functional.
+
+[software]
+    outputParameters = "-c:v libx264 -preset ultrafast -tune zerolatency -b:v 4M"
+
+# =========================================================================
+# GPU Encoder Definitions
+# =========================================================================
+#
+# Each [[encoder]] block defines parameters for one hardware encoder.
+# The program probes ffmpeg for available encoders, then verifies each
+# one actually works on the current hardware. The first working encoder
+# (in the order listed here) is used for cameras that need encoding.
+
+[[encoder]]
+    name = "h264_nvenc"
+    description = "NVIDIA GPU (NVENC)"
+    inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
+    outputParameters = "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M"
+    testInit = ""
+
+[[encoder]]
+    name = "h264_amf"
+    description = "AMD GPU (AMF)"
+    inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
+    outputParameters = "-c:v h264_amf -rc cbr -b:v 8M"
+    testInit = ""
+
+[[encoder]]
+    name = "h264_vaapi"
+    description = "VAAPI (AMD/Intel on Linux)"
+    inputParameters = "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096"
+    outputParameters = "-c:v h264_vaapi -rc_mode CBR -b:v 8M"
+    testInit = "-init_hw_device vaapi=va:/dev/dri/renderD128"
+    platform = "linux"
+
+[[encoder]]
+    name = "h264_qsv"
+    description = "Intel GPU (QSV / Xe)"
+    inputParameters = "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096"
+    outputParameters = "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M"
+    testInit = "-init_hw_device qsv=hw -filter_hw_device hw"
+
+# =========================================================================
+# Common Output Settings
+# =========================================================================
+
+[output]
+    # Additional output flags appended to every stream
+    extraFlags = "-an -f mpegts"

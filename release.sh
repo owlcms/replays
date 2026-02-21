@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-TAG="${TAG:-${1:-1.9.0-beta06}}"
+TAG="${TAG:-${1:-2.0.0-alpha01}}"
 set -euo pipefail
 
 # Triggers the GitHub Actions workflow `.github/workflows/release.yaml`
 # and watches the run until completion.
 #
 # Usage:
-#   TAG=1.9.0-rc01 ./release.sh
-#   TAG=1.9.0 ./release.sh
-#   ./release.sh 1.9.0-rc01
+#   TAG=2.0.0-alpha01 ./release.sh
+#   TAG=2.0.0 ./release.sh
+#   ./release.sh 2.0.0-alpha01
 
 if [[ -z "${TAG}" ]]; then
-  echo "ERROR: TAG must be set (e.g. TAG=1.9.0-rc01)" >&2
-  echo "       or pass it as the first argument: ./release.sh 1.9.0-rc01" >&2
+  echo "ERROR: TAG must be set (e.g. TAG=2.0.0-alpha01)" >&2
+  echo "       or pass it as the first argument: ./release.sh 2.0.0-alpha01" >&2
   exit 1
 fi
 

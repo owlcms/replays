@@ -1,5 +1,14 @@
 **Change log**
 
+- 2.0.0: replays and cameras are now installed and started from the control panel
+- 2.0.0: replays will now, by default, use the H.264 streams created by the cameras program
+  - from the control panel, start the cameras program to autodetect your cameras
+  - check which port is camera 1 etc.
+  - if you have cameras attached to several machines, start the cameras on each, and adjust the ports so they don't conflict
+  - start replays, and adjust the cameras if needed (change the ports so camera1 is the correct one, etc.)
+  - If you want the old behavior, tell replays to stop using multicast
+  - The parameters used by replays and cameras for ffmpeg decoding are in a shared cameras_config.toml file.
+
 - 1.9.0 added a new `cameras` (`cameras.exe` on windows) to start a multicast UDP H.264 stream for each of the detected cameras
   - use `-includeraw` to include the laptop built-in cameras during testing.
 - 1.9.0 Add Auto-detection of cameras: an auto.toml file is written that can be edited, and has priority over config.toml.

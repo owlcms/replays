@@ -57,6 +57,7 @@ var (
 	NoVideo       bool
 	NoMQTT        bool
 	AutoTomlDir   string
+	ConfigDir     string
 	InstallDir    string
 	videoDir      string
 	Width         int
@@ -108,6 +109,11 @@ func LoadConfig(configFile string) (*Config, error) {
 	var raw map[string]interface{}
 	if _, err := toml.DecodeFile(configFile, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse config file for camera configurations: %w", err)
+	}
+
+	// Default multicast to enabled when key is absent (for backward compatibility).
+	if !hasMulticastEnabledKey(raw) {
+		config.Multicast.Enabled = true
 	}
 
 	platformKey := getPlatformName()
@@ -165,74 +171,91 @@ func LoadConfig(configFile string) (*Config, error) {
 		return pc, nil
 	}
 
-	// Check for auto.toml first (takes precedence over config.toml camera sections)
-	autoTomlPath := filepath.Join(GetInstallDir(), "auto.toml")
-	if _, err := os.Stat(autoTomlPath); err == nil {
-		logging.InfoLogger.Printf("Found auto.toml, loading camera configurations from it")
-		var autoRaw map[string]interface{}
-		if _, err := toml.DecodeFile(autoTomlPath, &autoRaw); err == nil {
-			// Look for camera1, camera2, camera3, ...
+	if config.Multicast.Enabled {
+		multicastPath := filepath.Join(GetInstallDir(), "multicast.toml")
+		if err := ExtractDefaultMulticastConfig(multicastPath); err != nil {
+			return nil, fmt.Errorf("failed to extract default multicast config: %w", err)
+		}
+
+		multicastSettings, err := LoadMulticastConfig(multicastPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load multicast config '%s': %w", multicastPath, err)
+		}
+
+		// Keep enabled state from config.toml, load mapping values from multicast.toml
+		config.Multicast.IP = multicastSettings.IP
+		config.Multicast.Camera1Port = multicastSettings.Camera1Port
+		config.Multicast.Camera2Port = multicastSettings.Camera2Port
+		config.Multicast.Camera3Port = multicastSettings.Camera3Port
+		config.Multicast.Camera4Port = multicastSettings.Camera4Port
+
+		multicastCameras := config.Multicast.buildCameraConfigs()
+		if len(multicastCameras) == 0 {
+			return nil, fmt.Errorf("multicast is enabled but no camera ports are configured in %s", multicastPath)
+		}
+		cameras = multicastCameras
+		logging.InfoLogger.Printf("Multicast mode enabled: loaded %d multicast camera(s) from %s", len(multicastCameras), multicastPath)
+	} else {
+		// Multicast off: check for auto.toml first (takes precedence over config.toml camera sections)
+		autoTomlPath := filepath.Join(GetInstallDir(), "auto.toml")
+		if _, err := os.Stat(autoTomlPath); err == nil {
+			logging.InfoLogger.Printf("Found auto.toml, loading camera configurations from it")
+			var autoRaw map[string]interface{}
+			if _, err := toml.DecodeFile(autoTomlPath, &autoRaw); err == nil {
+				// Look for camera1, camera2, camera3, ...
+				for i := 1; ; i++ {
+					key := "camera" + strconv.Itoa(i)
+					confRaw, exists := autoRaw[key]
+					if !exists {
+						break
+					}
+					pc, err := decodePlatformConfig(key, confRaw)
+					if err != nil {
+						continue
+					}
+					cameras = append(cameras, pc)
+				}
+				if len(cameras) > 0 {
+					logging.InfoLogger.Printf("Loaded %d camera configurations from auto.toml", len(cameras))
+				}
+			} else {
+				logging.ErrorLogger.Printf("Failed to parse auto.toml: %v", err)
+			}
+		}
+
+		// Fall back to platform-specific sections in config.toml if auto.toml didn't provide cameras
+		if len(cameras) == 0 {
+			// Look for keys: "platformKey", "platformKey2", "platformKey3", ...
 			for i := 1; ; i++ {
-				key := "camera" + strconv.Itoa(i)
-				confRaw, exists := autoRaw[key]
+				key := platformKey
+				if i > 1 {
+					key = platformKey + strconv.Itoa(i)
+				}
+				confRaw, exists := raw[key]
 				if !exists {
-					break
+					// Check for aliases
+					if platformKey == "windows" && i == 1 {
+						confRaw, exists = raw["windows1"]
+					} else if platformKey == "linux" && i == 1 {
+						confRaw, exists = raw["linux1"]
+					}
+					if !exists {
+						break
+					}
 				}
 				pc, err := decodePlatformConfig(key, confRaw)
 				if err != nil {
-					continue
+					continue // Skip disabled camera configurations
 				}
 				cameras = append(cameras, pc)
 			}
-			if len(cameras) > 0 {
-				logging.InfoLogger.Printf("Loaded %d camera configurations from auto.toml", len(cameras))
-			}
-		} else {
-			logging.ErrorLogger.Printf("Failed to parse auto.toml: %v", err)
-		}
-	}
-
-	// Fall back to platform-specific sections in config.toml if auto.toml didn't provide cameras
-	if len(cameras) == 0 {
-		// Look for keys: "platformKey", "platformKey2", "platformKey3", ...
-		for i := 1; ; i++ {
-			key := platformKey
-			if i > 1 {
-				key = platformKey + strconv.Itoa(i)
-			}
-			confRaw, exists := raw[key]
-			if !exists {
-				// Check for aliases
-				if platformKey == "windows" && i == 1 {
-					confRaw, exists = raw["windows1"]
-				} else if platformKey == "linux" && i == 1 {
-					confRaw, exists = raw["linux1"]
-				}
-				if !exists {
-					break
-				}
-			}
-			pc, err := decodePlatformConfig(key, confRaw)
-			if err != nil {
-				continue // Skip disabled camera configurations
-			}
-			cameras = append(cameras, pc)
 		}
 	}
 
 	config.Cameras = cameras
 
-	// Apply multicast defaults and override cameras if multicast is enabled
+	// Apply multicast defaults
 	config.Multicast.applyDefaults()
-	if config.Multicast.Enabled {
-		multicastCameras := config.Multicast.buildCameraConfigs()
-		if len(multicastCameras) > 0 {
-			config.Cameras = multicastCameras
-			logging.InfoLogger.Printf("Multicast mode enabled: using %d multicast camera(s)", len(multicastCameras))
-		} else {
-			logging.WarningLogger.Println("Multicast enabled but no ports configured — falling back to local cameras")
-		}
-	}
 
 	// Set remaining recording package configurations
 	SetVideoDir(config.VideoDir)
@@ -296,7 +319,8 @@ func (c *Config) ValidateCamera() error {
 
 // InitConfig processes command-line flags and loads the configuration
 func InitConfig() (*Config, error) {
-	configFile := flag.String("config", filepath.Join(GetInstallDir(), "config.toml"), "path to configuration file")
+	configFile := flag.String("config", "", "path to configuration file")
+	flag.StringVar(&ConfigDir, "configDir", "", "directory containing editable config files (config.toml, auto.toml, multicast.toml, etc.)")
 	flag.StringVar(&InstallDir, "dir", "replays", fmt.Sprintf(
 		`Name of an alternate installation directory. Default is 'replays'.
 Value is relative to the platform-specific directory for applcation data (%s)
@@ -308,6 +332,18 @@ An absolute path can be provded if needed.`, GetInstallDir()))
 	flag.BoolVar(&NoMQTT, "noMQTT", false, "disable MQTT autodiscovery and monitoring")
 	flag.StringVar(&AutoTomlDir, "autoTomlDir", "", "directory for auto.toml output (default: install dir)")
 	flag.Parse()
+
+	if ConfigDir != "" {
+		absConfigDir, err := filepath.Abs(ConfigDir)
+		if err != nil {
+			return nil, fmt.Errorf("invalid configDir '%s': %w", ConfigDir, err)
+		}
+		ConfigDir = absConfigDir
+	}
+
+	if *configFile == "" {
+		*configFile = filepath.Join(GetInstallDir(), "config.toml")
+	}
 
 	// Set verbose mode in logging package
 	logging.SetVerbose(*verbose || *verboseAlt)
@@ -344,6 +380,10 @@ func GetCameraConfigs() []CameraConfiguration {
 
 // getInstallDir returns the installation directory based on the environment
 func GetInstallDir() string {
+	if ConfigDir != "" {
+		return ConfigDir
+	}
+
 	if InstallDir != "" && filepath.IsAbs(InstallDir) {
 		return InstallDir
 	}
@@ -537,6 +577,19 @@ func (m *MulticastSettings) applyDefaults() {
 	if m.IP == "" {
 		m.IP = "239.255.0.1"
 	}
+}
+
+func hasMulticastEnabledKey(raw map[string]interface{}) bool {
+	multicastRaw, ok := raw["multicast"]
+	if !ok {
+		return false
+	}
+	section, ok := multicastRaw.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	_, hasEnabled := section["enabled"]
+	return hasEnabled
 }
 
 // buildCameraConfigs creates CameraConfiguration entries for each non-zero port.

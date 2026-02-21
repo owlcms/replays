@@ -1,4 +1,12 @@
 package assets
 
-// ...existing code moved from internal/config/embedded.go...
-// (adjust package references if needed)
+import (
+	_ "embed"
+
+	"fyne.io/fyne/v2"
+)
+
+//go:embed Icon.png
+var iconPNG []byte
+
+var IconResource = fyne.NewStaticResource("Icon.png", iconPNG)
