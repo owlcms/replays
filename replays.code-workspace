@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../owlcms-streaming"
+		},
+		{
+			"path": "../owlcms-controlpanel"
 		}
 	],
 	"settings": {}
