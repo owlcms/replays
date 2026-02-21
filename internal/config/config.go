@@ -26,6 +26,18 @@ type CameraConfiguration struct {
 	Recode           bool   `toml:"recode"` // Add recode field
 }
 
+// MulticastSettings holds the multicast camera configuration.
+// When Enabled is true, replays reads H.264 streams from multicast UDP
+// instead of using locally-attached cameras.
+type MulticastSettings struct {
+	Enabled     bool   `toml:"enabled"`
+	IP          string `toml:"ip"`
+	Camera1Port int    `toml:"camera1Port"`
+	Camera2Port int    `toml:"camera2Port"`
+	Camera3Port int    `toml:"camera3Port"`
+	Camera4Port int    `toml:"camera4Port"`
+}
+
 // Config represents the configuration file structure
 type Config struct {
 	Port      int                   `toml:"port"`
@@ -36,6 +48,7 @@ type Config struct {
 	OwlCMS    string                `toml:"owlcms"`
 	Platform  string                `toml:"platform"`
 	LogFfmpeg bool                  `toml:"logFfmpeg"`
+	Multicast MulticastSettings     `toml:"multicast"`
 	Cameras   []CameraConfiguration `toml:"-"`
 }
 
@@ -208,6 +221,18 @@ func LoadConfig(configFile string) (*Config, error) {
 	}
 
 	config.Cameras = cameras
+
+	// Apply multicast defaults and override cameras if multicast is enabled
+	config.Multicast.applyDefaults()
+	if config.Multicast.Enabled {
+		multicastCameras := config.Multicast.buildCameraConfigs()
+		if len(multicastCameras) > 0 {
+			config.Cameras = multicastCameras
+			logging.InfoLogger.Printf("Multicast mode enabled: using %d multicast camera(s)", len(multicastCameras))
+		} else {
+			logging.WarningLogger.Println("Multicast enabled but no ports configured — falling back to local cameras")
+		}
+	}
 
 	// Set remaining recording package configurations
 	SetVideoDir(config.VideoDir)
@@ -501,4 +526,96 @@ func GetLogFfmpeg() bool {
 // GetMjpeg720pOnly returns whether MJPEG mode selection should avoid >720p.
 func GetMjpeg720pOnly() bool {
 	return Mjpeg720pOnly
+}
+
+// ---------------------------------------------------------------------------
+// Multicast helpers
+// ---------------------------------------------------------------------------
+
+// applyDefaults fills in zero-value fields of MulticastSettings.
+func (m *MulticastSettings) applyDefaults() {
+	if m.IP == "" {
+		m.IP = "239.255.0.1"
+	}
+}
+
+// buildCameraConfigs creates CameraConfiguration entries for each non-zero port.
+func (m *MulticastSettings) buildCameraConfigs() []CameraConfiguration {
+	ports := []int{m.Camera1Port, m.Camera2Port, m.Camera3Port, m.Camera4Port}
+	var cameras []CameraConfiguration
+	for _, port := range ports {
+		if port > 0 {
+			cameras = append(cameras, CameraConfiguration{
+				FfmpegCamera:     fmt.Sprintf("udp://%s:%d", m.IP, port),
+				Format:           "mpegts",
+				InputParameters:  "",
+				OutputParameters: "-c:v copy -an",
+				Recode:           false,
+			})
+		}
+	}
+	return cameras
+}
+
+// UpdateMulticastConfig writes the [multicast] section to the config file.
+// It replaces an existing [multicast] section or appends one.
+func UpdateMulticastConfig(configFile string, settings MulticastSettings) error {
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(content), "\n")
+
+	// Find existing [multicast] section boundaries
+	sectionStart := -1
+	sectionEnd := len(lines)
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[multicast]" {
+			sectionStart = i
+			continue
+		}
+		// End of section: next top-level section header (not [[encoder]] style)
+		if sectionStart >= 0 && sectionStart != i && strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[") {
+			sectionEnd = i
+			break
+		}
+	}
+
+	// Build replacement text
+	newSection := []string{
+		"[multicast]",
+		fmt.Sprintf("    enabled = %v", settings.Enabled),
+		fmt.Sprintf("    ip = \"%s\"", settings.IP),
+		fmt.Sprintf("    camera1Port = %d", settings.Camera1Port),
+		fmt.Sprintf("    camera2Port = %d", settings.Camera2Port),
+		fmt.Sprintf("    camera3Port = %d", settings.Camera3Port),
+		fmt.Sprintf("    camera4Port = %d", settings.Camera4Port),
+	}
+
+	var newLines []string
+	if sectionStart >= 0 {
+		// Replace existing section
+		newLines = append(newLines, lines[:sectionStart]...)
+		newLines = append(newLines, newSection...)
+		newLines = append(newLines, lines[sectionEnd:]...)
+	} else {
+		// Insert before the first camera section ([windows...] or [linux...])
+		insertAt := len(lines)
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "[windows") || strings.HasPrefix(trimmed, "[linux") {
+				insertAt = i
+				break
+			}
+		}
+		newLines = append(newLines, lines[:insertAt]...)
+		newLines = append(newLines, "")
+		newLines = append(newLines, newSection...)
+		newLines = append(newLines, "")
+		newLines = append(newLines, lines[insertAt:]...)
+	}
+
+	return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
 }

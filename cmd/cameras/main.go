@@ -34,10 +34,9 @@ var (
 
 	previewMu   sync.Mutex
 	previewCmds []*exec.Cmd
-)
 
-const (
-	baseMulticastIP = "239.255.0.1"
+	// camerasConfig is loaded at startup from cameras.toml
+	camerasConfig *config.CamerasConfig
 )
 
 type cameraStream struct {
@@ -68,7 +67,7 @@ var (
 func main() {
 	// Parse command-line flags
 	flag.BoolVar(&includeAll, "all", false, "Include all cameras, including raw formats (typically integrated cameras)")
-	flag.IntVar(&startPort, "startport", 9001, "Starting port for multicast allocation")
+	flag.IntVar(&startPort, "startport", 0, "Starting port for multicast allocation (overrides cameras.toml)")
 	flag.Parse()
 
 	// Create a job object so child processes die with us
@@ -76,14 +75,29 @@ func main() {
 		fmt.Printf("Warning: Failed to create job object: %v\n", err)
 	}
 
-	// Initialize logging to current directory
-	if err := logging.InitWithFile(".", "cameras.log"); err != nil {
+	// Initialize logging to the shared install-dir logs folder (same as replays)
+	logDir := filepath.Join(config.GetInstallDir(), "logs")
+	if err := logging.InitWithFile(logDir, "cameras.log"); err != nil {
 		fmt.Printf("Warning: Failed to initialize logging: %v\n", err)
-		// Continue anyway - we can still use fmt.Printf
 	} else {
-		if wd, err := os.Getwd(); err == nil {
-			fmt.Printf("Writing logs to: %s\n", filepath.Join(wd, "cameras.log"))
-		}
+		fmt.Printf("Writing logs to: %s\n", filepath.Join(logDir, "cameras.log"))
+	}
+
+	// Load cameras.toml configuration
+	cfg, err := config.LoadCamerasConfig()
+	if err != nil {
+		fmt.Printf("Error loading cameras.toml: %v\n", err)
+		fmt.Println("Using built-in defaults.")
+		cfg = &config.CamerasConfig{}
+	}
+	camerasConfig = cfg
+
+	// Apply CLI overrides
+	if includeAll {
+		camerasConfig.Cameras.IncludeAll = true
+	}
+	if startPort > 0 {
+		camerasConfig.Multicast.StartPort = startPort
 	}
 
 	// Initialize ffmpeg path
@@ -100,14 +114,20 @@ func main() {
 		return
 	}
 
-	// Detect encoders for raw format cameras
-	encoders := recording.DetectEncoders()
+	// Detect encoders using config-defined encoder list
+	encoders := recording.DetectEncodersWithConfig(camerasConfig)
 	bestEncoder := recording.PickBestEncoder(encoders)
 
-	// Filter out integrated cameras and sort: H.264 first, then MJPEG, then others
+	if bestEncoder != nil {
+		logging.InfoLogger.Printf("Best encoder: %s (%s)", bestEncoder.Name, bestEncoder.Description)
+	} else {
+		logging.InfoLogger.Printf("No hardware encoder available, will use software: %s", camerasConfig.Software.OutputParameters)
+	}
+
+	// Filter out integrated cameras
 	var filtered []recording.DetectedCamera
 	for _, cam := range cameras {
-		if !includeAll && isIntegratedCamera(cam) {
+		if !camerasConfig.Cameras.IncludeAll && isIntegratedCamera(cam) {
 			fmt.Printf("Skipping integrated camera: %s (%s)\n", cam.Name, cam.PixFmt)
 			continue
 		}
@@ -119,24 +139,38 @@ func main() {
 		return
 	}
 
-	// Sort cameras: H.264 first, then MJPEG, then others
+	// Sort cameras by format priority from config
 	sort.Slice(filtered, func(i, j int) bool {
-		return formatPriority(filtered[i].PixFmt) > formatPriority(filtered[j].PixFmt)
+		return camerasConfig.FormatPriorityValue(filtered[i].PixFmt) > camerasConfig.FormatPriorityValue(filtered[j].PixFmt)
 	})
 
 	// Start ffmpeg for each camera
+	streams := startAllStreams(filtered, bestEncoder)
+
+	if len(streams) == 0 {
+		fmt.Println("\nNo streams started successfully.")
+		return
+	}
+
+	fmt.Printf("\n%d camera(s) streaming. Launching status window...\n", len(streams))
+	runUI(streams, filtered, bestEncoder)
+}
+
+// startAllStreams starts multicast streams for all cameras.
+// Returns only the streams that started successfully.
+func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEncoder) []*cameraStream {
+	port := camerasConfig.Multicast.StartPort
 	var streams []*cameraStream
-	port := startPort
 
 	fmt.Println("\nStarting camera streams:")
 	fmt.Println("========================")
 
-	for _, cam := range filtered {
-		udpDest := fmt.Sprintf("udp://%s:%d", baseMulticastIP, port)
+	for _, cam := range cameras {
+		udpDest := fmt.Sprintf("udp://%s:%d", camerasConfig.Multicast.IP, port)
 		stream := &cameraStream{
 			camera:  cam,
 			port:    port,
-			encoder: bestEncoder,
+			encoder: encoder,
 			udpDest: udpDest,
 			status:  "starting",
 			running: false,
@@ -162,13 +196,7 @@ func main() {
 		port++
 	}
 
-	if len(streams) == 0 {
-		fmt.Println("\nNo streams started successfully.")
-		return
-	}
-
-	fmt.Printf("\n%d camera(s) streaming. Launching status window...\n", len(streams))
-	runUI(streams)
+	return streams
 }
 
 // isIntegratedCamera checks if a camera is likely an integrated webcam.
@@ -221,30 +249,19 @@ func isIntegratedCamera(cam recording.DetectedCamera) bool {
 	}
 }
 
-// formatPriority returns a priority value for sorting (higher = better)
-func formatPriority(pixFmt string) int {
-	switch pixFmt {
-	case "h264":
-		return 3
-	case "mjpeg":
-		return 2
-	default:
-		return 1
-	}
-}
-
 // startStream starts ffmpeg to stream a camera to multicast UDP
 func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	cam := stream.camera
 	encoder := stream.encoder
 	port := stream.port
+	cfg := camerasConfig
 
 	ffmpegPath := config.GetFFmpegPath()
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
 
-	udpDest := fmt.Sprintf("udp://%s:%d?pkt_size=1316", baseMulticastIP, port)
+	udpDest := fmt.Sprintf("udp://%s:%d?pkt_size=%d", cfg.Multicast.IP, port, cfg.Multicast.PktSize)
 
 	var args []string
 
@@ -282,6 +299,8 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	}
 
 	// Build output arguments based on input format
+	gopSize := cam.Fps * cfg.Output.GopMultiplier
+
 	switch cam.PixFmt {
 	case "h264":
 		// Camera already outputs H.264 — just remux, no re-encode needed.
@@ -290,30 +309,26 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	case "mjpeg":
 		// Need to decode MJPEG and encode to H.264
 		if encoder != nil {
-			// Use hardware encoder
 			args = append(args, strings.Fields(encoder.OutputParameters)...)
 		} else {
-			// Software fallback
-			args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-b:v", "4M")
+			args = append(args, strings.Fields(cfg.Software.OutputParameters)...)
 		}
-		// Add GOP settings based on camera fps
-		args = append(args, "-g", fmt.Sprintf("%d", cam.Fps))
-		args = append(args, "-keyint_min", fmt.Sprintf("%d", cam.Fps))
+		args = append(args, "-g", fmt.Sprintf("%d", gopSize))
+		args = append(args, "-keyint_min", fmt.Sprintf("%d", gopSize))
 
 	default:
 		// Raw format - need to encode
 		if encoder != nil {
 			args = append(args, strings.Fields(encoder.OutputParameters)...)
 		} else {
-			args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-b:v", "4M")
+			args = append(args, strings.Fields(cfg.Software.OutputParameters)...)
 		}
-		args = append(args, "-g", fmt.Sprintf("%d", cam.Fps))
-		args = append(args, "-keyint_min", fmt.Sprintf("%d", cam.Fps))
+		args = append(args, "-g", fmt.Sprintf("%d", gopSize))
+		args = append(args, "-keyint_min", fmt.Sprintf("%d", gopSize))
 	}
 
-	// Output to MPEG-TS over UDP multicast
-	args = append(args, "-an") // No audio
-	args = append(args, "-f", "mpegts")
+	// Output flags from config (e.g. "-an -f mpegts")
+	args = append(args, strings.Fields(cfg.Output.ExtraFlags)...)
 	args = append(args, udpDest)
 
 	// Create the command with hidden console on Windows
@@ -624,16 +639,32 @@ func recordClip(stream *cameraStream) (string, error) {
 	return outputPath, nil
 }
 
-func runUI(streams []*cameraStream) {
+func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder *recording.HwEncoder) {
 	myApp := app.New()
 	window := myApp.NewWindow("Camera Multicast Streams")
-	window.Resize(fyne.NewSize(1320, 460))
+	window.Resize(fyne.NewSize(1320, 500))
 
 	headers := []string{"Camera", "Format", "Size", "Multicast", "FPS", "Preview", "Record", "Status", "Last"}
 	actionStatus := widget.NewLabel("Preview/Record: ready")
+
+	// Starting port entry + restart button
+	portEntry := widget.NewEntry()
+	portEntry.SetText(strconv.Itoa(camerasConfig.Multicast.StartPort))
+	portEntry.Validator = func(s string) error {
+		if _, err := strconv.Atoi(s); err != nil {
+			return fmt.Errorf("must be a number")
+		}
+		return nil
+	}
+
+	// We need a mutable reference so the table and restart can update it
+	currentStreams := &streams
+
+	restartBtn := widget.NewButton("Restart Streams", nil)
+
 	table := widget.NewTable(
 		func() (int, int) {
-			return len(streams) + 1, len(headers)
+			return len(*currentStreams) + 1, len(headers)
 		},
 		func() fyne.CanvasObject {
 			label := widget.NewLabel("template")
@@ -654,12 +685,19 @@ func runUI(streams []*cameraStream) {
 				return
 			}
 
-			row := streams[id.Row-1].snapshotRow()
+			ss := *currentStreams
+			if id.Row-1 >= len(ss) {
+				button.Hide()
+				label.Show()
+				label.SetText("")
+				return
+			}
+			row := ss[id.Row-1].snapshotRow()
 			if id.Col == 5 {
 				label.Hide()
 				button.Show()
 				button.SetText("Preview")
-				stream := streams[id.Row-1]
+				stream := ss[id.Row-1]
 				button.OnTapped = func() {
 					if err := launchPreview(stream); err != nil {
 						actionStatus.SetText(fmt.Sprintf("Preview failed: %v", err))
@@ -675,7 +713,7 @@ func runUI(streams []*cameraStream) {
 				label.Hide()
 				button.Show()
 				button.SetText("Record 10s")
-				stream := streams[id.Row-1]
+				stream := ss[id.Row-1]
 				button.OnTapped = func() {
 					actionStatus.SetText(fmt.Sprintf("Recording 10s: %s", stream.camera.Name))
 					go func(s *cameraStream) {
@@ -710,11 +748,38 @@ func runUI(streams []*cameraStream) {
 
 	stopAll := func() {
 		stopAllPreviews()
-		for _, stream := range streams {
+		for _, stream := range *currentStreams {
 			if stream.cmd != nil && stream.cmd.Process != nil {
 				stopProcess(stream.cmd)
 			}
 		}
+	}
+
+	// Wire up the restart button
+	restartBtn.OnTapped = func() {
+		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
+		if err != nil || newPort < 1 || newPort > 65535 {
+			actionStatus.SetText("Invalid starting port")
+			return
+		}
+		actionStatus.SetText("Restarting streams...")
+
+		// Stop existing streams
+		stopAllPreviews()
+		for _, stream := range *currentStreams {
+			if stream.cmd != nil && stream.cmd.Process != nil {
+				stopProcess(stream.cmd)
+			}
+		}
+		time.Sleep(500 * time.Millisecond) // let processes exit
+
+		// Update config and restart
+		camerasConfig.Multicast.StartPort = newPort
+		newStreams := startAllStreams(cameras, encoder)
+
+		*currentStreams = newStreams
+		table.Refresh()
+		actionStatus.SetText(fmt.Sprintf("%d stream(s) restarted on port %d+", len(newStreams), newPort))
 	}
 
 	stopped := false
@@ -751,9 +816,16 @@ func runUI(streams []*cameraStream) {
 		window.Close()
 	})
 
+	portRow := container.NewHBox(
+		widget.NewLabel("Starting port:"),
+		portEntry,
+		restartBtn,
+	)
+
 	content := container.NewBorder(
 		container.NewVBox(
 			widget.NewLabel("Live ffmpeg stream stats (FPS from ffmpeg stderr progress lines)"),
+			portRow,
 			actionStatus,
 		),
 		nil,

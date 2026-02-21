@@ -15,6 +15,22 @@ logFfmpeg = false
 
 
 # =======================================================
+# Multicast Camera Configuration
+# =======================================================
+# When enabled, replays reads H.264 streams from multicast UDP
+# (sent by the cameras program) instead of locally-attached cameras.
+# Set a port for each camera (0 = unused).
+
+[multicast]
+    enabled = true
+    ip = "239.255.0.1"
+    camera1Port = 9001
+    camera2Port = 0
+    camera3Port = 0
+    camera4Port = 0
+
+
+# =======================================================
 # Windows Camera Configurations
 # =======================================================
 

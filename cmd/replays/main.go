@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -314,6 +315,109 @@ func openConfigFile() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Multicast camera helpers
+// ---------------------------------------------------------------------------
+
+// toggleMulticast flips the multicast enabled flag, saves, and prompts for restart.
+func toggleMulticast(cfg *config.Config, window fyne.Window) {
+	cfg.Multicast.Enabled = !cfg.Multicast.Enabled
+
+	configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+	if err := config.UpdateMulticastConfig(configFilePath, cfg.Multicast); err != nil {
+		dialog.ShowError(fmt.Errorf("failed to save multicast setting: %w", err), window)
+		cfg.Multicast.Enabled = !cfg.Multicast.Enabled // revert
+		return
+	}
+
+	var msg string
+	if cfg.Multicast.Enabled {
+		msg = "Multicast cameras enabled."
+	} else {
+		msg = "Multicast cameras disabled. Local cameras will be used."
+	}
+	successDialog := dialog.NewInformation("Success", msg+" The application will now exit. Please restart it.", window)
+	successDialog.SetOnClosed(func() {
+		window.Close()
+		os.Exit(0)
+	})
+	successDialog.Show()
+}
+
+// showMulticastConfig shows a dialog to configure the multicast IP and port mapping.
+func showMulticastConfig(cfg *config.Config, window fyne.Window) {
+	m := &cfg.Multicast
+
+	ipEntry := widget.NewEntry()
+	ipEntry.SetText(m.IP)
+
+	port1Entry := widget.NewEntry()
+	port1Entry.SetText(strconv.Itoa(m.Camera1Port))
+	port2Entry := widget.NewEntry()
+	port2Entry.SetText(strconv.Itoa(m.Camera2Port))
+	port3Entry := widget.NewEntry()
+	port3Entry.SetText(strconv.Itoa(m.Camera3Port))
+	port4Entry := widget.NewEntry()
+	port4Entry.SetText(strconv.Itoa(m.Camera4Port))
+
+	form := widget.NewForm(
+		widget.NewFormItem("Multicast IP", ipEntry),
+		widget.NewFormItem("Camera 1 port", port1Entry),
+		widget.NewFormItem("Camera 2 port", port2Entry),
+		widget.NewFormItem("Camera 3 port", port3Entry),
+		widget.NewFormItem("Camera 4 port", port4Entry),
+	)
+
+	hint := widget.NewLabel("Set port to 0 to disable a camera slot.")
+	hint.Wrapping = fyne.TextWrapWord
+	content := container.NewVBox(form, hint)
+
+	dlg := dialog.NewCustomConfirm("Configure Multicast Mapping", "Save", "Cancel", content,
+		func(save bool) {
+			if !save {
+				return
+			}
+
+			ip := strings.TrimSpace(ipEntry.Text)
+			if ip == "" {
+				ip = "239.255.0.1"
+			}
+			p1, _ := strconv.Atoi(strings.TrimSpace(port1Entry.Text))
+			p2, _ := strconv.Atoi(strings.TrimSpace(port2Entry.Text))
+			p3, _ := strconv.Atoi(strings.TrimSpace(port3Entry.Text))
+			p4, _ := strconv.Atoi(strings.TrimSpace(port4Entry.Text))
+
+			m.IP = ip
+			m.Camera1Port = p1
+			m.Camera2Port = p2
+			m.Camera3Port = p3
+			m.Camera4Port = p4
+
+			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+			if err := config.UpdateMulticastConfig(configFilePath, *m); err != nil {
+				dialog.ShowError(fmt.Errorf("failed to save multicast config: %w", err), window)
+				return
+			}
+
+			successDialog := dialog.NewInformation("Success", "Multicast mapping updated. The application will now exit. Please restart it.", window)
+			successDialog.SetOnClosed(func() {
+				window.Close()
+				os.Exit(0)
+			})
+			successDialog.Show()
+		}, window)
+	dlg.Resize(fyne.NewSize(400, 0))
+	dlg.Show()
+}
+
+// multicastToggleLabel returns the menu label text based on current state.
+func multicastToggleLabel(enabled bool) string {
+	if enabled {
+		return "Stop using Multicast"
+	}
+	return "Use Multicast Cameras"
+}
+
 func main() {
 	// Disable Fyne telemetry
 	os.Setenv("FYNE_TELEMETRY", "0")
@@ -437,6 +541,14 @@ func main() {
 	window.CenterOnScreen()
 
 	// Create main menu
+	multicastToggle := fyne.NewMenuItem(multicastToggleLabel(cfg.Multicast.Enabled), nil)
+	multicastToggle.Action = func() {
+		toggleMulticast(cfg, window)
+	}
+	multicastConfigItem := fyne.NewMenuItem("Configure Multicast Mapping", func() {
+		showMulticastConfig(cfg, window)
+	})
+
 	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("File",
 			fyne.NewMenuItem("Platform Selection", func() {
@@ -454,6 +566,10 @@ func main() {
 			fyne.NewMenuItem("Quit", func() {
 				confirmAndQuit(window)
 			}),
+		),
+		fyne.NewMenu("Cameras",
+			multicastToggle,
+			multicastConfigItem,
 		),
 		fyne.NewMenu("Help",
 			// Add "List Cameras" menu item for Windows and Linux

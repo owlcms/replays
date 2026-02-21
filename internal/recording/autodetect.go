@@ -35,6 +35,7 @@ type HwEncoder struct {
 	Description      string
 	InputParameters  string
 	OutputParameters string
+	TestInit         string // extra flags needed for encoder test (e.g. VAAPI/QSV init)
 }
 
 type cameraMode struct {
@@ -87,8 +88,16 @@ func DetectAndWriteConfig(window fyne.Window) {
 	}()
 }
 
-// DetectEncoders probes ffmpeg for available H.264 hardware encoders
+// DetectEncoders probes ffmpeg for available H.264 hardware encoders.
+// If a CamerasConfig is provided, encoder definitions come from the config.
+// If cfg is nil, falls back to the legacy hardcoded definitions.
 func DetectEncoders() []HwEncoder {
+	return DetectEncodersWithConfig(nil)
+}
+
+// DetectEncodersWithConfig probes ffmpeg for available H.264 hardware encoders,
+// using the encoder definitions from cfg.
+func DetectEncodersWithConfig(cfg *config.CamerasConfig) []HwEncoder {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
@@ -104,60 +113,45 @@ func DetectEncoders() []HwEncoder {
 		return nil
 	}
 
-	var candidates []HwEncoder
+	// Collect all h264_* encoder names that ffmpeg reports
+	availableEncoders := make(map[string]bool)
 	scanner := bufio.NewScanner(&out)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// Lines look like: " V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)"
 		if !strings.Contains(line, "h264_") {
 			continue
 		}
 		line = strings.TrimSpace(line)
 		fields := strings.Fields(line)
-		if len(fields) < 3 {
+		if len(fields) < 2 {
 			continue
 		}
-		// The encoder name is the second field (after the flags field)
-		encoderName := fields[1]
+		availableEncoders[fields[1]] = true
+	}
 
-		switch encoderName {
-		case "h264_nvenc":
-			candidates = append(candidates, HwEncoder{
-				Name:             "h264_nvenc",
-				Description:      "NVIDIA GPU",
-				InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
-				OutputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M",
-			})
-		case "h264_amf":
-			candidates = append(candidates, HwEncoder{
-				Name:             "h264_amf",
-				Description:      "AMD GPU (AMF)",
-				InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
-				OutputParameters: "-c:v h264_amf -rc cbr -b:v 8M",
-			})
-		case "h264_vaapi":
-			if runtime.GOOS == "linux" {
+	// Build candidate list from config definitions (order = preference)
+	var candidates []HwEncoder
+	if cfg != nil && len(cfg.Encoders) > 0 {
+		for _, enc := range cfg.Encoders {
+			if availableEncoders[enc.Name] {
 				candidates = append(candidates, HwEncoder{
-					Name:             "h264_vaapi",
-					Description:      "VAAPI (AMD/Intel on Linux)",
-					InputParameters:  "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
-					OutputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M",
+					Name:             enc.Name,
+					Description:      enc.Description,
+					InputParameters:  enc.InputParameters,
+					OutputParameters: enc.OutputParameters,
+					TestInit:         enc.TestInit,
 				})
 			}
-		case "h264_qsv":
-			candidates = append(candidates, HwEncoder{
-				Name:             "h264_qsv",
-				Description:      "Intel GPU (QSV)",
-				InputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
-				OutputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M",
-			})
 		}
+	} else {
+		// Legacy hardcoded fallback (used when cfg is nil, e.g. from replays)
+		candidates = legacyEncoderCandidates(availableEncoders)
 	}
 
 	// Verify each candidate encoder actually works on this hardware
 	var found []HwEncoder
 	for _, enc := range candidates {
-		if testEncoder(path, enc.Name) {
+		if testEncoderWithInit(path, enc) {
 			logging.InfoLogger.Printf("Encoder %s verified working", enc.Name)
 			found = append(found, enc)
 		} else {
@@ -167,22 +161,61 @@ func DetectEncoders() []HwEncoder {
 	return found
 }
 
-// testEncoder tries to actually use an encoder to verify it works on this hardware
-func testEncoder(ffmpegPath, encoderName string) bool {
-	// Build a minimal encoding test: generate 1 frame of blank video and try to encode it
-	args := []string{"-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1"}
+// legacyEncoderCandidates returns the hardcoded encoder definitions used
+// when no CamerasConfig is available (backward-compatible with replays).
+func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
+	var candidates []HwEncoder
+	if available["h264_nvenc"] {
+		candidates = append(candidates, HwEncoder{
+			Name: "h264_nvenc", Description: "NVIDIA GPU",
+			InputParameters: "-rtbufsize 512M -thread_queue_size 4096",
+			OutputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M",
+		})
+	}
+	if available["h264_amf"] {
+		candidates = append(candidates, HwEncoder{
+			Name: "h264_amf", Description: "AMD GPU (AMF)",
+			InputParameters: "-rtbufsize 512M -thread_queue_size 4096",
+			OutputParameters: "-c:v h264_amf -rc cbr -b:v 8M",
+		})
+	}
+	if available["h264_vaapi"] && runtime.GOOS == "linux" {
+		candidates = append(candidates, HwEncoder{
+			Name: "h264_vaapi", Description: "VAAPI (AMD/Intel on Linux)",
+			InputParameters: "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
+			OutputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M",
+			TestInit: "-init_hw_device vaapi=va:/dev/dri/renderD128",
+		})
+	}
+	if available["h264_qsv"] {
+		candidates = append(candidates, HwEncoder{
+			Name: "h264_qsv", Description: "Intel GPU (QSV)",
+			InputParameters: "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
+			OutputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M",
+			TestInit: "-init_hw_device qsv=hw -filter_hw_device hw",
+		})
+	}
+	return candidates
+}
 
-	// Some encoders need special init flags
-	switch encoderName {
-	case "h264_vaapi":
-		args = []string{"-hide_banner", "-loglevel", "error",
-			"-init_hw_device", "vaapi=va:/dev/dri/renderD128",
-			"-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
-			"-vf", "format=nv12,hwupload", // VAAPI needs hwupload
-			"-c:v", encoderName, "-f", "null", "-",
+// testEncoderWithInit tests whether an encoder actually works on this hardware,
+// using the TestInit field for any required hardware init flags.
+func testEncoderWithInit(ffmpegPath string, enc HwEncoder) bool {
+	var args []string
+
+	if enc.TestInit != "" {
+		args = append(args, "-hide_banner", "-loglevel", "error")
+		args = append(args, strings.Fields(enc.TestInit)...)
+		args = append(args, "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1")
+		// VAAPI needs hwupload filter
+		if strings.Contains(enc.Name, "vaapi") {
+			args = append(args, "-vf", "format=nv12,hwupload")
 		}
-	default:
-		args = append(args, "-c:v", encoderName, "-f", "null", "-")
+		args = append(args, "-c:v", enc.Name, "-f", "null", "-")
+	} else {
+		args = []string{"-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
+			"-c:v", enc.Name, "-f", "null", "-"}
 	}
 
 	cmd := CreateHiddenCmd(ffmpegPath, args...)
@@ -190,7 +223,7 @@ func testEncoder(ffmpegPath, encoderName string) bool {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		logging.InfoLogger.Printf("Encoder test for %s failed: %v (%s)", encoderName, err, strings.TrimSpace(stderr.String()))
+		logging.InfoLogger.Printf("Encoder test for %s failed: %v (%s)", enc.Name, err, strings.TrimSpace(stderr.String()))
 		return false
 	}
 	return true
@@ -520,6 +553,12 @@ func probeDshowDevice(ffmpegPath, name string) *DetectedCamera {
 }
 
 func pickBestCameraMode(allModes []cameraMode) cameraMode {
+	return PickBestCameraModeWithConfig(allModes, nil)
+}
+
+// PickBestCameraModeWithConfig selects the best camera mode using config-driven priorities.
+// If cfg is nil, uses legacy hardcoded priorities.
+func PickBestCameraModeWithConfig(allModes []cameraMode, cfg *config.CamerasConfig) cameraMode {
 	if len(allModes) == 0 {
 		return cameraMode{pixFmt: "unknown", width: 1280, height: 720, fps: 30}
 	}
@@ -546,7 +585,7 @@ func pickBestCameraMode(allModes []cameraMode) cameraMode {
 
 	best := candidates[0]
 	for _, mode := range candidates[1:] {
-		if modePreferredOver(mode, best) {
+		if modePreferredOverWithConfig(mode, best, cfg) {
 			best = mode
 		}
 	}
@@ -565,15 +604,26 @@ func filterMjpegToMax720p(modes []cameraMode) []cameraMode {
 	return filtered
 }
 
-func modePreferredOver(candidate, current cameraMode) bool {
-	candidateFormat := modeFormatPriority(candidate.pixFmt)
-	currentFormat := modeFormatPriority(current.pixFmt)
+func modePreferredOverWithConfig(candidate, current cameraMode, cfg *config.CamerasConfig) bool {
+	var candidateFormat, currentFormat int
+	var candidateProfile, currentProfile int
+
+	if cfg != nil {
+		candidateFormat = cfg.FormatPriorityValue(candidate.pixFmt)
+		currentFormat = cfg.FormatPriorityValue(current.pixFmt)
+		candidateProfile = cfg.ProfilePriorityValue(candidate.width, candidate.height, candidate.fps)
+		currentProfile = cfg.ProfilePriorityValue(current.width, current.height, current.fps)
+	} else {
+		candidateFormat = modeFormatPriority(candidate.pixFmt)
+		currentFormat = modeFormatPriority(current.pixFmt)
+		candidateProfile = modeProfilePriority(candidate)
+		currentProfile = modeProfilePriority(current)
+	}
+
 	if candidateFormat != currentFormat {
 		return candidateFormat > currentFormat
 	}
 
-	candidateProfile := modeProfilePriority(candidate)
-	currentProfile := modeProfilePriority(current)
 	if candidateProfile != currentProfile {
 		return candidateProfile > currentProfile
 	}
@@ -754,16 +804,13 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 	return nil
 }
 
-// pickBestEncoder selects the best available hardware encoder
+// PickBestEncoder selects the best available hardware encoder.
+// When DetectEncodersWithConfig was used, encoders are already in config
+// preference order, so the first one wins. For the legacy path, we apply
+// a hardcoded preference: nvenc > amf > vaapi > qsv.
 func PickBestEncoder(encoders []HwEncoder) *HwEncoder {
-	// Preference order: nvenc > amf > vaapi > qsv
-	preference := []string{"h264_nvenc", "h264_amf", "h264_vaapi", "h264_qsv"}
-	for _, pref := range preference {
-		for i := range encoders {
-			if encoders[i].Name == pref {
-				return &encoders[i]
-			}
-		}
+	if len(encoders) > 0 {
+		return &encoders[0]
 	}
 	return nil
 }
