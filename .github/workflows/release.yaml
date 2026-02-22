@@ -57,12 +57,14 @@ jobs:
     - name: Build replays for Linux arm64
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       run: |
+        mkdir -p artifacts
         fyne-cross linux -arch arm64 -name replays -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
         cp fyne-cross/bin/linux-arm64/replays artifacts/replays_linux_arm64
 
     - name: Build replays for Windows
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       run: |
+        mkdir -p artifacts
         fyne-cross windows -arch amd64 -name replays -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
         cp fyne-cross/bin/windows-amd64/replays.exe artifacts/replays_windows.exe
 
@@ -103,12 +105,14 @@ jobs:
     - name: Build cameras for Linux arm64
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       run: |
+        mkdir -p artifacts
         fyne-cross linux -arch arm64 -name cameras -app-id app.owlcms.cameras -icon Icon.png ./cmd/cameras
         cp fyne-cross/bin/linux-arm64/cameras artifacts/cameras_linux_arm64
 
     - name: Build cameras for Windows
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       run: |
+        mkdir -p artifacts
         fyne-cross windows -arch amd64 -name cameras -app-id app.owlcms.cameras -icon Icon.png ./cmd/cameras
         cp fyne-cross/bin/windows-amd64/cameras.exe artifacts/cameras_windows.exe
 
