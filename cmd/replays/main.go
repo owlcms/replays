@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,8 +16,10 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
@@ -483,8 +486,10 @@ func showMulticastConfig(cfg *config.Config, window fyne.Window) {
 			}
 
 			ip := strings.TrimSpace(ipEntry.Text)
-			if ip == "" {
-				ip = "239.255.0.1"
+			parsedIP := net.ParseIP(ip)
+			if parsedIP == nil || !parsedIP.IsMulticast() {
+				dialog.ShowError(fmt.Errorf("Multicast IP must be a valid multicast address"), window)
+				return
 			}
 			p1, err := parseOptionalPort("Camera 1 port", port1Entry.Text)
 			if err != nil {
@@ -541,6 +546,32 @@ func multicastToggleLabel(enabled bool) string {
 		return "Stop using Multicast"
 	}
 	return "Use Multicast Cameras"
+}
+
+func localMulticastMismatchNote(cfg *config.Config) string {
+	if !cfg.Multicast.Enabled {
+		return ""
+	}
+
+	camerasCfg, err := config.LoadCamerasConfig()
+	if err != nil {
+		logging.WarningLogger.Printf("Skipping cameras/replays multicast check: %v", err)
+		return ""
+	}
+
+	camerasConfigPath := config.GetCamerasConfigSourcePath()
+	if camerasConfigPath == "" {
+		return ""
+	}
+
+	replaysIP := strings.TrimSpace(cfg.Multicast.IP)
+	camerasIP := strings.TrimSpace(camerasCfg.Multicast.IP)
+	if replaysIP == "" || camerasIP == "" || replaysIP == camerasIP {
+		return ""
+	}
+
+	logging.WarningLogger.Printf("Replays multicast IP (%s) differs from Cameras multicast IP (%s)", replaysIP, camerasIP)
+	return fmt.Sprintf("Warning: local Cameras multicast IP is %s, Replays is %s. This is OK when Cameras runs on another machine.", camerasIP, replaysIP)
 }
 
 func main() {
@@ -654,6 +685,8 @@ func main() {
 	if strings.HasPrefix(initialStatus, "Error:") {
 		statusLabel.TextStyle = fyne.TextStyle{Bold: true}
 	}
+	mismatchNote := canvas.NewText(localMulticastMismatchNote(cfg), theme.ErrorColor())
+	mismatchNote.TextStyle = fyne.TextStyle{Italic: true}
 
 	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
 	parsedURL, _ := url.Parse(urlStr)
@@ -664,6 +697,7 @@ func main() {
 		container.NewHBox(hyperlink),
 		widget.NewSeparator(),
 		statusLabel,
+		mismatchNote,
 	))
 
 	window.SetContent(content)
@@ -700,9 +734,8 @@ func main() {
 		fyne.NewMenu("Cameras",
 			multicastToggle,
 			multicastConfigItem,
-		),
-		fyne.NewMenu("Help",
-			// Add "List Cameras" menu item for Windows and Linux
+			fyne.NewMenuItemSeparator(),
+			// Camera tooling
 			fyne.NewMenuItem("List Cameras", func() {
 				if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
 					recording.ListCameras(window)
@@ -713,7 +746,8 @@ func main() {
 					recording.DetectAndWriteConfig(window)
 				}
 			}),
-			fyne.NewMenuItemSeparator(),
+		),
+		fyne.NewMenu("Help",
 			fyne.NewMenuItem("About", func() {
 				dialog.ShowInformation("About", fmt.Sprintf("OWLCMS Jury Replays\nVersion %s", config.GetProgramVersion()), window)
 			}),

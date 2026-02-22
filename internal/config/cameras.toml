@@ -21,6 +21,9 @@
     # UDP packet size for MPEG-TS
     pktSize = 1316
 
+    # When true, keep multicast output but set ttl=0 so packets stay local
+    localOnly = false
+
 [cameras]
     # Include integrated/raw webcam modes for this instance.
     includeAll = false

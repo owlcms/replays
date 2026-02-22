@@ -35,6 +35,7 @@ type MulticastConfig struct {
 	IP        string `toml:"ip"`
 	StartPort int    `toml:"startPort"`
 	PktSize   int    `toml:"pktSize"`
+	LocalOnly bool   `toml:"localOnly"`
 }
 
 // CamerasSelection holds camera filtering and mode selection settings.
@@ -149,8 +150,12 @@ func GetCamerasConfigSourcePath() string {
 	return camerasConfigSourcePath
 }
 
-// SaveCamerasStartPort updates multicast.startPort in the loaded cameras.toml file.
-func SaveCamerasStartPort(startPort int) error {
+// SaveCamerasMulticastSettings updates multicast.ip, multicast.startPort,
+// and multicast.localOnly in the loaded cameras.toml file.
+func SaveCamerasMulticastSettings(ip string, startPort int, localOnly bool) error {
+	if strings.TrimSpace(ip) == "" {
+		return fmt.Errorf("invalid multicast ip")
+	}
 	if startPort < 1 || startPort > 65535 {
 		return fmt.Errorf("invalid startPort %d", startPort)
 	}
@@ -184,7 +189,9 @@ func SaveCamerasStartPort(startPort int) error {
 		}
 	}
 
+	ipLine := fmt.Sprintf("    ip = \"%s\"", ip)
 	startPortLine := fmt.Sprintf("    startPort = %d", startPort)
+	localOnlyLine := fmt.Sprintf("    localOnly = %t", localOnly)
 
 	if multicastStart == -1 {
 		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
@@ -192,23 +199,46 @@ func SaveCamerasStartPort(startPort int) error {
 		}
 		lines = append(lines,
 			"[multicast]",
+			ipLine,
 			startPortLine,
+			localOnlyLine,
 		)
 	} else {
-		updated := false
+		updatedIP := false
+		updatedStartPort := false
+		updatedLocalOnly := false
 		for i := multicastStart + 1; i < multicastEnd; i++ {
 			trimmed := strings.TrimSpace(lines[i])
+			if strings.HasPrefix(trimmed, "ip") {
+				indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+				lines[i] = fmt.Sprintf("%sip = \"%s\"", indent, ip)
+				updatedIP = true
+				continue
+			}
 			if strings.HasPrefix(trimmed, "startPort") {
 				indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
 				lines[i] = fmt.Sprintf("%sstartPort = %d", indent, startPort)
-				updated = true
-				break
+				updatedStartPort = true
+				continue
+			}
+			if strings.HasPrefix(trimmed, "localOnly") {
+				indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+				lines[i] = fmt.Sprintf("%slocalOnly = %t", indent, localOnly)
+				updatedLocalOnly = true
 			}
 		}
-		if !updated {
-			newLines := make([]string, 0, len(lines)+1)
+		if !updatedIP || !updatedStartPort || !updatedLocalOnly {
+			newLines := make([]string, 0, len(lines)+3)
 			newLines = append(newLines, lines[:multicastStart+1]...)
-			newLines = append(newLines, startPortLine)
+			if !updatedIP {
+				newLines = append(newLines, ipLine)
+			}
+			if !updatedStartPort {
+				newLines = append(newLines, startPortLine)
+			}
+			if !updatedLocalOnly {
+				newLines = append(newLines, localOnlyLine)
+			}
 			newLines = append(newLines, lines[multicastStart+1:]...)
 			lines = newLines
 		}
@@ -219,6 +249,15 @@ func SaveCamerasStartPort(startPort int) error {
 	}
 
 	return nil
+}
+
+// SaveCamerasStartPort updates multicast.startPort in the loaded cameras.toml file.
+func SaveCamerasStartPort(startPort int) error {
+	cfg, err := LoadCamerasConfig()
+	if err != nil {
+		return err
+	}
+	return SaveCamerasMulticastSettings(cfg.Multicast.IP, startPort, cfg.Multicast.LocalOnly)
 }
 
 // ExtractDefaultCamerasConfig writes default cameras config files
