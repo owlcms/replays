@@ -286,12 +286,12 @@ func detectCamerasLinux(cfg *config.CamerasConfig) []DetectedCamera {
 			} else {
 				currentName = strings.TrimRight(strings.TrimSpace(line), ":")
 			}
-			logging.InfoLogger.Printf("v4l2 device group: %s", currentName)
 		} else {
 			trimmed := strings.TrimSpace(line)
 			// Skip /dev/media entries, only consider /dev/videoN
 			if strings.HasPrefix(trimmed, "/dev/video") && currentName != "" {
-				logging.InfoLogger.Printf("v4l2 device: %s -> %s", currentName, trimmed)
+				// Strip "Webcam gadget: " prefix from Linux USB gadget virtual cameras
+				currentName = strings.TrimPrefix(currentName, "Webcam gadget: ")
 				devices = append(devices, deviceEntry{name: currentName, device: trimmed})
 				currentName = "" // skip subsequent devices for same camera
 			}
@@ -402,11 +402,6 @@ func probeV4L2Device(name, device string, cfg *config.CamerasConfig) *DetectedCa
 				formats = append(formats, formatInfo{pixFmt: currentPixFmt, width: currentWidth, height: currentHeight, fps: fps})
 			}
 		}
-	}
-
-	logging.InfoLogger.Printf("Device %s: found %d format/size/fps combinations", device, len(formats))
-	for _, f := range formats {
-		logging.InfoLogger.Printf("  %s %dx%d @ %d fps", f.pixFmt, f.width, f.height, f.fps)
 	}
 
 	if len(formats) == 0 {
