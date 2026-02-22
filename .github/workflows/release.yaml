@@ -77,9 +77,9 @@ jobs:
   build_cameras:
     runs-on: ubuntu-latest
     env:
-      BUILD_WINDOWS: false   # temporarily disabled
+      BUILD_WINDOWS: true
       BUILD_RASPBERRY: true
-      BUILD_LINUX: false     # temporarily disabled
+      BUILD_LINUX: true
 
     steps:
     - name: Checkout code
