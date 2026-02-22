@@ -29,6 +29,13 @@ logFfmpeg = false
     camera3Port = 0
     camera4Port = 0
 
+# Camera source precedence (highest to lowest):
+# 1) multicast.toml mapping (when [multicast].enabled = true)
+# 2) auto.toml camera sections (when multicast is disabled and auto.toml exists)
+# 3) camera sections in this file ([windows*], [linux*], etc.)
+#
+# Note: this precedence applies only to camera source definitions.
+# Other application settings (port, videoDir, owlcms, etc.) are still read from config.toml.
 
 # =======================================================
 # Windows Camera Configurations

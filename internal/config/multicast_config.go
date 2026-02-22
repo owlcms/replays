@@ -70,6 +70,14 @@ func UpdateMulticastMappingFile(multicastPath string, settings MulticastSettings
 	}
 
 	newSection := []string{
+		"# Camera source precedence in replays (highest to lowest):",
+		"# 1) multicast.toml mapping (this file, when [multicast].enabled = true in config.toml)",
+		"# 2) auto.toml camera sections (when multicast is disabled and auto.toml exists)",
+		"# 3) camera sections in config.toml ([windows*], [linux*], etc.)",
+		"#",
+		"# Note: this precedence applies only to camera source definitions.",
+		"# Other application settings still come from config.toml.",
+		"",
 		"[multicast]",
 		fmt.Sprintf("    ip = \"%s\"", settings.IP),
 		fmt.Sprintf("    camera1Port = %d", settings.Camera1Port),

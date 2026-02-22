@@ -1,6 +1,14 @@
 # Multicast camera mapping for replays
 # Used when [multicast].enabled = true in config.toml
 
+# Camera source precedence in replays (highest to lowest):
+# 1) multicast.toml mapping (this file, when [multicast].enabled = true in config.toml)
+# 2) auto.toml camera sections (when multicast is disabled and auto.toml exists)
+# 3) camera sections in config.toml ([windows*], [linux*], etc.)
+#
+# Note: this precedence applies only to camera source definitions.
+# Other application settings still come from config.toml.
+
 [multicast]
     ip = "239.255.0.1"
     camera1Port = 9001

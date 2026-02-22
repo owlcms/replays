@@ -15,9 +15,9 @@ jobs:
   build_replays:
     runs-on: ubuntu-latest
     env:
-      BUILD_WINDOWS: true
+      BUILD_WINDOWS: false   # temporarily disabled
       BUILD_RASPBERRY: true
-      BUILD_LINUX: true
+      BUILD_LINUX: false     # temporarily disabled
 
     steps:
     - name: Checkout code
@@ -75,9 +75,9 @@ jobs:
   build_cameras:
     runs-on: ubuntu-latest
     env:
-      BUILD_WINDOWS: true
+      BUILD_WINDOWS: false   # temporarily disabled
       BUILD_RASPBERRY: true
-      BUILD_LINUX: true
+      BUILD_LINUX: false     # temporarily disabled
 
     steps:
     - name: Checkout code
@@ -122,9 +122,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build_replays, build_cameras]
     env:
-      BUILD_WINDOWS: true
+      BUILD_WINDOWS: false   # temporarily disabled
       BUILD_RASPBERRY: true
-      BUILD_LINUX: true
+      BUILD_LINUX: false     # temporarily disabled
 
     steps:
     - name: Checkout code
