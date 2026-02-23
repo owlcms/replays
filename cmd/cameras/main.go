@@ -361,6 +361,15 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 
 	var args []string
 
+	// Determine if we need hardware encoding (not h264 copy mode)
+	needsEncoding := cam.PixFmt != "h264"
+
+	// Add encoder input parameters BEFORE the input specification
+	// This is required for hardware encoders like vaapi that need hwaccel init
+	if needsEncoding && encoder != nil && encoder.InputParameters != "" {
+		args = append(args, strings.Fields(encoder.InputParameters)...)
+	}
+
 	// Build input arguments based on platform and format
 	switch cam.Format {
 	case "dshow":
@@ -376,7 +385,10 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		}
 		args = append(args, "-video_size", cam.Size)
 		args = append(args, "-framerate", fmt.Sprintf("%d", cam.Fps))
-		args = append(args, "-rtbufsize", "512M")
+		// Only add rtbufsize if not already in encoder input params
+		if encoder == nil || !strings.Contains(encoder.InputParameters, "rtbufsize") {
+			args = append(args, "-rtbufsize", "512M")
+		}
 		args = append(args, "-i", fmt.Sprintf("video=%s", cam.Device))
 
 	case "v4l2":
@@ -405,6 +417,12 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	case "mjpeg":
 		// Need to decode MJPEG and encode to H.264
 		if encoder != nil {
+			// Add hwupload filter for hardware encoders that need it (vaapi, qsv)
+			if strings.Contains(encoder.Name, "vaapi") {
+				args = append(args, "-vf", "format=nv12,hwupload")
+			} else if strings.Contains(encoder.Name, "qsv") {
+				args = append(args, "-vf", "format=nv12,hwupload=extra_hw_frames=64")
+			}
 			args = append(args, strings.Fields(encoder.OutputParameters)...)
 		} else {
 			args = append(args, strings.Fields(cfg.Software.OutputParameters)...)
@@ -415,6 +433,12 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	default:
 		// Raw format - need to encode
 		if encoder != nil {
+			// Add hwupload filter for hardware encoders that need it (vaapi, qsv)
+			if strings.Contains(encoder.Name, "vaapi") {
+				args = append(args, "-vf", "format=nv12,hwupload")
+			} else if strings.Contains(encoder.Name, "qsv") {
+				args = append(args, "-vf", "format=nv12,hwupload=extra_hw_frames=64")
+			}
 			args = append(args, strings.Fields(encoder.OutputParameters)...)
 		} else {
 			args = append(args, strings.Fields(cfg.Software.OutputParameters)...)
@@ -955,7 +979,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 	myApp := app.New()
 	setAppIcon(myApp)
 	window := myApp.NewWindow("Camera Multicast Streams")
-	window.Resize(fyne.NewSize(1420, 500))
+	window.Resize(fyne.NewSize(1280, 500))
 
 	headers := []string{"Camera", "Format", "Resolution", "Expected FPS", "Measured FPS", "Drift", "Port", "Preview", "Record", "Status"}
 	actionStatus := widget.NewLabel("Preview/Record: ready")

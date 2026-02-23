@@ -148,19 +148,26 @@ func DetectEncodersWithConfig(cfg *config.CamerasConfig) []HwEncoder {
 	var candidates []HwEncoder
 	if cfg != nil && len(cfg.Encoders) > 0 {
 		for _, enc := range cfg.Encoders {
-			if availableEncoders[enc.Name] {
-				if !encoderMatchesDetectedGPU(enc, detectedGPUVendors) {
-					logging.InfoLogger.Printf("Skipping encoder %s: configured for gpuVendors=%v, detected=%v", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
-					continue
-				}
-				candidates = append(candidates, HwEncoder{
-					Name:             enc.Name,
-					Description:      enc.Description,
-					InputParameters:  enc.InputParameters,
-					OutputParameters: enc.OutputParameters,
-					TestInit:         enc.TestInit,
-				})
+			if !availableEncoders[enc.Name] {
+				continue
 			}
+			// Check platform restriction
+			if enc.Platform != "" && enc.Platform != runtime.GOOS {
+				logging.InfoLogger.Printf("Skipping encoder %s: platform=%s, current=%s", enc.Name, enc.Platform, runtime.GOOS)
+				continue
+			}
+			if !encoderMatchesDetectedGPU(enc, detectedGPUVendors) {
+				logging.InfoLogger.Printf("Skipping encoder %s: configured for gpuVendors=%v, detected=%v", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
+				continue
+			}
+			logging.InfoLogger.Printf("Encoder %s is a candidate (gpuVendors=%v match detected=%v)", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
+			candidates = append(candidates, HwEncoder{
+				Name:             enc.Name,
+				Description:      enc.Description,
+				InputParameters:  enc.InputParameters,
+				OutputParameters: enc.OutputParameters,
+				TestInit:         enc.TestInit,
+			})
 		}
 	} else {
 		// Legacy hardcoded fallback (used when cfg is nil, e.g. from replays)
@@ -201,7 +208,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 	if available["h264_vaapi"] && runtime.GOOS == "linux" {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_vaapi", Description: "VAAPI (AMD/Intel on Linux)",
-			InputParameters:  "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096",
+			InputParameters:  "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096",
 			OutputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M",
 			TestInit:         "-init_hw_device vaapi=va:/dev/dri/renderD128",
 		})
@@ -260,10 +267,57 @@ func detectGPUVendors() map[string]bool {
 		return vendors
 	}
 
+	// Method 1: Check NVIDIA driver file
 	if _, err := os.Stat("/proc/driver/nvidia/version"); err == nil {
+		logging.InfoLogger.Printf("NVIDIA detected via /proc/driver/nvidia/version")
 		vendors["nvidia"] = true
 	}
 
+	// Method 2: Check nvidia-smi (works even if /proc file is missing)
+	if !vendors["nvidia"] {
+		cmd := CreateHiddenCmd("nvidia-smi", "-L")
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err == nil && strings.Contains(strings.ToLower(out.String()), "gpu") {
+			logging.InfoLogger.Printf("NVIDIA detected via nvidia-smi")
+			vendors["nvidia"] = true
+		}
+	}
+
+	// Method 3: Check /sys/class/drm for card drivers
+	drmPath := "/sys/class/drm"
+	if entries, err := os.ReadDir(drmPath); err == nil {
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), "card") || strings.Contains(entry.Name(), "-") {
+				continue
+			}
+			driverLink := filepath.Join(drmPath, entry.Name(), "device", "driver")
+			if target, err := os.Readlink(driverLink); err == nil {
+				driverName := strings.ToLower(filepath.Base(target))
+				if strings.Contains(driverName, "nvidia") || strings.Contains(driverName, "nouveau") {
+					if !vendors["nvidia"] {
+						logging.InfoLogger.Printf("NVIDIA detected via /sys/class/drm (%s)", driverName)
+					}
+					vendors["nvidia"] = true
+				}
+				if strings.Contains(driverName, "amdgpu") || strings.Contains(driverName, "radeon") {
+					if !vendors["amd"] {
+						logging.InfoLogger.Printf("AMD detected via /sys/class/drm (%s)", driverName)
+					}
+					vendors["amd"] = true
+				}
+				if strings.Contains(driverName, "i915") || strings.Contains(driverName, "xe") {
+					if !vendors["intel"] {
+						logging.InfoLogger.Printf("Intel detected via /sys/class/drm (%s)", driverName)
+					}
+					vendors["intel"] = true
+				}
+			}
+		}
+	}
+
+	// Method 4: Fallback to lspci for any vendors not yet detected
 	cmd := CreateHiddenCmd("lspci", "-nn")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -277,13 +331,20 @@ func detectGPUVendors() map[string]bool {
 		if line == "" {
 			continue
 		}
-		if strings.Contains(line, "nvidia") {
+		// Only check VGA/3D/Display controller lines
+		if !strings.Contains(line, "vga") && !strings.Contains(line, "3d") && !strings.Contains(line, "display") {
+			continue
+		}
+		if strings.Contains(line, "nvidia") && !vendors["nvidia"] {
+			logging.InfoLogger.Printf("NVIDIA detected via lspci")
 			vendors["nvidia"] = true
 		}
-		if strings.Contains(line, "advanced micro devices") || strings.Contains(line, " amd") || strings.Contains(line, "ati") {
+		if (strings.Contains(line, "advanced micro devices") || strings.Contains(line, "[amd") || strings.Contains(line, " amd/") || strings.Contains(line, "ati")) && !vendors["amd"] {
+			logging.InfoLogger.Printf("AMD detected via lspci")
 			vendors["amd"] = true
 		}
-		if strings.Contains(line, "intel") {
+		if strings.Contains(line, "intel") && !vendors["intel"] {
+			logging.InfoLogger.Printf("Intel detected via lspci")
 			vendors["intel"] = true
 		}
 	}
