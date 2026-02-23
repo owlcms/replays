@@ -382,11 +382,18 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 
 	// Output flags from config (e.g. "-an -f mpegts")
 	args = append(args, strings.Fields(cfg.Output.ExtraFlags)...)
+
+	// Structured progress to stdout (key=value lines), suppress default stats on stderr
+	args = append(args, "-nostats", "-progress", "pipe:1")
 	args = append(args, udpDest)
 
 	// Create the command with hidden console on Windows
 	cmd := recording.CreateHiddenCmd(ffmpegPath, args...)
-	cmd.Stdout = io.Discard
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -403,7 +410,8 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		logging.ErrorLogger.Printf("Failed to assign ffmpeg to job object: %v", err)
 	}
 
-	go monitorFFmpegStats(stream, stderr)
+	go monitorFFmpegProgress(stream, stdout)
+	go monitorFFmpegErrors(stream, stderr)
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
@@ -453,7 +461,23 @@ func splitCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	return 0, nil, nil
 }
 
-func monitorFFmpegStats(stream *cameraStream, stderr io.Reader) {
+// monitorFFmpegProgress reads structured key=value progress from stdout (-progress pipe:1)
+func monitorFFmpegProgress(stream *cameraStream, stdout io.Reader) {
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			stream.updateProgress(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+		}
+	}
+}
+
+// monitorFFmpegErrors reads stderr for error logging (skip noisy H.264 sync messages)
+func monitorFFmpegErrors(stream *cameraStream, stderr io.Reader) {
 	scanner := bufio.NewScanner(stderr)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	scanner.Split(splitCRLF)
@@ -465,13 +489,16 @@ func monitorFFmpegStats(stream *cameraStream, stderr io.Reader) {
 		}
 
 		stream.setLastStderr(line)
+
 		lower := strings.ToLower(line)
+		if strings.Contains(lower, "decode_slice_header") ||
+			strings.Contains(lower, "non-existing pps") ||
+			strings.Contains(lower, "no frame") ||
+			strings.Contains(lower, "corrupted") {
+			continue
+		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "unable") || strings.Contains(lower, "invalid") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "device or resource busy") {
 			logging.ErrorLogger.Printf("ffmpeg stderr [%s]: %s", stream.camera.Name, line)
-		}
-
-		if strings.Contains(line, "frame=") || strings.Contains(line, "fps=") {
-			stream.updateStats(line)
 		}
 	}
 }
@@ -512,30 +539,42 @@ func (s *cameraStream) getLastStderr() string {
 	return s.lastStderr
 }
 
-func (s *cameraStream) updateStats(line string) {
+func (s *cameraStream) updateProgress(key, value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if value, ok := parseRegexValue(frameRegex, line); ok {
+	switch key {
+	case "frame":
 		s.frame = value
-	}
-	if value, ok := parseRegexValue(fpsRegex, line); ok {
-		s.fps = value
-	}
-	if value, ok := parseRegexValue(bitrateRegex, line); ok {
+	case "fps":
+		// fps=0.00 in copy mode is meaningless, ignore it
+		if value != "0" && value != "0.0" && value != "0.00" && value != "N/A" {
+			s.fps = value
+		}
+	case "bitrate":
 		s.bitrate = value
-	}
-	if value, ok := parseRegexValue(speedRegex, line); ok {
+	case "speed":
 		s.speed = value
+	case "progress":
+		// End of a progress block — update status and timestamp
+		// In copy mode, fps is not reported; show speed instead
+		if s.fps == "" || s.fps == "-" || s.fps == "0" || s.fps == "0.00" || s.fps == "N/A" {
+			if s.speed != "" && s.speed != "N/A" {
+				s.fps = s.speed
+			}
+		}
+		s.running = true
+		s.status = "running"
+		s.lastUpdate = time.Now()
 	}
-
-	s.running = true
-	s.status = "running"
-	s.lastUpdate = time.Now()
 }
 
 func formatFPSValue(raw string) string {
 	if raw == "" || raw == "-" {
+		return raw
+	}
+	// Speed values like "1.04x" — show as-is
+	if strings.HasSuffix(raw, "x") {
 		return raw
 	}
 	if !strings.Contains(raw, ".") {
@@ -545,7 +584,7 @@ func formatFPSValue(raw string) string {
 	if err != nil {
 		return raw
 	}
-	return fmt.Sprintf("%.2f", value)
+	return fmt.Sprintf("%.0f", value)
 }
 
 func (s *cameraStream) snapshotRow() [9]string {
@@ -554,7 +593,12 @@ func (s *cameraStream) snapshotRow() [9]string {
 
 	age := "-"
 	if !s.lastUpdate.IsZero() {
-		age = strconv.Itoa(int(time.Since(s.lastUpdate).Seconds())) + "s"
+		secs := int(time.Since(s.lastUpdate).Seconds())
+		if secs >= 1 {
+			age = strconv.Itoa(secs) + "s"
+		} else {
+			age = ""
+		}
 	}
 
 	return [9]string{
@@ -698,7 +742,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 	window := myApp.NewWindow("Camera Multicast Streams")
 	window.Resize(fyne.NewSize(1320, 500))
 
-	headers := []string{"Camera", "Format", "Size", "Multicast", "FPS", "Preview", "Record", "Status", "Last"}
+	headers := []string{"Camera", "Format", "Size", "Multicast", "Speed", "Preview", "Record", "Status", "Lag"}
 	actionStatus := widget.NewLabel("Preview/Record: ready")
 
 	// Starting port entry + restart button

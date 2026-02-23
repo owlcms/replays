@@ -341,7 +341,7 @@ func probeV4L2Device(name, device string, cfg *config.CamerasConfig) *DetectedCa
 	// Match common V4L2 pixel formats
 	formatRe := regexp.MustCompile(`'(MJPG|YUYV|H264|NV12|RGB3|BGR3|UYVY)'`)
 	sizeRe := regexp.MustCompile(`Size:\s+Discrete\s+(\d+)x(\d+)`)
-	fpsRe := regexp.MustCompile(`\((\d+)\.000\s+fps\)`)
+	fpsRe := regexp.MustCompile(`\(([0-9]+(?:\.[0-9]+)?)\s+fps\)`)
 
 	// First pass: collect all lines
 	var lines []string
@@ -386,7 +386,7 @@ func probeV4L2Device(name, device string, cfg *config.CamerasConfig) *DetectedCa
 
 		// Check for fps line
 		if m := fpsRe.FindStringSubmatch(line); m != nil && currentPixFmt != "" && currentWidth > 0 {
-			fps := atoi(m[1])
+			fps := parseFps(m[1])
 			// Only record the highest fps for each format+size combination
 			found := false
 			for i := range formats {
