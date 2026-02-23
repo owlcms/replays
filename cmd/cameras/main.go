@@ -74,15 +74,58 @@ type cameraStream struct {
 	cmd     *exec.Cmd
 	encoder *recording.HwEncoder
 
-	mu         sync.RWMutex
-	running    bool
-	status     string
-	fps        string
-	frame      string
-	bitrate    string
-	speed      string
-	lastStderr string
-	lastUpdate time.Time
+	mu                 sync.RWMutex
+	running            bool
+	status             string
+	fps                string
+	metricName         string
+	frame              string
+	bitrate            string
+	speed              string
+	progressFrame      int64
+	hasProgressFrame   bool
+	progressOutTimeUS  int64
+	hasProgressOutTime bool
+	lastProgress       Progress
+	hasLastProgress    bool
+	fpsEMA             float64
+	hasFPSEMA          bool
+	driftEMA           float64
+	hasDriftEMA        bool
+	lastStderr         string
+	lastUpdate         time.Time
+}
+
+type Progress struct {
+	Frame     int64
+	OutTimeUS int64 // microseconds (ffmpeg out_time_ms is actually µs)
+	WallTime  time.Time
+}
+
+type Metrics struct {
+	FPS   float64
+	Drift float64
+}
+
+func ComputeMetrics(prev, curr Progress) Metrics {
+	deltaFrame := curr.Frame - prev.Frame
+	deltaOutSeconds := float64(curr.OutTimeUS-prev.OutTimeUS) / 1_000_000.0
+	deltaWallSeconds := curr.WallTime.Sub(prev.WallTime).Seconds()
+
+	var fps float64
+	if deltaOutSeconds > 0 {
+		fps = float64(deltaFrame) / deltaOutSeconds
+	}
+
+	var drift float64
+	if deltaWallSeconds > 0 {
+		drift = deltaOutSeconds / deltaWallSeconds
+	}
+
+	return Metrics{
+		FPS:   fps,
+		Drift: drift,
+	}
 }
 
 var (
@@ -546,27 +589,166 @@ func (s *cameraStream) updateProgress(key, value string) {
 	switch key {
 	case "frame":
 		s.frame = value
+		if frameNumber, err := strconv.ParseInt(value, 10, 64); err == nil {
+			s.progressFrame = frameNumber
+			s.hasProgressFrame = true
+		}
+	case "out_time":
+		// out_time is always HH:MM:SS.ffffff — unambiguous across ffmpeg versions
+		if us, ok := parseOutTime(value); ok {
+			s.progressOutTimeUS = us
+			s.hasProgressOutTime = true
+		}
+	case "out_time_ms", "out_time_us":
+		// Fallback: if out_time wasn't seen yet, try the numeric fields.
+		// out_time_ms is µs despite the name in most ffmpeg versions.
+		if !s.hasProgressOutTime {
+			if micros, err := strconv.ParseInt(value, 10, 64); err == nil {
+				s.progressOutTimeUS = micros
+				s.hasProgressOutTime = true
+			}
+		}
 	case "fps":
-		// fps=0.00 in copy mode is meaningless, ignore it
-		if value != "0" && value != "0.0" && value != "0.00" && value != "N/A" {
+		// Keep ffmpeg-reported fps as fallback, prefer computed progress-delta FPS.
+		if isUsableFPSValue(value) {
 			s.fps = value
+			s.metricName = "FPS"
 		}
 	case "bitrate":
 		s.bitrate = value
 	case "speed":
-		s.speed = value
-	case "progress":
-		// End of a progress block — update status and timestamp
-		// In copy mode, fps is not reported; show speed instead
-		if s.fps == "" || s.fps == "-" || s.fps == "0" || s.fps == "0.00" || s.fps == "N/A" {
-			if s.speed != "" && s.speed != "N/A" {
-				s.fps = s.speed
-			}
+		// Keep ffmpeg speed as fallback, prefer computed drift ratio.
+		if normalizedSpeed, ok := normalizeSpeedValue(value); ok {
+			s.speed = normalizedSpeed
 		}
+	case "progress":
+		progressWallTime := time.Now()
+		if s.hasProgressFrame && s.hasProgressOutTime {
+			currentProgress := Progress{
+				Frame:     s.progressFrame,
+				OutTimeUS: s.progressOutTimeUS,
+				WallTime:  progressWallTime,
+			}
+
+			if s.hasLastProgress {
+				metrics := ComputeMetrics(s.lastProgress, currentProgress)
+
+				if metrics.FPS > 0 {
+					if !s.hasFPSEMA {
+						s.fpsEMA = metrics.FPS
+						s.hasFPSEMA = true
+					} else {
+						s.fpsEMA = (0.8 * s.fpsEMA) + (0.2 * metrics.FPS)
+					}
+					s.fps = fmt.Sprintf("%.2f", s.fpsEMA)
+					s.metricName = "FPS"
+				}
+
+				if metrics.Drift > 0 {
+					if !s.hasDriftEMA {
+						s.driftEMA = metrics.Drift
+						s.hasDriftEMA = true
+					} else {
+						s.driftEMA = (0.8 * s.driftEMA) + (0.2 * metrics.Drift)
+					}
+					if normalizedDrift, ok := formatRatioValue(s.driftEMA); ok {
+						s.speed = normalizedDrift
+						s.metricName = "speed"
+					}
+				}
+			}
+
+			s.lastProgress = currentProgress
+			s.hasLastProgress = true
+		}
+		// Reset per-block flags so out_time takes priority in next block
+		s.hasProgressOutTime = false
+		s.hasProgressFrame = false
 		s.running = true
 		s.status = "running"
-		s.lastUpdate = time.Now()
+		s.lastUpdate = progressWallTime
 	}
+}
+
+// parseOutTime parses ffmpeg's out_time field "HH:MM:SS.ffffff" to microseconds.
+func parseOutTime(value string) (int64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "N/A" {
+		return 0, false
+	}
+
+	// Split "HH:MM:SS.ffffff" into time part and fractional seconds
+	parts := strings.SplitN(value, ":", 3)
+	if len(parts) != 3 {
+		return 0, false
+	}
+	hours, err1 := strconv.Atoi(parts[0])
+	minutes, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return 0, false
+	}
+
+	// parts[2] is "SS.ffffff" or "SS"
+	secParts := strings.SplitN(parts[2], ".", 2)
+	seconds, err3 := strconv.Atoi(secParts[0])
+	if err3 != nil {
+		return 0, false
+	}
+
+	totalUS := int64(hours)*3_600_000_000 + int64(minutes)*60_000_000 + int64(seconds)*1_000_000
+
+	if len(secParts) == 2 {
+		frac := secParts[1]
+		// Pad or truncate to 6 digits (microseconds)
+		for len(frac) < 6 {
+			frac += "0"
+		}
+		frac = frac[:6]
+		fracUS, err := strconv.Atoi(frac)
+		if err != nil {
+			return 0, false
+		}
+		totalUS += int64(fracUS)
+	}
+
+	return totalUS, true
+}
+
+func isUsableFPSValue(value string) bool {
+	if value == "" || value == "-" || value == "0" || value == "0.0" || value == "0.00" || value == "N/A" {
+		return false
+	}
+	if strings.HasSuffix(value, "x") {
+		return false
+	}
+	return true
+}
+
+func isReasonableSpeedValue(value string) bool {
+	_, ok := normalizeSpeedValue(value)
+	return ok
+}
+
+func formatRatioValue(ratio float64) (string, bool) {
+	if !(ratio > 0 && ratio <= 10.0) {
+		return "", false
+	}
+	return fmt.Sprintf("%.2fx", ratio), true
+}
+
+func normalizeSpeedValue(value string) (string, bool) {
+	if value == "" || value == "-" || value == "N/A" {
+		return "", false
+	}
+	if !strings.HasSuffix(value, "x") {
+		return "", false
+	}
+	raw := strings.TrimSuffix(value, "x")
+	n, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return "", false
+	}
+	return formatRatioValue(n)
 }
 
 func formatFPSValue(raw string) string {
@@ -587,30 +769,63 @@ func formatFPSValue(raw string) string {
 	return fmt.Sprintf("%.0f", value)
 }
 
-func (s *cameraStream) snapshotRow() [9]string {
+func formatSpeedValue(speed, fps string) string {
+	if normalizedSpeed, ok := normalizeSpeedValue(speed); ok {
+		return normalizedSpeed
+	}
+	if normalizedSpeed, ok := normalizeSpeedValue(fps); ok {
+		return normalizedSpeed
+	}
+	return "-"
+}
+
+func formatMeasuredFPSValue(raw string) string {
+	if !isUsableFPSValue(raw) {
+		return "-"
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return raw
+	}
+	return fmt.Sprintf("%.2f", value)
+}
+
+func formatDriftValue(raw string) string {
+	if normalizedSpeed, ok := normalizeSpeedValue(raw); ok {
+		return normalizedSpeed
+	}
+	return "-"
+}
+
+func formatExpectedFPSValue(expected int) string {
+	if expected <= 0 {
+		return "-"
+	}
+	return strconv.Itoa(expected)
+}
+
+func multicastPort(port int) string {
+	if port <= 0 {
+		return "-"
+	}
+	return strconv.Itoa(port)
+}
+
+func (s *cameraStream) snapshotRow() [10]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	age := "-"
-	if !s.lastUpdate.IsZero() {
-		secs := int(time.Since(s.lastUpdate).Seconds())
-		if secs >= 1 {
-			age = strconv.Itoa(secs) + "s"
-		} else {
-			age = ""
-		}
-	}
-
-	return [9]string{
+	return [10]string{
 		s.camera.Name,
 		s.camera.PixFmt,
 		s.camera.Size,
-		s.udpDest,
-		formatFPSValue(s.fps),
+		formatExpectedFPSValue(s.camera.Fps),
+		formatMeasuredFPSValue(s.fps),
+		formatDriftValue(formatSpeedValue(s.speed, s.fps)),
+		multicastPort(s.port),
 		"Preview",
 		"Record 10s",
 		s.status,
-		age,
 	}
 }
 
@@ -740,9 +955,9 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 	myApp := app.New()
 	setAppIcon(myApp)
 	window := myApp.NewWindow("Camera Multicast Streams")
-	window.Resize(fyne.NewSize(1320, 500))
+	window.Resize(fyne.NewSize(1420, 500))
 
-	headers := []string{"Camera", "Format", "Size", "Multicast", "Speed", "Preview", "Record", "Status", "Lag"}
+	headers := []string{"Camera", "Format", "Resolution", "Expected FPS", "Measured FPS", "Drift", "Port", "Preview", "Record", "Status"}
 	actionStatus := widget.NewLabel("Preview/Record: ready")
 
 	// Starting port entry + restart button
@@ -811,7 +1026,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 				return
 			}
 			row := ss[id.Row-1].snapshotRow()
-			if id.Col == 5 {
+			if id.Col == 7 {
 				label.Hide()
 				button.Show()
 				button.SetText("Preview")
@@ -827,7 +1042,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 				return
 			}
 
-			if id.Col == 6 {
+			if id.Col == 8 {
 				label.Hide()
 				button.Show()
 				button.SetText("Record 10s")
@@ -856,13 +1071,14 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 
 	table.SetColumnWidth(0, 260)
 	table.SetColumnWidth(1, 80)
-	table.SetColumnWidth(2, 90)
-	table.SetColumnWidth(3, 250)
-	table.SetColumnWidth(4, 70)
-	table.SetColumnWidth(5, 90)
-	table.SetColumnWidth(6, 110)
-	table.SetColumnWidth(7, 220)
-	table.SetColumnWidth(8, 60)
+	table.SetColumnWidth(2, 110)
+	table.SetColumnWidth(3, 100)
+	table.SetColumnWidth(4, 105)
+	table.SetColumnWidth(5, 80)
+	table.SetColumnWidth(6, 60)
+	table.SetColumnWidth(7, 90)
+	table.SetColumnWidth(8, 110)
+	table.SetColumnWidth(9, 240)
 
 	stopAll := func() {
 		stopAllPreviews()
@@ -982,7 +1198,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 
 	content := container.NewBorder(
 		container.NewVBox(
-			widget.NewLabel("Live ffmpeg stream stats (FPS from ffmpeg stderr progress lines)"),
+			widget.NewLabel("Live stream stats (Expected FPS from detection, Measured FPS + Drift from progress deltas)"),
 			portRow,
 			actionStatus,
 		),
