@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -112,6 +113,11 @@ func DetectEncodersWithConfig(cfg *config.CamerasConfig) []HwEncoder {
 		path = "ffmpeg"
 	}
 
+	detectedGPUVendors := detectGPUVendors()
+	if len(detectedGPUVendors) > 0 {
+		logging.InfoLogger.Printf("Detected GPU vendors: %s", strings.Join(sortedVendorKeys(detectedGPUVendors), ", "))
+	}
+
 	cmd := CreateHiddenCmd(path, "-hide_banner", "-encoders")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -143,6 +149,10 @@ func DetectEncodersWithConfig(cfg *config.CamerasConfig) []HwEncoder {
 	if cfg != nil && len(cfg.Encoders) > 0 {
 		for _, enc := range cfg.Encoders {
 			if availableEncoders[enc.Name] {
+				if !encoderMatchesDetectedGPU(enc, detectedGPUVendors) {
+					logging.InfoLogger.Printf("Skipping encoder %s: configured for gpuVendors=%v, detected=%v", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
+					continue
+				}
 				candidates = append(candidates, HwEncoder{
 					Name:             enc.Name,
 					Description:      enc.Description,
@@ -205,6 +215,91 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 		})
 	}
 	return candidates
+}
+
+func encoderMatchesDetectedGPU(enc config.EncoderConfig, detected map[string]bool) bool {
+	vendors := enc.GpuVendors
+	if len(vendors) == 0 {
+		vendors = inferredVendorsForEncoder(enc.Name)
+	}
+
+	if len(vendors) == 0 || len(detected) == 0 {
+		return true
+	}
+	for _, vendor := range vendors {
+		vendor = strings.ToLower(strings.TrimSpace(vendor))
+		if vendor == "" {
+			continue
+		}
+		if detected[vendor] {
+			return true
+		}
+	}
+	return false
+}
+
+func inferredVendorsForEncoder(name string) []string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "h264_nvenc":
+		return []string{"nvidia"}
+	case "h264_amf":
+		return []string{"amd"}
+	case "h264_vaapi":
+		return []string{"amd", "intel"}
+	case "h264_qsv":
+		return []string{"intel"}
+	default:
+		return nil
+	}
+}
+
+func detectGPUVendors() map[string]bool {
+	vendors := map[string]bool{}
+
+	if runtime.GOOS != "linux" {
+		return vendors
+	}
+
+	if _, err := os.Stat("/proc/driver/nvidia/version"); err == nil {
+		vendors["nvidia"] = true
+	}
+
+	cmd := CreateHiddenCmd("lspci", "-nn")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		logging.InfoLogger.Printf("Could not run lspci for GPU detection: %v", err)
+		return vendors
+	}
+
+	for _, line := range strings.Split(strings.ToLower(out.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "nvidia") {
+			vendors["nvidia"] = true
+		}
+		if strings.Contains(line, "advanced micro devices") || strings.Contains(line, " amd") || strings.Contains(line, "ati") {
+			vendors["amd"] = true
+		}
+		if strings.Contains(line, "intel") {
+			vendors["intel"] = true
+		}
+	}
+
+	return vendors
+}
+
+func sortedVendorKeys(vendors map[string]bool) []string {
+	keys := make([]string, 0, len(vendors))
+	for vendor, enabled := range vendors {
+		if enabled {
+			keys = append(keys, vendor)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // testEncoderWithInit tests whether an encoder actually works on this hardware,

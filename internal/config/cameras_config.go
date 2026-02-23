@@ -58,6 +58,7 @@ type EncoderConfig struct {
 	OutputParameters string `toml:"outputParameters"`
 	TestInit         string `toml:"testInit"`
 	Platform         string `toml:"platform"` // "linux", "windows", or "" (any)
+	GpuVendors       []string `toml:"gpuVendors"` // optional: nvidia, amd, intel
 }
 
 // OutputConfig holds common output flags.

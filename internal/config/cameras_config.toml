@@ -47,6 +47,7 @@
 [[encoder]]
     name = "h264_nvenc"
     description = "NVIDIA GPU (NVENC)"
+    gpuVendors = ["nvidia"]
     inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
     outputParameters = "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M"
     testInit = ""
@@ -54,6 +55,7 @@
 [[encoder]]
     name = "h264_amf"
     description = "AMD GPU (AMF)"
+    gpuVendors = ["amd"]
     inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
     outputParameters = "-c:v h264_amf -rc cbr -b:v 8M"
     testInit = ""
@@ -61,6 +63,7 @@
 [[encoder]]
     name = "h264_vaapi"
     description = "VAAPI (AMD/Intel on Linux)"
+    gpuVendors = ["amd", "intel"]
     inputParameters = "-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096"
     outputParameters = "-c:v h264_vaapi -rc_mode CBR -b:v 8M"
     testInit = "-init_hw_device vaapi=va:/dev/dri/renderD128"
@@ -69,6 +72,7 @@
 [[encoder]]
     name = "h264_qsv"
     description = "Intel GPU (QSV / Xe)"
+    gpuVendors = ["intel"]
     inputParameters = "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096"
     outputParameters = "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M"
     testInit = "-init_hw_device qsv=hw -filter_hw_device hw"
