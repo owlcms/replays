@@ -8,6 +8,7 @@
   - start replays, and adjust the cameras if needed (change the ports so camera1 is the correct one, etc.)
   - If you want the old behavior, tell replays to stop using multicast
   - The parameters used by replays and cameras for ffmpeg decoding are in a shared cameras_config.toml file.
+  - 2.0.0: On Windows, dshow cannot handle H.264 input directly, so MJPEG is used to the GPU
 
 - 1.9.0 added a new `cameras` (`cameras.exe` on windows) to start a multicast UDP H.264 stream for each of the detected cameras
   - use `-includeraw` to include the laptop built-in cameras during testing.
