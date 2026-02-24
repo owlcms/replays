@@ -72,6 +72,7 @@ type cameraStream struct {
 	port    int
 	udpDest string
 	cmd     *exec.Cmd
+	stdin   io.WriteCloser
 	encoder *recording.HwEncoder
 
 	mu                 sync.RWMutex
@@ -94,6 +95,7 @@ type cameraStream struct {
 	hasDriftEMA        bool
 	lastStderr         string
 	lastUpdate         time.Time
+	stopping           bool
 }
 
 type Progress struct {
@@ -462,6 +464,12 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		return nil, err
 	}
 
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stream.stdin = stdin
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, err
@@ -481,12 +489,22 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	go monitorFFmpegErrors(stream, stderr)
 	go func() {
 		err := cmd.Wait()
+		wasStopping := stream.isStopping()
+		stream.clearProcessHandles(cmd)
 		if err != nil {
 			lastErr := stream.getLastStderr()
-			if lastErr != "" {
-				logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v | last stderr: %s", stream.camera.Name, stream.udpDest, err, lastErr)
+			if wasStopping {
+				if lastErr != "" {
+					logging.InfoLogger.Printf("ffmpeg stopped for %s (%s): %v | last stderr: %s", stream.camera.Name, stream.udpDest, err, lastErr)
+				} else {
+					logging.InfoLogger.Printf("ffmpeg stopped for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+				}
 			} else {
-				logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+				if lastErr != "" {
+					logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v | last stderr: %s", stream.camera.Name, stream.udpDest, err, lastErr)
+				} else {
+					logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+				}
 			}
 			stream.setStopped(fmt.Sprintf("stopped: %v", err))
 			return
@@ -497,9 +515,35 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// stopProcess gracefully stops an ffmpeg process
-func stopProcess(cmd *exec.Cmd) {
+// stopProcess gracefully stops a camera ffmpeg process.
+func stopProcess(stream *cameraStream) {
+	if stream == nil {
+		return
+	}
+
+	stream.markStopping()
+
+	stream.mu.Lock()
+	cmd := stream.cmd
+	stdin := stream.stdin
+	stream.stdin = nil
+	stream.mu.Unlock()
+
 	if cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	if stdin != nil {
+		if err := recording.RequestFFmpegQuit(stdin); err != nil {
+			logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+		}
+		if err := recording.CloseFFmpegStdin(stdin); err != nil {
+			logging.InfoLogger.Printf("Could not close ffmpeg stdin for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 		return
 	}
 
@@ -507,12 +551,13 @@ func stopProcess(cmd *exec.Cmd) {
 	if runtime.GOOS == "windows" {
 		// On Windows, use taskkill
 		kill := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", cmd.Process.Pid))
-		kill.Run()
+		_ = kill.Run()
 	} else {
 		// On Unix, send SIGTERM then SIGKILL
-		cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		time.Sleep(150 * time.Millisecond)
 		// Give it a moment then force kill
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 	}
 }
 
@@ -582,6 +627,7 @@ func (s *cameraStream) setRunning() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = true
+	s.stopping = false
 	s.status = "running"
 	s.lastUpdate = time.Now()
 }
@@ -592,6 +638,27 @@ func (s *cameraStream) setStopped(status string) {
 	s.running = false
 	s.status = status
 	s.lastUpdate = time.Now()
+}
+
+func (s *cameraStream) markStopping() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopping = true
+}
+
+func (s *cameraStream) isStopping() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stopping
+}
+
+func (s *cameraStream) clearProcessHandles(cmd *exec.Cmd) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cmd == cmd {
+		s.cmd = nil
+	}
+	s.stdin = nil
 }
 
 func (s *cameraStream) setLastStderr(line string) {
@@ -912,11 +979,11 @@ func stopAllPreviews() {
 	previewMu.Unlock()
 
 	for _, cmd := range cmds {
-		stopProcess(cmd)
+		stopProcess(&cameraStream{cmd: cmd})
 	}
 }
 
-func launchPreview(stream *cameraStream) error {
+func launchPreview(stream *cameraStream, onDone func()) error {
 	args := []string{"-fflags", "nobuffer", "-flags", "low_delay"}
 	if width, height, ok := parseResolution(stream.camera.Size); ok {
 		args = append(args, "-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
@@ -937,6 +1004,9 @@ func launchPreview(stream *cameraStream) error {
 	go func() {
 		_ = cmd.Wait()
 		unregisterPreviewCmd(cmd)
+		if onDone != nil {
+			onDone()
+		}
 	}()
 
 	return nil
@@ -954,12 +1024,37 @@ func sanitizeFilePart(value string) string {
 func buildClipPath(stream *cameraStream) string {
 	timestamp := time.Now().Format("20060102-150405")
 	cameraName := sanitizeFilePart(stream.camera.Name)
-	return fmt.Sprintf("/tmp/%s_%s.mp4", cameraName, timestamp)
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%s_%s.mp4", cameraName, timestamp))
+}
+
+// openFile opens a file with the OS default application and calls onDone when the viewer exits.
+func openFile(path string, onDone func()) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", path)
+	case "darwin":
+		cmd = exec.Command("open", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	if err := cmd.Start(); err != nil {
+		logging.ErrorLogger.Printf("Failed to open file %s: %v", path, err)
+		return
+	}
+	go func() {
+		_ = cmd.Wait()
+		if onDone != nil {
+			onDone()
+		}
+	}()
 }
 
 func recordClip(stream *cameraStream) (string, error) {
 	outputPath := buildClipPath(stream)
 	args := []string{
+		"-fflags", "nobuffer",
+		"-flags", "low_delay",
 		"-y",
 		"-t", "10",
 		"-i", stream.udpDest,
@@ -968,7 +1063,7 @@ func recordClip(stream *cameraStream) (string, error) {
 		outputPath,
 	}
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := recording.CreateHiddenCmd(config.GetFFmpegPath(), args...)
 	if err := cmd.Run(); err != nil {
 		return "", err
 	}
@@ -983,6 +1078,19 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 
 	headers := []string{"Camera", "Format", "Resolution", "Expected FPS", "Measured FPS", "Drift", "Port", "Preview", "Record", "Status"}
 	actionStatus := widget.NewLabel("Preview/Record: ready")
+	clipLink := widget.NewHyperlink("", nil)
+	clipLink.Hide()
+
+	var clipLinkTimer *time.Timer
+	scheduleClipHide := func(d time.Duration) {
+		if clipLinkTimer != nil {
+			clipLinkTimer.Stop()
+		}
+		clipLinkTimer = time.AfterFunc(d, func() {
+			clipLink.Hide()
+			actionStatus.SetText("Preview/Record: ready")
+		})
+	}
 
 	// Starting port entry + restart button
 	ipEntry := widget.NewEntry()
@@ -1056,7 +1164,14 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 				button.SetText("Preview")
 				stream := ss[id.Row-1]
 				button.OnTapped = func() {
-					if err := launchPreview(stream); err != nil {
+					if clipLinkTimer != nil {
+						clipLinkTimer.Stop()
+					}
+					clipLink.Hide()
+					actionStatus.SetText("Preview/Record: ready")
+					if err := launchPreview(stream, func() {
+						actionStatus.SetText("Preview/Record: ready")
+					}); err != nil {
 						actionStatus.SetText(fmt.Sprintf("Preview failed: %v", err))
 						logging.ErrorLogger.Printf("Failed to start ffplay preview for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
 						return
@@ -1072,6 +1187,10 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 				button.SetText("Record 10s")
 				stream := ss[id.Row-1]
 				button.OnTapped = func() {
+					if clipLinkTimer != nil {
+						clipLinkTimer.Stop()
+					}
+					clipLink.Hide()
 					actionStatus.SetText(fmt.Sprintf("Recording 10s: %s", stream.camera.Name))
 					go func(s *cameraStream) {
 						outputPath, err := recordClip(s)
@@ -1080,7 +1199,21 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 							logging.ErrorLogger.Printf("Failed to record clip for %s (%s): %v", s.camera.Name, s.udpDest, err)
 							return
 						}
-						actionStatus.SetText(fmt.Sprintf("Saved clip: %s", outputPath))
+						path := outputPath
+						actionStatus.SetText("Saved: ")
+						clipLink.SetText(filepath.FromSlash(path))
+						clipLink.OnTapped = func() {
+							scheduleClipHide(1 * time.Minute)
+							openFile(path, func() {
+								if clipLinkTimer != nil {
+									clipLinkTimer.Stop()
+								}
+								clipLink.Hide()
+								actionStatus.SetText("Preview/Record: ready")
+							})
+						}
+						clipLink.Show()
+						scheduleClipHide(2 * time.Minute)
 					}(stream)
 				}
 				return
@@ -1107,9 +1240,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 	stopAll := func() {
 		stopAllPreviews()
 		for _, stream := range *currentStreams {
-			if stream.cmd != nil && stream.cmd.Process != nil {
-				stopProcess(stream.cmd)
-			}
+			stopProcess(stream)
 		}
 	}
 
@@ -1132,9 +1263,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		// Stop existing streams
 		stopAllPreviews()
 		for _, stream := range *currentStreams {
-			if stream.cmd != nil && stream.cmd.Process != nil {
-				stopProcess(stream.cmd)
-			}
+			stopProcess(stream)
 		}
 		time.Sleep(500 * time.Millisecond) // let processes exit
 
@@ -1224,7 +1353,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		container.NewVBox(
 			widget.NewLabel("Live stream stats (Expected FPS from detection, Measured FPS + Drift from progress deltas)"),
 			portRow,
-			actionStatus,
+			container.NewHBox(actionStatus, clipLink),
 		),
 		nil,
 		nil,
