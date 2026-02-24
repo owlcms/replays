@@ -1,6 +1,6 @@
 #!/bin/bash
 # Install Jellyfin's ffmpeg build with NVENC support
-# This replaces Ubuntu's ffmpeg which lacks NVIDIA hardware encoding
+# Keep distro ffmpeg installed first so ffplay is always available
 #
 # Run as: sudo ./install-ffmpeg-nvenc.sh
 
@@ -16,14 +16,31 @@ else
     UBUNTU_CODENAME="noble"
 fi
 
+ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+
 echo "=== Jellyfin FFmpeg Installer (with NVENC) ==="
 echo "Detected Ubuntu codename: $UBUNTU_CODENAME"
+echo "Detected architecture: $ARCH"
 echo
 
 # Check for root
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root: sudo $0"
     exit 1
+fi
+
+# Jellyfin only ships amd64 packages; on arm64 or any other arch use distro ffmpeg only
+if [ "$ARCH" != "amd64" ]; then
+    echo "Architecture $ARCH is not amd64 — skipping Jellyfin, installing distro ffmpeg/ffplay only."
+    apt-get update
+    apt-get install -y ffmpeg
+    echo
+    echo "=== Verification ==="
+    ffmpeg -version 2>&1 | head -1
+    ffplay -version 2>&1 | head -1
+    echo
+    echo "=== Installation complete ==="
+    exit 0
 fi
 
 # Step 1: Remove ubuntuhandbook1 PPA if present
@@ -35,10 +52,10 @@ if grep -rq "ubuntuhandbook1/ffmpeg" /etc/apt/sources.list.d/ 2>/dev/null; then
     apt-get update
 fi
 
-# Step 2: Remove existing ffmpeg packages
-echo "Removing existing ffmpeg packages..."
-apt-get remove -y ffmpeg libavcodec-extra libavcodec60 libavformat60 libavutil58 2>/dev/null || true
-apt-get autoremove -y
+# Step 2: Ensure distro ffmpeg/ffplay is installed first
+echo "Installing distro ffmpeg/ffplay..."
+apt-get update
+apt-get install -y ffmpeg
 
 # Step 3: Download Jellyfin ffmpeg
 echo "Downloading Jellyfin ffmpeg 7.x for $UBUNTU_CODENAME..."
@@ -65,11 +82,15 @@ wget -q --show-progress "${FFMPEG_URL}/${DEB_NAME}"
 echo "Installing Jellyfin ffmpeg..."
 dpkg -i "$DEB_NAME" || apt-get -f install -y
 
-# Step 5: Create symlinks to make it the default ffmpeg tools
+# Step 5: Restore distro ffplay after Jellyfin install (if package changes removed it)
+echo "Ensuring distro ffplay is present..."
+apt-get install -y ffmpeg
+
+# Step 6: Create symlinks to make Jellyfin the default for ffmpeg/ffprobe
 echo "Creating symlinks..."
 JELLYFIN_PATH="/usr/lib/jellyfin-ffmpeg"
 
-for bin in ffmpeg ffprobe ffplay; do
+for bin in ffmpeg ffprobe; do
     if [ -f "$JELLYFIN_PATH/$bin" ]; then
         # Backup existing if it's a real file (not symlink)
         if [ -f "/usr/bin/$bin" ] && [ ! -L "/usr/bin/$bin" ]; then
@@ -80,12 +101,27 @@ for bin in ffmpeg ffprobe ffplay; do
     fi
 done
 
+if [ -f "$JELLYFIN_PATH/ffplay" ]; then
+    if [ -f "/usr/bin/ffplay" ] && [ ! -L "/usr/bin/ffplay" ]; then
+        mv "/usr/bin/ffplay" "/usr/bin/ffplay.ubuntu-backup"
+    fi
+    ln -sf "$JELLYFIN_PATH/ffplay" "/usr/bin/ffplay"
+    echo "  /usr/bin/ffplay -> $JELLYFIN_PATH/ffplay"
+else
+    echo "  Keeping distro /usr/bin/ffplay (Jellyfin package has no ffplay binary)"
+fi
+
 # Cleanup
 rm -rf "$TMPDIR"
 
-# Step 6: Verify installation
+# Step 7: Verify installation
 echo
 echo "=== Verification ==="
+if ! command -v ffplay >/dev/null 2>&1; then
+    echo "ERROR: ffplay is not on PATH after installation"
+    exit 1
+fi
+
 echo "FFmpeg version:"
 ffmpeg -version 2>&1 | head -1
 echo "FFplay version:"

@@ -46,4 +46,4 @@ fyne-cross/
 *.log
 
 config.toml
-cameras
+/cameras
