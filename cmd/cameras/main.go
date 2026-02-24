@@ -2,15 +2,16 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -129,13 +130,6 @@ func ComputeMetrics(prev, curr Progress) Metrics {
 		Drift: drift,
 	}
 }
-
-var (
-	fpsRegex     = regexp.MustCompile(`fps=\s*([0-9.]+)`)
-	frameRegex   = regexp.MustCompile(`frame=\s*([0-9]+)`)
-	bitrateRegex = regexp.MustCompile(`bitrate=\s*([^\s]+)`)
-	speedRegex   = regexp.MustCompile(`speed=\s*([^\s]+)`)
-)
 
 func main() {
 	// Parse command-line flags
@@ -392,6 +386,9 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 			args = append(args, "-rtbufsize", "512M")
 		}
 		args = append(args, "-i", fmt.Sprintf("video=%s", cam.Device))
+		if runtime.GOOS == "windows" {
+			args = append(args, "-map", "0:v:0", "-dn")
+		}
 
 	case "v4l2":
 		args = append(args, "-f", "v4l2")
@@ -615,14 +612,6 @@ func monitorFFmpegErrors(stream *cameraStream, stderr io.Reader) {
 	}
 }
 
-func parseRegexValue(re *regexp.Regexp, line string) (string, bool) {
-	matches := re.FindStringSubmatch(line)
-	if len(matches) < 2 {
-		return "", false
-	}
-	return matches[1], true
-}
-
 func (s *cameraStream) setRunning() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -815,11 +804,6 @@ func isUsableFPSValue(value string) bool {
 	return true
 }
 
-func isReasonableSpeedValue(value string) bool {
-	_, ok := normalizeSpeedValue(value)
-	return ok
-}
-
 func formatRatioValue(ratio float64) (string, bool) {
 	if !(ratio > 0 && ratio <= 10.0) {
 		return "", false
@@ -840,24 +824,6 @@ func normalizeSpeedValue(value string) (string, bool) {
 		return "", false
 	}
 	return formatRatioValue(n)
-}
-
-func formatFPSValue(raw string) string {
-	if raw == "" || raw == "-" {
-		return raw
-	}
-	// Speed values like "1.04x" — show as-is
-	if strings.HasSuffix(raw, "x") {
-		return raw
-	}
-	if !strings.Contains(raw, ".") {
-		return raw
-	}
-	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
-		return raw
-	}
-	return fmt.Sprintf("%.0f", value)
 }
 
 func formatSpeedValue(speed, fps string) string {
@@ -1051,20 +1017,43 @@ func openFile(path string, onDone func()) {
 }
 
 func recordClip(stream *cameraStream) (string, error) {
+	clipInput := stream.udpDest
+	if runtime.GOOS == "windows" {
+		parsed, err := url.Parse(stream.udpDest)
+		if err == nil {
+			query := parsed.Query()
+			query.Del("pkt_size")
+			if query.Get("overrun_nonfatal") == "" {
+				query.Set("overrun_nonfatal", "1")
+			}
+			if query.Get("fifo_size") == "" {
+				query.Set("fifo_size", "50000")
+			}
+			parsed.RawQuery = query.Encode()
+			clipInput = parsed.String()
+		}
+	}
+
 	outputPath := buildClipPath(stream)
 	args := []string{
 		"-fflags", "nobuffer",
 		"-flags", "low_delay",
 		"-y",
 		"-t", "10",
-		"-i", stream.udpDest,
+		"-i", clipInput,
 		"-c", "copy",
 		"-movflags", "+faststart",
 		outputPath,
 	}
 
 	cmd := recording.CreateHiddenCmd(config.GetFFmpegPath(), args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		stderrText := strings.TrimSpace(stderr.String())
+		if stderrText != "" {
+			return "", fmt.Errorf("%w: %s", err, stderrText)
+		}
 		return "", err
 	}
 	return outputPath, nil
