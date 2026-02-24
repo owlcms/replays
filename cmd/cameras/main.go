@@ -375,7 +375,8 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		case "mjpeg":
 			args = append(args, "-vcodec", "mjpeg")
 		case "h264":
-			// Do not force h264 input codec for dshow; device negotiation is more reliable without it.
+			// dshow cannot reliably negotiate H.264 input on many UVC cameras;
+			// omitting -vcodec lets the device deliver its native stream.
 		default:
 			args = append(args, "-pixel_format", cam.PixFmt)
 		}

@@ -363,6 +363,27 @@ func sortedVendorKeys(vendors map[string]bool) []string {
 	return keys
 }
 
+func summarizeEncoderProbeError(stderr string) string {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return "no ffmpeg error details"
+	}
+
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		const maxLen = 180
+		if len(line) > maxLen {
+			return line[:maxLen] + "..."
+		}
+		return line
+	}
+
+	return "no ffmpeg error details"
+}
+
 // testEncoderWithInit tests whether an encoder actually works on this hardware,
 // using the TestInit field for any required hardware init flags.
 func testEncoderWithInit(ffmpegPath string, enc HwEncoder) bool {
@@ -388,7 +409,8 @@ func testEncoderWithInit(ffmpegPath string, enc HwEncoder) bool {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		logging.InfoLogger.Printf("Encoder test for %s failed: %v (%s)", enc.Name, err, strings.TrimSpace(stderr.String()))
+		reason := summarizeEncoderProbeError(stderr.String())
+		logging.InfoLogger.Printf("Encoder test for %s failed: %v (%s)", enc.Name, err, reason)
 		return false
 	}
 	return true
@@ -618,6 +640,52 @@ func detectCamerasWindows(cfg *config.CamerasConfig) []DetectedCamera {
 	return cameras
 }
 
+func resolveFFprobePath(ffmpegPath string) string {
+	if ffmpegPath != "" {
+		dir := filepath.Dir(ffmpegPath)
+		name := "ffprobe"
+		if runtime.GOOS == "windows" {
+			name = "ffprobe.exe"
+		}
+		candidate := filepath.Join(dir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		return "ffprobe.exe"
+	}
+	return "ffprobe"
+}
+
+func verifyDshowH264Delivery(ffprobePath, name string) bool {
+	cmd := CreateHiddenCmd(ffprobePath, "-hide_banner", "-f", "dshow", "-i", fmt.Sprintf("video=%s", name))
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		logging.InfoLogger.Printf("ffprobe dshow probe for %s exited with: %v", name, err)
+	}
+
+	scanner := bufio.NewScanner(&out)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "Video:") {
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "video: h264") {
+				return true
+			}
+			return false
+		}
+	}
+
+	return false
+}
+
 // probeDshowDevice probes a single dshow device for its capabilities
 func probeDshowDevice(ffmpegPath, name string, cfg *config.CamerasConfig) *DetectedCamera {
 	cmd := CreateHiddenCmd(ffmpegPath, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", fmt.Sprintf("video=%s", name))
@@ -708,6 +776,22 @@ func probeDshowDevice(ffmpegPath, name string, cfg *config.CamerasConfig) *Detec
 	}
 
 	best := PickBestCameraModeWithConfig(modes, cfg)
+	if best.pixFmt == "h264" {
+		ffprobePath := resolveFFprobePath(ffmpegPath)
+		if !verifyDshowH264Delivery(ffprobePath, name) {
+			var nonH264Modes []cameraMode
+			for _, mode := range modes {
+				if mode.pixFmt != "h264" {
+					nonH264Modes = append(nonH264Modes, mode)
+				}
+			}
+			if len(nonH264Modes) > 0 {
+				fallback := PickBestCameraModeWithConfig(nonH264Modes, cfg)
+				logging.InfoLogger.Printf("Camera %s advertised h264 on dshow but probe did not confirm it; falling back to %s %dx%d@%dfps", name, fallback.pixFmt, fallback.width, fallback.height, fallback.fps)
+				best = fallback
+			}
+		}
+	}
 
 	return &DetectedCamera{
 		Name:   name,
