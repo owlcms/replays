@@ -984,7 +984,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 			case "mjpeg":
 				// MJPEG: copy during recording, recode on trim
 				if cam.Format == "dshow" {
-					buf.WriteString("    inputParameters = '-pixel_format mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
+					buf.WriteString("    inputParameters = '-vcodec mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
 				} else {
 					buf.WriteString("    inputParameters = '-input_format mjpeg -rtbufsize 512M -thread_queue_size 4096'\n")
 				}
@@ -1000,19 +1000,55 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 			// Raw formats (yuyv422, nv12, rgb24, etc.): no decode needed, just encode
 			// Use camera's fps for GOP size and output frame rate
 			fpsParams := fmt.Sprintf("-g %d -keyint_min %d -r %d -vsync cfr -an", cam.Fps, cam.Fps, cam.Fps)
-			inputParams := "-rtbufsize 512M -thread_queue_size 4096"
+
+			// Start with encoder init params (e.g. -init_hw_device qsv=hw …) if present,
+			// then add buffer/queue settings that are not already provided by the encoder.
+			var initPart string
+			if bestEncoder != nil && bestEncoder.InputParameters != "" {
+				initPart = bestEncoder.InputParameters
+			}
+			baseBuf := ""
+			if initPart == "" || !strings.Contains(initPart, "rtbufsize") {
+				baseBuf = "-rtbufsize 512M"
+			}
+			baseQueue := ""
+			if initPart == "" || !strings.Contains(initPart, "thread_queue_size") {
+				baseQueue = "-thread_queue_size 4096"
+			}
 
 			// Specify the pixel format for proper raw input handling
+			var fmtFlag string
 			if cam.Format == "dshow" {
-				inputParams = fmt.Sprintf("-pixel_format %s %s", cam.PixFmt, inputParams)
+				fmtFlag = fmt.Sprintf("-pixel_format %s", cam.PixFmt)
 			} else {
-				inputParams = fmt.Sprintf("-input_format %s %s", cam.PixFmt, inputParams)
+				fmtFlag = fmt.Sprintf("-input_format %s", cam.PixFmt)
 			}
+
+			// Assemble: [encoder init] [pixel format] [rtbufsize] [thread_queue_size]
+			parts := []string{}
+			if initPart != "" {
+				parts = append(parts, initPart)
+			}
+			parts = append(parts, fmtFlag)
+			if baseBuf != "" {
+				parts = append(parts, baseBuf)
+			}
+			if baseQueue != "" {
+				parts = append(parts, baseQueue)
+			}
+			inputParams := strings.Join(parts, " ")
 
 			buf.WriteString(fmt.Sprintf("    inputParameters = '%s'\n", inputParams))
 
 			if bestEncoder != nil {
-				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", bestEncoder.OutputParameters, fpsParams))
+				// Build hwupload filter when the encoder requires it (vaapi, qsv)
+				vfPart := ""
+				if strings.Contains(bestEncoder.Name, "vaapi") {
+					vfPart = "-vf format=nv12,hwupload "
+				} else if strings.Contains(bestEncoder.Name, "qsv") {
+					vfPart = "-vf format=nv12,hwupload=extra_hw_frames=64 "
+				}
+				buf.WriteString(fmt.Sprintf("    outputParameters = '%s%s %s'\n", vfPart, bestEncoder.OutputParameters, fpsParams))
 			} else {
 				// Software fallback (from shared cameras config or hardcoded default)
 				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", softwareFallback, fpsParams))
