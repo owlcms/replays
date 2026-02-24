@@ -289,13 +289,13 @@ func StopRecording() (bool, error) {
 	} else {
 		logging.InfoLogger.Println("Attempting to stop ffmpeg gracefully...")
 		for i, stdin := range currentStdin {
-			if _, err := stdin.Write([]byte("q\n")); err != nil {
+			if err := RequestFFmpegQuit(stdin); err != nil {
 				logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 		for i, stdin := range currentStdin {
-			if err := stdin.Close(); err != nil {
+			if err := CloseFFmpegStdin(stdin); err != nil {
 				logging.InfoLogger.Printf("Could not close stdin for Camera %d (this is normal if process exited): %v", i+1, err)
 			}
 		}
@@ -325,7 +325,7 @@ func TerminateRecordings() {
 		logging.InfoLogger.Println("Forcing stop ffmpeg if required...")
 		for i, stdin := range currentStdin {
 			logging.InfoLogger.Printf("Attempting to stop ffmpeg %d gracefully...", i+1)
-			if _, err := stdin.Write([]byte("q\n")); err != nil {
+			if err := RequestFFmpegQuit(stdin); err != nil {
 				logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
 			}
 		}
