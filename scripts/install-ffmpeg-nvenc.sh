@@ -65,11 +65,11 @@ wget -q --show-progress "${FFMPEG_URL}/${DEB_NAME}"
 echo "Installing Jellyfin ffmpeg..."
 dpkg -i "$DEB_NAME" || apt-get -f install -y
 
-# Step 5: Create symlinks to make it the default ffmpeg
+# Step 5: Create symlinks to make it the default ffmpeg tools
 echo "Creating symlinks..."
 JELLYFIN_PATH="/usr/lib/jellyfin-ffmpeg"
 
-for bin in ffmpeg ffprobe; do
+for bin in ffmpeg ffprobe ffplay; do
     if [ -f "$JELLYFIN_PATH/$bin" ]; then
         # Backup existing if it's a real file (not symlink)
         if [ -f "/usr/bin/$bin" ] && [ ! -L "/usr/bin/$bin" ]; then
@@ -88,6 +88,8 @@ echo
 echo "=== Verification ==="
 echo "FFmpeg version:"
 ffmpeg -version 2>&1 | head -1
+echo "FFplay version:"
+ffplay -version 2>&1 | head -1
 echo
 echo "NVENC support:"
 if ffmpeg -hide_banner -encoders 2>&1 | grep -q h264_nvenc; then
@@ -112,3 +114,4 @@ fi
 
 echo
 echo "=== Installation complete ==="
+
