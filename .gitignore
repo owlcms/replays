@@ -47,3 +47,4 @@ fyne-cross/
 
 config.toml
 /cameras
+video_config/
