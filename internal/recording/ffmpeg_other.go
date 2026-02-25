@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/owlcms/replays/internal/config"
@@ -15,7 +16,16 @@ import (
 
 // InitializeFFmpeg finds and stores the ffmpeg path in config for other platforms
 func InitializeFFmpeg() error {
-	path := findFFmpeg()
+	var path string
+	if envPath := strings.TrimSpace(os.Getenv("VIDEO_FFMPEG_PATH")); envPath != "" {
+		logging.InfoLogger.Printf("Using ffmpeg from VIDEO_FFMPEG_PATH: %s", envPath)
+		path = envPath
+	} else if sharedPath := config.FindSharedFFmpegExecutable("ffmpeg"); sharedPath != "" {
+		logging.InfoLogger.Printf("Using shared Control Panel ffmpeg: %s", sharedPath)
+		path = sharedPath
+	} else {
+		path = findFFmpeg()
+	}
 
 	// Verify the ffmpeg executable exists at the expected location
 	if _, err := os.Stat(path); err != nil {

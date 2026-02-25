@@ -21,6 +21,13 @@ var defaultInstanceCamerasConfig []byte
 
 var camerasConfigSourcePath string
 
+func resolveSharedCamerasConfigPath() string {
+	if configDir := strings.TrimSpace(os.Getenv("VIDEO_CONFIGDIR")); configDir != "" {
+		return filepath.Join(configDir, "cameras_config.toml")
+	}
+	return filepath.Join(GetInstallDir(), "cameras_config.toml")
+}
+
 // CamerasConfig is the top-level configuration for the cameras program.
 type CamerasConfig struct {
 	Multicast MulticastConfig  `toml:"multicast"`
@@ -52,12 +59,12 @@ type SoftwareEncoder struct {
 
 // EncoderConfig defines one hardware encoder and its ffmpeg parameters.
 type EncoderConfig struct {
-	Name             string `toml:"name"`
-	Description      string `toml:"description"`
-	InputParameters  string `toml:"inputParameters"`
-	OutputParameters string `toml:"outputParameters"`
-	TestInit         string `toml:"testInit"`
-	Platform         string `toml:"platform"` // "linux", "windows", or "" (any)
+	Name             string   `toml:"name"`
+	Description      string   `toml:"description"`
+	InputParameters  string   `toml:"inputParameters"`
+	OutputParameters string   `toml:"outputParameters"`
+	TestInit         string   `toml:"testInit"`
+	Platform         string   `toml:"platform"`   // "linux", "windows", or "" (any)
 	GpuVendors       []string `toml:"gpuVendors"` // optional: nvidia, amd, intel
 }
 
@@ -96,20 +103,35 @@ func LoadCamerasConfig() (*CamerasConfig, error) {
 	instanceFilename := "cameras.toml"
 
 	sharedLoaded := false
-	for _, dir := range baseDirs {
-		for _, name := range sharedFilenames {
-			path := filepath.Join(dir, name)
-			if _, err := os.Stat(path); err == nil {
-				logging.InfoLogger.Printf("Loading shared cameras config from %s", path)
-				if _, err := toml.DecodeFile(path, &cfg); err != nil {
-					return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+	sharedBaseDir := filepath.Dir(resolveSharedCamerasConfigPath())
+	for _, name := range sharedFilenames {
+		path := filepath.Join(sharedBaseDir, name)
+		if _, err := os.Stat(path); err == nil {
+			logging.InfoLogger.Printf("Loading shared cameras config from %s", path)
+			if _, err := toml.DecodeFile(path, &cfg); err != nil {
+				return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+			}
+			sharedLoaded = true
+			break
+		}
+	}
+
+	if !sharedLoaded {
+		for _, dir := range baseDirs {
+			for _, name := range sharedFilenames {
+				path := filepath.Join(dir, name)
+				if _, err := os.Stat(path); err == nil {
+					logging.InfoLogger.Printf("Loading shared cameras config from %s", path)
+					if _, err := toml.DecodeFile(path, &cfg); err != nil {
+						return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+					}
+					sharedLoaded = true
+					break
 				}
-				sharedLoaded = true
+			}
+			if sharedLoaded {
 				break
 			}
-		}
-		if sharedLoaded {
-			break
 		}
 	}
 
@@ -270,7 +292,11 @@ func ExtractDefaultCamerasConfig() string {
 		return ""
 	}
 
-	sharedPath := filepath.Join(installDir, "cameras_config.toml")
+	sharedPath := resolveSharedCamerasConfigPath()
+	if err := os.MkdirAll(filepath.Dir(sharedPath), 0755); err != nil {
+		logging.ErrorLogger.Printf("Failed to create directory for shared cameras config file: %v", err)
+		return ""
+	}
 	if _, err := os.Stat(sharedPath); os.IsNotExist(err) {
 		if err := os.WriteFile(sharedPath, defaultSharedCamerasConfig, 0644); err != nil {
 			logging.ErrorLogger.Printf("Failed to write cameras_config.toml: %v", err)

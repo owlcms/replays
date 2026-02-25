@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -119,6 +120,10 @@ func IsWSL() bool {
 // GetDownloadURL returns the correct download URL based on the operating system.
 func GetDownloadURL() string {
 	return "https://github.com/GyanD/codexffmpeg/releases/download/7.1/" + recording.FfmpegBuild + ".zip"
+}
+
+func getLinuxSharedDownloadURL() string {
+	return "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl-shared.tar.xz"
 }
 
 func GetGoos() string {
@@ -259,4 +264,162 @@ func ExtractTarGz(tarGzPath, dest string) error {
 	}
 
 	return nil
+}
+
+// ExtractTarXz extracts a tar.xz archive using the system tar command.
+func ExtractTarXz(tarXzPath, dest string) error {
+	cmd := exec.Command("tar", "-xJf", tarXzPath, "-C", dest)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to extract tar.xz %s: %w (%s)", tarXzPath, err, strings.TrimSpace(string(output)))
+	}
+
+	if err := os.Remove(tarXzPath); err != nil {
+		return fmt.Errorf("failed to remove downloaded file %s: %w", tarXzPath, err)
+	}
+
+	return nil
+}
+
+func appendPathEnv(existing, value string) string {
+	if strings.TrimSpace(value) == "" {
+		return existing
+	}
+	if strings.TrimSpace(existing) == "" {
+		return value
+	}
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+	}
+	for _, part := range strings.Split(existing, sep) {
+		if filepath.Clean(strings.TrimSpace(part)) == filepath.Clean(value) {
+			return existing
+		}
+	}
+	return value + sep + existing
+}
+
+func exportRuntimePaths(ffmpegPath string) {
+	if strings.TrimSpace(ffmpegPath) == "" {
+		return
+	}
+
+	binDir := filepath.Dir(ffmpegPath)
+	name := "ffprobe"
+	play := "ffplay"
+	if runtime.GOOS == "windows" {
+		name = "ffprobe.exe"
+		play = "ffplay.exe"
+	}
+
+	probePath := filepath.Join(binDir, name)
+	playPath := filepath.Join(binDir, play)
+
+	_ = os.Setenv("VIDEO_FFMPEG_PATH", ffmpegPath)
+	if _, err := os.Stat(probePath); err == nil {
+		_ = os.Setenv("VIDEO_FFPROBE_PATH", probePath)
+	}
+	if _, err := os.Stat(playPath); err == nil {
+		_ = os.Setenv("VIDEO_FFPLAY_PATH", playPath)
+	}
+
+	if runtime.GOOS == "linux" {
+		rootDir := filepath.Dir(binDir)
+		libDir := filepath.Join(rootDir, "lib")
+		if st, err := os.Stat(libDir); err == nil && st.IsDir() {
+			_ = os.Setenv("LD_LIBRARY_PATH", appendPathEnv(os.Getenv("LD_LIBRARY_PATH"), libDir))
+		}
+	}
+}
+
+func findBundledFFmpegPath(installDir string) string {
+	if runtime.GOOS == "windows" {
+		candidate := filepath.Join(installDir, recording.FfmpegBuild, "bin", "ffmpeg.exe")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		return ""
+	}
+
+	linuxCandidates := []string{}
+	entries, err := os.ReadDir(installDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				linuxCandidates = append(linuxCandidates, filepath.Join(installDir, entry.Name(), "bin", "ffmpeg"))
+			}
+		}
+	}
+	linuxCandidates = append(linuxCandidates, filepath.Join(installDir, "bin", "ffmpeg"))
+
+	for _, ffmpegPath := range linuxCandidates {
+		if _, err := os.Stat(ffmpegPath); err == nil {
+			binDir := filepath.Dir(ffmpegPath)
+			ffplayPath := filepath.Join(binDir, "ffplay")
+			if _, err := os.Stat(ffplayPath); err != nil {
+				continue
+			}
+			rootDir := filepath.Dir(binDir)
+			if st, err := os.Stat(filepath.Join(rootDir, "lib")); err != nil || !st.IsDir() {
+				continue
+			}
+			return ffmpegPath
+		}
+	}
+
+	return ""
+}
+
+// EnsureFFmpegRuntime ensures FFmpeg runtime is available under installDir.
+// It returns the resolved ffmpeg path and exports VIDEO_FFMPEG_PATH / VIDEO_FFPROBE_PATH / VIDEO_FFPLAY_PATH.
+func EnsureFFmpegRuntime(installDir string, progress ProgressCallback, cancel <-chan bool) (string, error) {
+	controlPanelDir := strings.TrimSpace(os.Getenv("VIDEO_CONTROLPANEL_DIR"))
+	if controlPanelDir == "" {
+		logging.InfoLogger.Printf("FFmpeg runtime mode: local (VIDEO_CONTROLPANEL_DIR not set), using %s", installDir)
+	} else {
+		logging.InfoLogger.Printf("FFmpeg runtime mode: control-panel (%s), using %s", controlPanelDir, installDir)
+	}
+
+	if err := os.MkdirAll(installDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create install dir %s: %w", installDir, err)
+	}
+
+	if existing := findBundledFFmpegPath(installDir); existing != "" {
+		exportRuntimePaths(existing)
+		return existing, nil
+	}
+
+	var downloadURL string
+	var archivePath string
+	if runtime.GOOS == "windows" {
+		downloadURL = GetDownloadURL()
+		archivePath = filepath.Join(installDir, "ffmpeg.zip")
+	} else if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		downloadURL = getLinuxSharedDownloadURL()
+		archivePath = filepath.Join(installDir, "ffmpeg-linux64-gpl-shared.tar.xz")
+	} else {
+		return "", nil
+	}
+
+	if err := DownloadArchive(downloadURL, archivePath, progress, cancel); err != nil {
+		return "", err
+	}
+
+	if runtime.GOOS == "windows" {
+		if err := ExtractZip(archivePath, installDir); err != nil {
+			return "", err
+		}
+	} else {
+		if err := ExtractTarXz(archivePath, installDir); err != nil {
+			return "", err
+		}
+	}
+
+	resolved := findBundledFFmpegPath(installDir)
+	if resolved == "" {
+		return "", fmt.Errorf("ffmpeg executable not found after extraction in %s", installDir)
+	}
+
+	exportRuntimePaths(resolved)
+	return resolved, nil
 }

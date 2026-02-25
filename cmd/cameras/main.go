@@ -26,6 +26,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/downloadutils"
 	"github.com/owlcms/replays/internal/jobutil"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/recording"
@@ -145,9 +146,18 @@ func main() {
 		}
 	}
 
+	if err := config.ResolveAndEnsureConfigDir(); err != nil {
+		fmt.Printf("Failed to initialize config directory: %v\n", err)
+		os.Exit(1)
+	}
+
 	if extractConfig {
 		if p := config.ExtractDefaultCamerasConfig(); p == "" {
 			fmt.Println("Failed to extract camera config files")
+			os.Exit(1)
+		}
+		if _, err := downloadutils.EnsureFFmpegRuntime(config.GetFFmpegBootstrapDir(), nil, nil); err != nil {
+			fmt.Printf("Failed to bootstrap FFmpeg runtime: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Printf("Extracted camera config files in: %s\n", config.GetInstallDir())
@@ -165,6 +175,18 @@ func main() {
 		fmt.Printf("Warning: Failed to initialize logging: %v\n", err)
 	} else {
 		fmt.Printf("Writing logs to: %s\n", filepath.Join(logDir, "cameras.log"))
+	}
+
+	if ffmpegPath, err := downloadutils.EnsureFFmpegRuntime(config.GetFFmpegBootstrapDir(), nil, nil); err != nil {
+		fmt.Printf("Warning: Failed to bootstrap FFmpeg runtime: %v\n", err)
+	} else if ffmpegPath != "" {
+		logging.InfoLogger.Printf("FFmpeg runtime ready: %s", ffmpegPath)
+	}
+
+	if config.IsLocalDevRuntime() {
+		if p := config.ExtractDefaultCamerasConfig(); p == "" {
+			fmt.Println("Warning: Failed to ensure default camera config files")
+		}
 	}
 
 	// Load merged cameras configuration (shared + instance)
@@ -901,12 +923,20 @@ func parseResolution(size string) (int, int, bool) {
 }
 
 func resolveFFplayPath() string {
+	if envPath := strings.TrimSpace(os.Getenv("VIDEO_FFPLAY_PATH")); envPath != "" {
+		return envPath
+	}
+
 	ffmpegPath := config.GetFFmpegPath()
 	if ffmpegPath == "" {
+		ffplayName := "ffplay"
 		if runtime.GOOS == "windows" {
-			return "ffplay.exe"
+			ffplayName = "ffplay.exe"
 		}
-		return "ffplay"
+		if sharedPath := config.FindSharedFFmpegExecutable(ffplayName); sharedPath != "" {
+			return sharedPath
+		}
+		return ffplayName
 	}
 
 	ffplayName := "ffplay"
@@ -917,6 +947,10 @@ func resolveFFplayPath() string {
 	candidate := filepath.Join(filepath.Dir(ffmpegPath), ffplayName)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
+	}
+
+	if sharedPath := config.FindSharedFFmpegExecutable(ffplayName); sharedPath != "" {
+		return sharedPath
 	}
 
 	return ffplayName

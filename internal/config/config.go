@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -70,6 +71,51 @@ var (
 	currentConfig *Config
 	ffmpegPath    string // Store the located ffmpeg path
 )
+
+const ControlPanelDirEnv = "VIDEO_CONTROLPANEL_DIR"
+const LocalVideoConfigDir = "video_config"
+
+// ResolveAndEnsureConfigDir resolves ConfigDir in the following order:
+// 1) explicit --configDir value (already stored in ConfigDir),
+// 2) VIDEO_CONFIGDIR environment variable,
+// 3) local ./video_config fallback for development.
+// It normalizes to an absolute path and ensures the directory exists.
+func ResolveAndEnsureConfigDir() error {
+	if strings.TrimSpace(ConfigDir) == "" {
+		if envDir := strings.TrimSpace(os.Getenv("VIDEO_CONFIGDIR")); envDir != "" {
+			ConfigDir = envDir
+		} else {
+			ConfigDir = filepath.Join(".", LocalVideoConfigDir)
+		}
+	}
+
+	absConfigDir, err := filepath.Abs(ConfigDir)
+	if err != nil {
+		return fmt.Errorf("invalid configDir '%s': %w", ConfigDir, err)
+	}
+	ConfigDir = absConfigDir
+
+	if err := os.MkdirAll(ConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create configDir '%s': %w", ConfigDir, err)
+	}
+
+	return nil
+}
+
+// IsLocalDevRuntime reports whether the runtime root is the default local ./video_config
+// folder and not overridden by VIDEO_CONFIGDIR.
+func IsLocalDevRuntime() bool {
+	if strings.TrimSpace(os.Getenv("VIDEO_CONFIGDIR")) != "" {
+		return false
+	}
+
+	abcLocalVideo, err := filepath.Abs(filepath.Join(".", LocalVideoConfigDir))
+	if err != nil {
+		return false
+	}
+
+	return filepath.Clean(GetInstallDir()) == filepath.Clean(abcLocalVideo)
+}
 
 // LoadConfig loads the configuration from the specified file
 func LoadConfig(configFile string) (*Config, error) {
@@ -333,12 +379,8 @@ An absolute path can be provded if needed.`, GetInstallDir()))
 	flag.StringVar(&AutoTomlDir, "autoTomlDir", "", "directory for auto.toml output (default: install dir)")
 	flag.Parse()
 
-	if ConfigDir != "" {
-		absConfigDir, err := filepath.Abs(ConfigDir)
-		if err != nil {
-			return nil, fmt.Errorf("invalid configDir '%s': %w", ConfigDir, err)
-		}
-		ConfigDir = absConfigDir
+	if err := ResolveAndEnsureConfigDir(); err != nil {
+		return nil, err
 	}
 
 	if *configFile == "" {
@@ -384,30 +426,117 @@ func GetInstallDir() string {
 		return ConfigDir
 	}
 
-	if InstallDir != "" && filepath.IsAbs(InstallDir) {
-		return InstallDir
+	if envDir := strings.TrimSpace(os.Getenv("VIDEO_CONFIGDIR")); envDir != "" {
+		if absEnvDir, err := filepath.Abs(envDir); err == nil {
+			return absEnvDir
+		}
+		return envDir
 	}
 
-	var baseDir string
-	appName := "replays"
-	if InstallDir != "" {
-		appName = InstallDir
+	if absLocalVideo, err := filepath.Abs(filepath.Join(".", LocalVideoConfigDir)); err == nil {
+		return absLocalVideo
+	}
+	return filepath.Join(".", LocalVideoConfigDir)
+}
+
+// GetControlPanelInstallDir returns the shared control panel installation directory.
+func GetControlPanelInstallDir() string {
+	if envDir := strings.TrimSpace(os.Getenv(ControlPanelDirEnv)); envDir != "" {
+		if absEnvDir, err := filepath.Abs(envDir); err == nil {
+			return absEnvDir
+		}
+		return envDir
 	}
 
 	switch runtime.GOOS {
 	case "windows":
-		baseDir = filepath.Join(os.Getenv("APPDATA"), appName)
-		// TEMPORARY: Replace 'lamyj' with 'le test' in the path for testing
-		//baseDir = strings.ReplaceAll(baseDir, "lamyj", "le test")
+		return filepath.Join(os.Getenv("APPDATA"), "owlcms-controlpanel")
 	case "darwin":
-		baseDir = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", appName)
+		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "owlcms-controlpanel")
 	case "linux":
-		baseDir = filepath.Join(os.Getenv("HOME"), ".local", "share", appName)
+		return filepath.Join(os.Getenv("HOME"), ".local", "share", "owlcms-controlpanel")
 	default:
-		baseDir = "./" + appName
+		return "./owlcms-controlpanel"
+	}
+}
+
+// GetFFmpegBootstrapDir returns where FFmpeg runtime archives should be downloaded/extracted.
+// Priority:
+// 1) VIDEO_CONTROLPANEL_DIR/video_config/ffmpeg
+// 2) local ./video_config/ffmpeg fallback (dev/default)
+func GetFFmpegBootstrapDir() string {
+	if envDir := strings.TrimSpace(os.Getenv(ControlPanelDirEnv)); envDir != "" {
+		if absEnvDir, err := filepath.Abs(envDir); err == nil {
+			return filepath.Join(absEnvDir, LocalVideoConfigDir, "ffmpeg")
+		}
+		return filepath.Join(envDir, LocalVideoConfigDir, "ffmpeg")
 	}
 
-	return baseDir
+	if absLocalVideo, err := filepath.Abs(filepath.Join(".", LocalVideoConfigDir, "ffmpeg")); err == nil {
+		return absLocalVideo
+	}
+	return filepath.Join(".", LocalVideoConfigDir, "ffmpeg")
+}
+
+// GetSharedFFmpegRootDirs returns candidate shared FFmpeg root directories
+// (e.g. .../ffmpeg/<version>) managed by Control Panel.
+func GetSharedFFmpegRootDirs() []string {
+	roots := make([]string, 0, 8)
+	seen := make(map[string]struct{})
+
+	add := func(path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		clean := filepath.Clean(path)
+		if _, ok := seen[clean]; ok {
+			return
+		}
+		seen[clean] = struct{}{}
+		roots = append(roots, clean)
+	}
+
+	if ffmpegPath := strings.TrimSpace(os.Getenv("VIDEO_FFMPEG_PATH")); ffmpegPath != "" {
+		ffmpegDir := filepath.Dir(ffmpegPath)
+		if strings.EqualFold(filepath.Base(ffmpegDir), "bin") {
+			add(filepath.Dir(ffmpegDir))
+		}
+		add(ffmpegDir)
+	}
+
+	sharedBase := filepath.Join(GetControlPanelInstallDir(), LocalVideoConfigDir, "ffmpeg")
+	entries, err := os.ReadDir(sharedBase)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				add(filepath.Join(sharedBase, entry.Name()))
+			}
+		}
+	}
+
+	sort.SliceStable(roots, func(i, j int) bool {
+		return roots[i] > roots[j]
+	})
+
+	return roots
+}
+
+// FindSharedFFmpegExecutable resolves an executable name from shared Control Panel
+// FFmpeg directories. Returns empty string when not found.
+func FindSharedFFmpegExecutable(executableName string) string {
+	for _, root := range GetSharedFFmpegRootDirs() {
+		binCandidate := filepath.Join(root, "bin", executableName)
+		if _, err := os.Stat(binCandidate); err == nil {
+			return binCandidate
+		}
+
+		directCandidate := filepath.Join(root, executableName)
+		if _, err := os.Stat(directCandidate); err == nil {
+			return directCandidate
+		}
+	}
+
+	return ""
 }
 
 // isWSL checks if we're running under Windows Subsystem for Linux

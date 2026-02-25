@@ -86,6 +86,11 @@ func maybeExtractConfigAndExit() bool {
 		}
 	}
 
+	if err := config.ResolveAndEnsureConfigDir(); err != nil {
+		fmt.Printf("Failed to initialize config directory: %v\n", err)
+		os.Exit(1)
+	}
+
 	configPath := filepath.Join(config.GetInstallDir(), "config.toml")
 	if err := config.ExtractDefaultConfig(configPath); err != nil {
 		fmt.Printf("Failed to extract config.toml: %v\n", err)
@@ -100,6 +105,11 @@ func maybeExtractConfigAndExit() bool {
 
 	if p := config.ExtractDefaultCamerasConfig(); p == "" {
 		fmt.Println("Failed to extract camera config files")
+		os.Exit(1)
+	}
+
+	if _, err := downloadutils.EnsureFFmpegRuntime(config.GetFFmpegBootstrapDir(), nil, nil); err != nil {
+		fmt.Printf("Failed to bootstrap FFmpeg runtime: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -611,43 +621,27 @@ func main() {
 	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
 	updateTitle()
 
-	// Check for ffmpeg directory on Windows
-	if runtime.GOOS == "windows" {
-		installDir := config.GetInstallDir()
-		ffmpegDir := filepath.Join(installDir, recording.FfmpegBuild)
-		if _, err := os.Stat(ffmpegDir); os.IsNotExist(err) {
-			// Directory does not exist, download and extract ffmpeg
-			downloadURL := downloadutils.GetDownloadURL()
-			destPath := filepath.Join(installDir, "ffmpeg.zip")
-
-			progressDialog := dialog.NewProgress("Downloading FFmpeg", "Please wait while FFmpeg is being downloaded...", window)
-			progressDialog.Show()
-
-			cancel := make(chan bool)
-			go func() {
-				err := downloadutils.DownloadArchive(downloadURL, destPath, func(downloaded, total int64) {
-					progressDialog.SetValue(float64(downloaded) / float64(total))
-				}, cancel)
-				if err != nil {
-					logging.ErrorLogger.Printf("Failed to download FFmpeg: %v", err)
-					dialog.ShowError(err, window)
-					progressDialog.Hide()
-					return
-				}
-
-				err = downloadutils.ExtractZip(destPath, installDir)
-				if err != nil {
-					logging.ErrorLogger.Printf("Failed to extract FFmpeg: %v", err)
-					dialog.ShowError(err, window)
-					progressDialog.Hide()
-					return
-				}
-
-				progressDialog.Hide()
-				//dialog.ShowInformation("Success", "FFmpeg has been downloaded and extracted successfully.", window)
-			}()
+	if config.IsLocalDevRuntime() {
+		if p := config.ExtractDefaultCamerasConfig(); p == "" {
+			logging.WarningLogger.Println("Failed to ensure default camera config files")
 		}
 	}
+
+	installDir := config.GetFFmpegBootstrapDir()
+	progressDialog := dialog.NewProgress("Preparing FFmpeg", "Please wait while FFmpeg runtime is being prepared...", window)
+	progressDialog.Show()
+	cancel := make(chan bool)
+	if ffmpegPath, err := downloadutils.EnsureFFmpegRuntime(installDir, func(downloaded, total int64) {
+		if total > 0 {
+			progressDialog.SetValue(float64(downloaded) / float64(total))
+		}
+	}, cancel); err != nil {
+		logging.WarningLogger.Printf("Failed to bootstrap FFmpeg runtime: %v", err)
+		dialog.ShowError(err, window)
+	} else if ffmpegPath != "" {
+		logging.InfoLogger.Printf("FFmpeg runtime ready: %s", ffmpegPath)
+	}
+	progressDialog.Hide()
 
 	// Initialize FFmpeg path
 	if err := recording.InitializeFFmpeg(); err != nil {

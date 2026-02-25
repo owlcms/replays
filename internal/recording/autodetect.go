@@ -641,6 +641,10 @@ func detectCamerasWindows(cfg *config.CamerasConfig) []DetectedCamera {
 }
 
 func resolveFFprobePath(ffmpegPath string) string {
+	if envPath := strings.TrimSpace(os.Getenv("VIDEO_FFPROBE_PATH")); envPath != "" {
+		return envPath
+	}
+
 	if ffmpegPath != "" {
 		dir := filepath.Dir(ffmpegPath)
 		name := "ffprobe"
@@ -651,6 +655,14 @@ func resolveFFprobePath(ffmpegPath string) string {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
+	}
+
+	name := "ffprobe"
+	if runtime.GOOS == "windows" {
+		name = "ffprobe.exe"
+	}
+	if sharedPath := config.FindSharedFFmpegExecutable(name); sharedPath != "" {
+		return sharedPath
 	}
 
 	if runtime.GOOS == "windows" {
