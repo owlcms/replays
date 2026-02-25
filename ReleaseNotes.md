@@ -1,6 +1,8 @@
 **Change log**
 
 - 2.0.0: replays and cameras are now installed and started from the control panel
+  - configuration is shared there under video_config
+  - a single copy of ffmpeg 7.1 is downloaded there for Linux x64 and Windows (rpi uses system's copy)
 - 2.0.0: replays will now, by default, use the H.264 streams created by the cameras program
   - from the control panel, start the cameras program to autodetect your cameras
   - check which port is camera 1 etc.
