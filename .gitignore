@@ -45,7 +45,7 @@ fyne-cross/
 # Log files
 *.log
 
-config.toml
+/config.toml
 /cameras
 video_config/
 auto.toml

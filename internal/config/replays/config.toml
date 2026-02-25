@@ -1,0 +1,35 @@
+# HTTP server port
+port = 8091
+
+# address of owlcms.  a scan of the local network will be done if undefined or unreachable.
+owlcms = ""
+
+# Platform identifier if more than one platform detected
+platform = "A"
+
+# Directory to store video files (can be an absolute path to store on a different drive)
+videoDir = 'videos'
+
+# FFmpeg logging - set to true to create timestamped log files for ffmpeg output
+logFfmpeg = false
+
+
+# =======================================================
+# Multicast Camera Configuration
+# =======================================================
+# When enabled, replays reads H.264 streams from multicast UDP
+# (sent by the cameras program) instead of locally-attached cameras.
+# Set a port for each camera (0 = unused).
+
+[multicast]
+    enabled = true
+    ip = "239.255.0.1"
+
+# Camera source precedence in replays (first match used):
+# 1) multicast.toml mapping (when [multicast].enabled = true)
+# 2) auto.toml camera sections (when multicast is disabled and auto.toml exists)
+# 3) default_cameras.toml platform sections
+# 4) legacy camera sections in config.toml ([windows*], [linux*], etc.)
+#
+# Note: this precedence applies only to camera source definitions.
+# Other application settings (port, videoDir, owlcms, etc.) are still read from config.toml.

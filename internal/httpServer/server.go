@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/config/replays"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/state"
 )
@@ -248,7 +249,7 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		Sessions:             sessions,
 		SelectedSession:      selectedSession,
 		ActiveSession:        state.CurrentSession, // Current competition session
-		Platform:             config.GetCurrentConfig().Platform,
+		Platform:             replays.GetCurrentConfig().Platform,
 		HasMultiplePlatforms: len(state.AvailablePlatforms) > 1,
 		SortByAthlete:        sortByAthlete,
 		ShowAll:              showAll,

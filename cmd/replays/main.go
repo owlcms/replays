@@ -23,6 +23,9 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/config/cameras"
+	ffmpegcfg "github.com/owlcms/replays/internal/config/ffmpeg"
+	"github.com/owlcms/replays/internal/config/replays"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
@@ -55,6 +58,36 @@ func setAppIcon(myApp fyne.App) {
 	}
 }
 
+func getReplayListHost() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err == nil {
+		defer conn.Close()
+		if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			ip := localAddr.IP
+			if ip != nil && !ip.IsLoopback() {
+				if v4 := ip.To4(); v4 != nil {
+					return v4.String()
+				}
+				return ip.String()
+			}
+		}
+	}
+
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
+				continue
+			}
+			if v4 := ipNet.IP.To4(); v4 != nil {
+				return v4.String()
+			}
+		}
+	}
+
+	return "localhost"
+}
+
 func maybeExtractConfigAndExit() bool {
 	var extract bool
 	for _, arg := range os.Args[1:] {
@@ -66,6 +99,9 @@ func maybeExtractConfigAndExit() bool {
 	if !extract {
 		return false
 	}
+
+	// Set app identity before config resolution
+	config.AppName = "replays"
 
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
@@ -91,20 +127,20 @@ func maybeExtractConfigAndExit() bool {
 	}
 
 	configPath := filepath.Join(config.GetInstallDir(), "config.toml")
-	if err := config.ExtractDefaultConfig(configPath); err != nil {
+	if err := replays.ExtractDefaultConfig(configPath); err != nil {
 		fmt.Printf("Failed to extract config.toml: %v\n", err)
 		os.Exit(1)
 	}
 
 	multicastPath := filepath.Join(config.GetInstallDir(), "multicast.toml")
-	if err := config.ExtractDefaultMulticastConfig(multicastPath); err != nil {
+	if err := replays.ExtractDefaultMulticastConfig(multicastPath); err != nil {
 		fmt.Printf("Failed to extract multicast.toml: %v\n", err)
 		os.Exit(1)
 	}
 
-	if p := config.ExtractDefaultCamerasConfig(); p == "" {
-		fmt.Println("Failed to extract camera config files")
-		os.Exit(1)
+	// Extract shared ffmpeg.toml (goes to shared config dir, not instance dir)
+	if p := ffmpegcfg.ExtractDefaultConfig(); p == "" {
+		fmt.Println("Warning: Failed to extract ffmpeg.toml")
 	}
 
 	fmt.Printf("Extracted config files in: %s\n", config.GetInstallDir())
@@ -161,7 +197,7 @@ func openApplicationDirectory() {
 }
 
 // showOwlCMSServerAddress shows a dialog with the OwlCMS server address
-func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
+func showOwlCMSServerAddress(cfg *replays.Config, window fyne.Window) {
 	var message string
 	if cfg.OwlCMS == "" {
 		message = "No server located."
@@ -177,7 +213,7 @@ func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
 		if newAddress != "" {
 			cfg.OwlCMS = newAddress
 			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-			if err := config.UpdateConfigFile(configFilePath, newAddress); err != nil {
+			if err := replays.UpdateConfigFile(configFilePath, newAddress); err != nil {
 				fmt.Printf("Error updating config file: %v\n", err)
 				dialog.ShowError(err, window)
 				return
@@ -212,7 +248,7 @@ func showOwlCMSServerAddress(cfg *config.Config, window fyne.Window) {
 }
 
 // showPlatformSelection shows a dialog with platform selection dropdown
-func showPlatformSelection(cfg *config.Config, window fyne.Window) {
+func showPlatformSelection(cfg *replays.Config, window fyne.Window) {
 	// Use the stored validated platforms if available
 	platforms := monitor.GetStoredPlatforms()
 
@@ -261,7 +297,7 @@ func showPlatformSelection(cfg *config.Config, window fyne.Window) {
 			if update && combo.Selected != "" {
 				cfg.Platform = combo.Selected
 				configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-				if err := config.UpdatePlatform(configFilePath, combo.Selected); err != nil {
+				if err := replays.UpdatePlatform(configFilePath, combo.Selected); err != nil {
 					dialog.ShowError(err, window)
 					return
 				}
@@ -305,7 +341,7 @@ func confirmAndQuit(window fyne.Window) {
 }
 
 func updateTitle() {
-	cfg := config.GetCurrentConfig()
+	cfg := replays.GetCurrentConfig()
 	platform := cfg.Platform
 	if platform == "" {
 		platform = "No Platform Selected"
@@ -329,7 +365,7 @@ func showConfigError(err error, window fyne.Window) {
 	retryBtn := widget.NewButton("Retry", func() {
 		// Attempt to reload configuration
 		configFile := filepath.Join(config.GetInstallDir(), "config.toml")
-		_, reloadErr := config.LoadConfig(configFile)
+		_, reloadErr := replays.LoadConfig(configFile)
 		if reloadErr != nil {
 			// Still has errors, show again
 			configDialog.Hide()
@@ -403,11 +439,11 @@ func openConfigFile() {
 // ---------------------------------------------------------------------------
 
 // toggleMulticast flips the multicast enabled flag, saves, and prompts for restart.
-func toggleMulticast(cfg *config.Config, window fyne.Window) {
+func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	cfg.Multicast.Enabled = !cfg.Multicast.Enabled
 
 	configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-	if err := config.UpdateMulticastConfig(configFilePath, cfg.Multicast); err != nil {
+	if err := replays.UpdateMulticastConfig(configFilePath, cfg.Multicast); err != nil {
 		dialog.ShowError(fmt.Errorf("failed to save multicast setting: %w", err), window)
 		cfg.Multicast.Enabled = !cfg.Multicast.Enabled // revert
 		return
@@ -428,7 +464,7 @@ func toggleMulticast(cfg *config.Config, window fyne.Window) {
 }
 
 // showMulticastConfig shows a dialog to configure the multicast IP and port mapping.
-func showMulticastConfig(cfg *config.Config, window fyne.Window) {
+func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	m := cfg.Multicast
 	portToText := func(port int) string {
 		if port <= 0 {
@@ -449,8 +485,8 @@ func showMulticastConfig(cfg *config.Config, window fyne.Window) {
 	}
 
 	multicastPath := filepath.Join(config.GetInstallDir(), "multicast.toml")
-	if err := config.ExtractDefaultMulticastConfig(multicastPath); err == nil {
-		if loaded, err := config.LoadMulticastConfig(multicastPath); err == nil {
+	if err := replays.ExtractDefaultMulticastConfig(multicastPath); err == nil {
+		if loaded, err := replays.LoadMulticastConfig(multicastPath); err == nil {
 			m.IP = loaded.IP
 			m.Camera1Port = loaded.Camera1Port
 			m.Camera2Port = loaded.Camera2Port
@@ -528,7 +564,7 @@ func showMulticastConfig(cfg *config.Config, window fyne.Window) {
 			cfg.Multicast.Camera3Port = m.Camera3Port
 			cfg.Multicast.Camera4Port = m.Camera4Port
 
-			if err := config.UpdateMulticastMappingFile(multicastPath, m); err != nil {
+			if err := replays.UpdateMulticastMappingFile(multicastPath, m); err != nil {
 				dialog.ShowError(fmt.Errorf("failed to save multicast config: %w", err), window)
 				return
 			}
@@ -552,18 +588,18 @@ func multicastToggleLabel(enabled bool) string {
 	return "Use Multicast Cameras"
 }
 
-func localMulticastMismatchNote(cfg *config.Config) string {
+func localMulticastMismatchNote(cfg *replays.Config) string {
 	if !cfg.Multicast.Enabled {
 		return ""
 	}
 
-	camerasCfg, err := config.LoadCamerasConfig()
+	camerasCfg, err := cameras.LoadConfig()
 	if err != nil {
 		logging.WarningLogger.Printf("Skipping cameras/replays multicast check: %v", err)
 		return ""
 	}
 
-	camerasConfigPath := config.GetCamerasConfigSourcePath()
+	camerasConfigPath := cameras.GetConfigSourcePath()
 	if camerasConfigPath == "" {
 		return ""
 	}
@@ -579,6 +615,9 @@ func localMulticastMismatchNote(cfg *config.Config) string {
 }
 
 func main() {
+	// Set app identity early (maybeExtractConfigAndExit also sets it)
+	config.AppName = "replays"
+
 	if maybeExtractConfigAndExit() {
 		return
 	}
@@ -592,7 +631,7 @@ func main() {
 	window := myApp.NewWindow("OWLCMS Jury Replays")
 
 	// Process command-line flags and load configuration
-	cfg, err := config.InitConfig()
+	cfg, err := replays.InitConfig()
 	if err != nil {
 		logging.ErrorLogger.Printf("Error processing flags or loading config: %v", err)
 
@@ -616,8 +655,9 @@ func main() {
 	updateTitle()
 
 	if config.IsLocalDevRuntime() {
-		if p := config.ExtractDefaultCamerasConfig(); p == "" {
-			logging.WarningLogger.Println("Failed to ensure default camera config files")
+		// Ensure shared ffmpeg.toml exists in dev mode
+		if p := ffmpegcfg.ExtractDefaultConfig(); p == "" {
+			logging.WarningLogger.Println("Failed to ensure default ffmpeg.toml")
 		}
 	}
 
@@ -660,13 +700,15 @@ func main() {
 	mismatchNote := canvas.NewText(localMulticastMismatchNote(cfg), theme.ErrorColor())
 	mismatchNote.TextStyle = fyne.TextStyle{Italic: true}
 
-	urlStr := fmt.Sprintf("http://localhost:%d", cfg.Port)
+	host := getReplayListHost()
+	urlStr := fmt.Sprintf("http://%s:%d", host, cfg.Port)
 	parsedURL, _ := url.Parse(urlStr)
-	hyperlink := widget.NewHyperlink("Open replay list in browser", parsedURL)
+	replaysListLabel := widget.NewLabel("Open replay list in browser:")
+	hyperlink := widget.NewHyperlink(urlStr, parsedURL)
 
 	content := container.NewPadded(container.NewVBox(
 		topContainer,
-		container.NewHBox(hyperlink),
+		container.NewHBox(replaysListLabel, hyperlink),
 		widget.NewSeparator(),
 		statusLabel,
 		mismatchNote,

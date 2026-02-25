@@ -3,6 +3,7 @@ package recording
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -86,7 +88,7 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
 	args := []string{"-y"}
 	// Note: InputParameters are NOT used during trimming as they are for camera capture only
-	
+
 	if trimDuration > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
 	}
@@ -288,9 +290,9 @@ func StopRecording() (bool, error) {
 		}
 	} else {
 		logging.InfoLogger.Println("Attempting to stop ffmpeg gracefully...")
-		for i, stdin := range currentStdin {
-			if err := RequestFFmpegQuit(stdin); err != nil {
-				logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
+		for i, cmd := range currentRecordings {
+			if err := RequestFFmpegStop(cmd, currentStdin[i]); err != nil {
+				logging.InfoLogger.Printf("Could not gracefully stop ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -305,7 +307,11 @@ func StopRecording() (bool, error) {
 			go func(i int, cmd *exec.Cmd) {
 				defer wg.Done()
 				if err := cmd.Wait(); err != nil {
-					logging.InfoLogger.Printf("ffmpeg exited with error for Camera %d (this is normal): %v", i+1, err)
+					if isExpectedFFmpegStop(err) {
+						logging.InfoLogger.Printf("ffmpeg stopped gracefully for Camera %d (signal exit): %v", i+1, err)
+					} else {
+						logging.InfoLogger.Printf("ffmpeg exited with error for Camera %d: %v", i+1, err)
+					}
 				} else {
 					logging.InfoLogger.Printf("ffmpeg stopped gracefully for Camera %d", i+1)
 				}
@@ -316,6 +322,30 @@ func StopRecording() (bool, error) {
 	return false, nil
 }
 
+func isExpectedFFmpegStop(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+
+	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+		if status.Signaled() {
+			sig := status.Signal()
+			return sig == syscall.SIGINT || sig == syscall.SIGTERM
+		}
+		if status.Exited() {
+			code := status.ExitStatus()
+			return code == 130 || code == 254 || code == 255
+		}
+	}
+
+	return false
+}
+
 func TerminateRecordings() {
 	if config.NoVideo {
 		for i, fileName := range currentFileNames {
@@ -323,10 +353,10 @@ func TerminateRecordings() {
 		}
 	} else {
 		logging.InfoLogger.Println("Forcing stop ffmpeg if required...")
-		for i, stdin := range currentStdin {
+		for i, cmd := range currentRecordings {
 			logging.InfoLogger.Printf("Attempting to stop ffmpeg %d gracefully...", i+1)
-			if err := RequestFFmpegQuit(stdin); err != nil {
-				logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
+			if err := RequestFFmpegStop(cmd, currentStdin[i]); err != nil {
+				logging.InfoLogger.Printf("Could not gracefully stop ffmpeg for Camera %d (this is normal if process exited): %v", i+1, err)
 			}
 		}
 

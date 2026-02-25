@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/config/replays"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
 )
@@ -20,7 +21,7 @@ func main() {
 	}
 
 	configFile := filepath.Join(config.GetInstallDir(), "config.toml")
-	cfg, err := config.LoadConfig(configFile)
+	cfg, err := replays.LoadConfig(configFile)
 	if err != nil {
 		fmt.Printf("Error loading config: %v\n", err)
 		return

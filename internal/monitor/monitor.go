@@ -12,6 +12,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/config/replays"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/recording"
@@ -38,7 +39,7 @@ var (
 )
 
 // Monitor listens to the owlcms broker for specific messages
-func Monitor(cfg *config.Config) {
+func Monitor(cfg *replays.Config) {
 	// First establish MQTT connection
 	mqttAddress := fmt.Sprintf("tcp://%s:1883", cfg.OwlCMS)
 	opts := mqtt.NewClientOptions().AddBroker(mqttAddress)
@@ -125,7 +126,7 @@ func Monitor(cfg *config.Config) {
 	logging.InfoLogger.Printf("MQTT monitoring started on %s", mqttAddress)
 }
 
-func validatePlatform(cfg *config.Config, platforms []string) bool {
+func validatePlatform(cfg *replays.Config, platforms []string) bool {
 	if cfg.Platform == "" {
 		return false
 	}
@@ -140,7 +141,7 @@ func validatePlatform(cfg *config.Config, platforms []string) bool {
 }
 
 // GetValidatedPlatforms returns the validated list of platforms and whether the current platform is valid
-func GetValidatedPlatforms(cfg *config.Config) ([]string, bool) {
+func GetValidatedPlatforms(cfg *replays.Config) ([]string, bool) {
 	if mqttClient == nil || !mqttClient.IsConnected() {
 		logging.ErrorLogger.Printf("MQTT client not initialized or not connected - cannot retrieve platform list")
 		return nil, false
@@ -345,12 +346,12 @@ func handleRefereesDecision() {
 }
 
 // AutoSelectPlatform attempts to automatically select a platform when there's only one available
-func AutoSelectPlatform(cfg *config.Config, platforms []string) bool {
+func AutoSelectPlatform(cfg *replays.Config, platforms []string) bool {
 	if len(platforms) == 1 {
 		// Auto-select single platform
 		platform := platforms[0]
 		configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-		if err := config.UpdatePlatform(configFilePath, platform); err != nil {
+		if err := replays.UpdatePlatform(configFilePath, platform); err != nil {
 			logging.ErrorLogger.Printf("Error updating platform: %v", err)
 			return false
 		}

@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/config/ffmpeg"
 	"github.com/owlcms/replays/internal/logging"
 )
 
@@ -47,7 +48,7 @@ type cameraMode struct {
 }
 
 // DetectAndWriteConfig probes cameras and GPU encoders, then writes auto.toml.
-// It loads cameras_config.toml configuration so auto.toml benefits from the same
+// It loads ffmpeg.toml configuration so auto.toml benefits from the same
 // intelligent encoder definitions, format priorities, and mode priorities
 // used by the cameras program.
 func DetectAndWriteConfig(window fyne.Window) {
@@ -61,7 +62,7 @@ func DetectAndWriteConfig(window fyne.Window) {
 		defer progressDialog.Hide()
 
 		// Load shared cameras config so we use config-driven encoder & priority logic
-		cameraCfg, cfgErr := config.LoadCamerasConfig()
+		cameraCfg, cfgErr := ffmpeg.LoadConfig()
 		if cfgErr != nil {
 			logging.WarningLogger.Printf("Could not load cameras shared config, using legacy defaults: %v", cfgErr)
 		}
@@ -107,7 +108,7 @@ func DetectEncoders() []HwEncoder {
 
 // DetectEncodersWithConfig probes ffmpeg for available H.264 hardware encoders,
 // using the encoder definitions from cfg.
-func DetectEncodersWithConfig(cfg *config.CamerasConfig) []HwEncoder {
+func DetectEncodersWithConfig(cfg *ffmpeg.Config) []HwEncoder {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
@@ -224,7 +225,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 	return candidates
 }
 
-func encoderMatchesDetectedGPU(enc config.EncoderConfig, detected map[string]bool) bool {
+func encoderMatchesDetectedGPU(enc ffmpeg.EncoderConfig, detected map[string]bool) bool {
 	vendors := enc.GpuVendors
 	if len(vendors) == 0 {
 		vendors = inferredVendorsForEncoder(enc.Name)
@@ -424,7 +425,7 @@ func DetectCameras() []DetectedCamera {
 
 // DetectCamerasWithConfig detects cameras using config-driven mode priorities
 // when cfg is non-nil; falls back to legacy hardcoded priorities otherwise.
-func DetectCamerasWithConfig(cfg *config.CamerasConfig) []DetectedCamera {
+func DetectCamerasWithConfig(cfg *ffmpeg.Config) []DetectedCamera {
 	switch runtime.GOOS {
 	case "linux":
 		return detectCamerasLinux(cfg)
@@ -436,7 +437,7 @@ func DetectCamerasWithConfig(cfg *config.CamerasConfig) []DetectedCamera {
 }
 
 // detectCamerasLinux uses v4l2-ctl to detect cameras and their formats
-func detectCamerasLinux(cfg *config.CamerasConfig) []DetectedCamera {
+func detectCamerasLinux(cfg *ffmpeg.Config) []DetectedCamera {
 	// First get the device list
 	cmd := CreateHiddenCmd("v4l2-ctl", "--list-devices")
 	var out bytes.Buffer
@@ -487,7 +488,7 @@ func detectCamerasLinux(cfg *config.CamerasConfig) []DetectedCamera {
 }
 
 // probeV4L2Device probes a single v4l2 device for its best format
-func probeV4L2Device(name, device string, cfg *config.CamerasConfig) *DetectedCamera {
+func probeV4L2Device(name, device string, cfg *ffmpeg.Config) *DetectedCamera {
 	cmd := CreateHiddenCmd("v4l2-ctl", "-d", device, "--list-formats-ext")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -604,7 +605,7 @@ func probeV4L2Device(name, device string, cfg *config.CamerasConfig) *DetectedCa
 }
 
 // detectCamerasWindows uses ffmpeg dshow to detect cameras
-func detectCamerasWindows(cfg *config.CamerasConfig) []DetectedCamera {
+func detectCamerasWindows(cfg *ffmpeg.Config) []DetectedCamera {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
@@ -699,7 +700,7 @@ func verifyDshowH264Delivery(ffprobePath, name string) bool {
 }
 
 // probeDshowDevice probes a single dshow device for its capabilities
-func probeDshowDevice(ffmpegPath, name string, cfg *config.CamerasConfig) *DetectedCamera {
+func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCamera {
 	cmd := CreateHiddenCmd(ffmpegPath, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", fmt.Sprintf("video=%s", name))
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -817,7 +818,7 @@ func probeDshowDevice(ffmpegPath, name string, cfg *config.CamerasConfig) *Detec
 
 // PickBestCameraModeWithConfig selects the best camera mode using config-driven priorities.
 // If cfg is nil, uses legacy hardcoded priorities.
-func PickBestCameraModeWithConfig(allModes []cameraMode, cfg *config.CamerasConfig) cameraMode {
+func PickBestCameraModeWithConfig(allModes []cameraMode, cfg *ffmpeg.Config) cameraMode {
 	if len(allModes) == 0 {
 		return cameraMode{pixFmt: "unknown", width: 1280, height: 720, fps: 30}
 	}
@@ -863,7 +864,7 @@ func filterMjpegToMax720p(modes []cameraMode) []cameraMode {
 	return filtered
 }
 
-func modePreferredOverWithConfig(candidate, current cameraMode, cfg *config.CamerasConfig) bool {
+func modePreferredOverWithConfig(candidate, current cameraMode, cfg *ffmpeg.Config) bool {
 	var candidateFormat, currentFormat int
 	var candidateProfile, currentProfile int
 
@@ -928,7 +929,7 @@ func modeProfilePriority(mode cameraMode) int {
 // writeAutoConfig generates auto.toml from detected hardware.
 // When cfg is non-nil, encoder output parameters and format logic come from
 // the shared cameras configuration; otherwise legacy hardcoded values are used.
-func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder, cfg *config.CamerasConfig) error {
+func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder, cfg *ffmpeg.Config) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return err
 	}

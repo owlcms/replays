@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/owlcms/replays/internal/config"
+	"github.com/owlcms/replays/internal/config/replays"
 	"github.com/owlcms/replays/internal/logging"
 )
 
@@ -94,7 +94,7 @@ func IsPortOpen(address string) bool {
 	return true
 }
 
-func UpdateOwlcmsAddress(cfg *config.Config, configFile string) (string, error) {
+func UpdateOwlcmsAddress(cfg *replays.Config, configFile string) (string, error) {
 	broker := cfg.OwlCMS
 	owlcmsAddress := fmt.Sprintf("%s:1883", broker)
 	if cfg.OwlCMS != "" && IsPortOpen(owlcmsAddress) {
@@ -111,7 +111,7 @@ func UpdateOwlcmsAddress(cfg *config.Config, configFile string) (string, error) 
 		// remove the port number
 		broker = strings.Split(broker, ":")[0]
 		cfg.OwlCMS = broker
-		if err := config.UpdateConfigFile(configFile, broker); err != nil {
+		if err := replays.UpdateConfigFile(configFile, broker); err != nil {
 			fmt.Printf("Error updating config file: %v\n", err)
 			return broker, err
 		}
