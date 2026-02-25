@@ -49,5 +49,4 @@ config.toml
 /cameras
 video_config/
 auto.toml
-go.sum
 go.work.sum
