@@ -122,8 +122,15 @@ func GetDownloadURL() string {
 	return "https://github.com/GyanD/codexffmpeg/releases/download/7.1/" + recording.FfmpegBuild + ".zip"
 }
 
-func getLinuxSharedDownloadURL() string {
-	return "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl-shared.tar.xz"
+func getLinuxSharedDownloadURL(goarch string) (string, error) {
+	switch goarch {
+	case "amd64":
+		return "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl-shared.tar.xz", nil
+	case "arm64":
+		return "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl-shared.tar.xz", nil
+	default:
+		return "", fmt.Errorf("unsupported linux architecture for bundled ffmpeg: %s", goarch)
+	}
 }
 
 func GetGoos() string {
@@ -394,9 +401,13 @@ func EnsureFFmpegRuntime(installDir string, progress ProgressCallback, cancel <-
 	if runtime.GOOS == "windows" {
 		downloadURL = GetDownloadURL()
 		archivePath = filepath.Join(installDir, "ffmpeg.zip")
-	} else if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
-		downloadURL = getLinuxSharedDownloadURL()
-		archivePath = filepath.Join(installDir, "ffmpeg-linux64-gpl-shared.tar.xz")
+	} else if runtime.GOOS == "linux" {
+		linuxURL, urlErr := getLinuxSharedDownloadURL(runtime.GOARCH)
+		if urlErr != nil {
+			return "", nil
+		}
+		downloadURL = linuxURL
+		archivePath = filepath.Join(installDir, "ffmpeg-master-latest-linux"+runtime.GOARCH+"-gpl-shared.tar.xz")
 	} else {
 		return "", nil
 	}

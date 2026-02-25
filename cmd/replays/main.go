@@ -23,7 +23,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
-	"github.com/owlcms/replays/internal/downloadutils"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/monitor"
@@ -105,11 +104,6 @@ func maybeExtractConfigAndExit() bool {
 
 	if p := config.ExtractDefaultCamerasConfig(); p == "" {
 		fmt.Println("Failed to extract camera config files")
-		os.Exit(1)
-	}
-
-	if _, err := downloadutils.EnsureFFmpegRuntime(config.GetFFmpegBootstrapDir(), nil, nil); err != nil {
-		fmt.Printf("Failed to bootstrap FFmpeg runtime: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -626,22 +620,6 @@ func main() {
 			logging.WarningLogger.Println("Failed to ensure default camera config files")
 		}
 	}
-
-	installDir := config.GetFFmpegBootstrapDir()
-	progressDialog := dialog.NewProgress("Preparing FFmpeg", "Please wait while FFmpeg runtime is being prepared...", window)
-	progressDialog.Show()
-	cancel := make(chan bool)
-	if ffmpegPath, err := downloadutils.EnsureFFmpegRuntime(installDir, func(downloaded, total int64) {
-		if total > 0 {
-			progressDialog.SetValue(float64(downloaded) / float64(total))
-		}
-	}, cancel); err != nil {
-		logging.WarningLogger.Printf("Failed to bootstrap FFmpeg runtime: %v", err)
-		dialog.ShowError(err, window)
-	} else if ffmpegPath != "" {
-		logging.InfoLogger.Printf("FFmpeg runtime ready: %s", ffmpegPath)
-	}
-	progressDialog.Hide()
 
 	// Initialize FFmpeg path
 	if err := recording.InitializeFFmpeg(); err != nil {
