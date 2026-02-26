@@ -1,10 +1,10 @@
 # User Media Profile (OBS PipeWire)
 
-This profile is for non-developers who just need media OBS working.
+This profile is for non-developers who just need media playback/recording working.
 
 ## 1) Pull latest scripts/docs
 
-copy-paste this to a terminal shell on the Linux machine.
+(This will likely be copied from a browser opening the docs on github.com)
 
 ```bash
 GH_KEY_URL="https://cli.github.com/packages/githubcli-archive-keyring.gpg"
