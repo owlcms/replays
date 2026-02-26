@@ -64,7 +64,7 @@
     size = "1920x1080"
     fps = 60
     inputParameters = '-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096'
-    outputParameters = '-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
+    outputParameters = '-vf format=nv12 -c:v h264_qsv -preset medium -look_ahead 0 -rc_mode cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
     recode = false
 
 # =======================================================
@@ -100,7 +100,7 @@
     format = 'v4l2'
     size = "1920x1080"
     fps = 60
-    inputParameters = '-hwaccel vaapi -vaapi_device /dev/dri/renderD128 -rtbufsize 512M -thread_queue_size 4096'
+    inputParameters = '-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096'
     outputParameters = '-c:v h264_vaapi -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
     recode = false
 
@@ -122,8 +122,8 @@
     format = 'v4l2'
     size = "1920x1080"
     fps = 60
-    inputParameters = '-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096'
-    outputParameters = '-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
+    inputParameters = '-init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096'
+    outputParameters = '-vf format=nv12 -c:v h264_qsv -preset medium -look_ahead 0 -rc_mode cbr -b:v 8M -g 60 -keyint_min 60 -r 60 -vsync cfr -an'
     recode = false
 
 # =======================================================

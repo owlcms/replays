@@ -37,6 +37,7 @@ type HwEncoder struct {
 	Description      string
 	InputParameters  string
 	OutputParameters string
+	VideoFilter      string
 	TestInit         string // extra flags needed for encoder test (e.g. VAAPI/QSV init)
 }
 
@@ -152,9 +153,9 @@ func DetectEncodersWithConfig(cfg *ffmpeg.Config) []HwEncoder {
 			if !availableEncoders[enc.Name] {
 				continue
 			}
-			// Check platform restriction
-			if enc.Platform != "" && enc.Platform != runtime.GOOS {
-				logging.InfoLogger.Printf("Skipping encoder %s: platform=%s, current=%s", enc.Name, enc.Platform, runtime.GOOS)
+			// Check platform restriction (supports dshow/v4l2 and linux/windows)
+			if enc.Platform != "" && !encoderPlatformMatchesRuntime(enc.Platform) {
+				logging.InfoLogger.Printf("Skipping encoder %s: platform=%s, current_os=%s", enc.Name, enc.Platform, runtime.GOOS)
 				continue
 			}
 			if !encoderMatchesDetectedGPU(enc, detectedGPUVendors) {
@@ -167,6 +168,7 @@ func DetectEncodersWithConfig(cfg *ffmpeg.Config) []HwEncoder {
 				Description:      enc.Description,
 				InputParameters:  enc.InputParameters,
 				OutputParameters: enc.OutputParameters,
+				VideoFilter:      enc.VideoFilter,
 				TestInit:         enc.TestInit,
 			})
 		}
@@ -196,6 +198,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_nvenc", Description: "NVIDIA GPU",
 			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
+			VideoFilter:      "",
 			OutputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M",
 		})
 	}
@@ -203,6 +206,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_amf", Description: "AMD GPU (AMF)",
 			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
+			VideoFilter:      "",
 			OutputParameters: "-c:v h264_amf -rc cbr -b:v 8M",
 		})
 	}
@@ -210,6 +214,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_vaapi", Description: "VAAPI (AMD/Intel on Linux)",
 			InputParameters:  "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096",
+			VideoFilter:      "format=nv12,hwupload",
 			OutputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M",
 			TestInit:         "-init_hw_device vaapi=va:/dev/dri/renderD128",
 		})
@@ -218,6 +223,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_qsv", Description: "Intel GPU (QSV)",
 			InputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
+			VideoFilter:      "format=nv12",
 			OutputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M",
 			TestInit:         "-init_hw_device qsv=hw -filter_hw_device hw",
 		})
@@ -258,6 +264,22 @@ func inferredVendorsForEncoder(name string) []string {
 		return []string{"intel"}
 	default:
 		return nil
+	}
+}
+
+func encoderPlatformMatchesRuntime(platform string) bool {
+	p := strings.ToLower(strings.TrimSpace(platform))
+	if p == "" {
+		return true
+	}
+
+	switch runtime.GOOS {
+	case "windows":
+		return p == "windows" || p == "dshow"
+	case "linux":
+		return p == "linux" || p == "v4l2"
+	default:
+		return p == runtime.GOOS
 	}
 }
 
@@ -930,6 +952,14 @@ func modeProfilePriority(mode cameraMode) int {
 // When cfg is non-nil, encoder output parameters and format logic come from
 // the shared cameras configuration; otherwise legacy hardcoded values are used.
 func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder, cfg *ffmpeg.Config) error {
+	// replays app behavior for auto.toml generation
+	// - input
+	//   - input format is obtained by probing cameras
+	//   - format preference is defined in [cameras] priorities
+	// - recording output in auto.toml
+	//   - H.264 input is copied
+	//   - MJPEG input is copied with recode=true (no live encoding; recoding happens during trimming)
+	//   - raw input uses encoder block settings to produce H.264 (or software fallback when no hardware encoder is available)
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return err
 	}
@@ -974,7 +1004,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 	for i, cam := range cameras {
 		sectionName := fmt.Sprintf("camera%d", i+1)
 		buf.WriteString(fmt.Sprintf("[%s]\n", sectionName))
-		buf.WriteString(fmt.Sprintf("    description = \"%s (%s, %s)\"\n", cam.Name, cam.PixFmt, cam.Size))
+		buf.WriteString(fmt.Sprintf("    description = \"[%s] %s (%s, %s)\"\n", runtime.GOOS, cam.Name, cam.PixFmt, cam.Size))
 		buf.WriteString("    enabled = true\n")
 
 		if cam.Format == "dshow" {
@@ -1054,12 +1084,9 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 			buf.WriteString(fmt.Sprintf("    inputParameters = '%s'\n", inputParams))
 
 			if bestEncoder != nil {
-				// Build hwupload filter when the encoder requires it (vaapi, qsv)
 				vfPart := ""
-				if strings.Contains(bestEncoder.Name, "vaapi") {
-					vfPart = "-vf format=nv12,hwupload "
-				} else if strings.Contains(bestEncoder.Name, "qsv") {
-					vfPart = "-vf format=nv12,hwupload=extra_hw_frames=64 "
+				if strings.TrimSpace(bestEncoder.VideoFilter) != "" {
+					vfPart = fmt.Sprintf("-vf %s ", strings.TrimSpace(bestEncoder.VideoFilter))
 				}
 				buf.WriteString(fmt.Sprintf("    outputParameters = '%s%s %s'\n", vfPart, bestEncoder.OutputParameters, fpsParams))
 			} else {
@@ -1077,7 +1104,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 		buf.WriteString("# Sample UDP stream configurations for cameras attached to other machines on the network.\n\n")
 		for i := 1; i <= 3; i++ {
 			buf.WriteString(fmt.Sprintf("[camera%d]\n", i))
-			buf.WriteString(fmt.Sprintf("    description = \"UDP Stream from Camera %d\"\n", i))
+			buf.WriteString(fmt.Sprintf("    description = \"[%s] UDP Stream from Camera %d\"\n", runtime.GOOS, i))
 			buf.WriteString("    enabled = false\n")
 			buf.WriteString(fmt.Sprintf("    camera = 'udp://239.255.0.1:900%d'\n", i))
 			buf.WriteString("    format = 'mpegts'\n")

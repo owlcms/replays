@@ -86,6 +86,9 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 
 // buildTrimmingArgs builds the ffmpeg arguments for trimming
 func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
+	// replays trim/finalize behavior
+	// - MJPEG recode path currently uses built-in software libx264 settings
+	//   (not encoder blocks), since this runs during trimming and not on the real-time capture path
 	args := []string{"-y"}
 	// Note: InputParameters are NOT used during trimming as they are for camera capture only
 

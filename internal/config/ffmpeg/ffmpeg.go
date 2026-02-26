@@ -44,8 +44,9 @@ type EncoderConfig struct {
 	Description      string   `toml:"description"`
 	InputParameters  string   `toml:"inputParameters"`
 	OutputParameters string   `toml:"outputParameters"`
+	VideoFilter      string   `toml:"videoFilter"`
 	TestInit         string   `toml:"testInit"`
-	Platform         string   `toml:"platform"`   // "linux", "windows", or "" (any)
+	Platform         string   `toml:"platform"`   // "v4l2"/"dshow" preferred; "linux"/"windows" also accepted; "" means any
 	GpuVendors       []string `toml:"gpuVendors"` // optional: nvidia, amd, intel
 }
 

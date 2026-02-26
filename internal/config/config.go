@@ -15,6 +15,7 @@ import (
 type CameraConfiguration struct {
 	FfmpegPath       string `toml:"ffmpegPath"`
 	FfmpegCamera     string `toml:"ffmpegCamera"`
+	Platform         string `toml:"platform"`
 	Format           string `toml:"format"`
 	Params           string `toml:"params"`
 	InputParameters  string `toml:"inputParameters"`

@@ -3,10 +3,28 @@
 # =========================================================================
 #
 # This file defines shared encoder and camera-selection behavior used by:
-#  - cameras (standalone multicast producer)
-#  - replays auto.toml generation (hardware auto-detect)
+#  - cameras (multicast emitter)
+#  - replays:  auto.toml generation, legacy compatibility
 #
-# Keep instance-specific runtime values (multicast IP/startPort) in config.toml.
+# cameras app
+# - input
+#   - input format is obtained by probing cameras
+#   - format preference is defined in [cameras] priorities
+# - output
+#   - H.264 input is copied (no re-encode)
+#   - MJPEG and raw inputs are encoded to H.264 using the settings in the encoder blocks
+#
+# replays app (this file is used for auto.toml generation)
+# - input
+#   - input format is obtained by probing cameras
+#   - format preference is defined in [cameras] priorities
+# - recording output in auto.toml
+#   - H.264 input is copied
+#   - MJPEG input is copied with recode=true (unlike cameras, no live encoding; recoding happens during trimming)
+#   - raw input uses encoder block settings to produce H.264 (or software fallback when no hardware encoder is available)
+# - trim/finalize output
+#   - MJPEG recode path currently uses built-in software libx264 settings (not encoder blocks, since it is done during trimming and not real time)
+
 
 # =========================================================================
 # Camera Selection Priorities
@@ -43,12 +61,15 @@
 # The program probes ffmpeg for available encoders, then verifies each
 # one actually works on the current hardware. The first working encoder
 # (in the order listed here) is used for cameras that need encoding.
+#
+# Some blocks are specific to a platform (windows dshow vs linux v4l2)
 
 [[encoder]]
     name = "h264_nvenc"
     description = "NVIDIA GPU (NVENC)"
     gpuVendors = ["nvidia"]
     inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
+    videoFilter = ""
     outputParameters = "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M"
     testInit = ""
 
@@ -57,24 +78,38 @@
     description = "AMD GPU (AMF)"
     gpuVendors = ["amd"]
     inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
+    videoFilter = ""
     outputParameters = "-c:v h264_amf -rc cbr -b:v 8M"
     testInit = ""
 
 [[encoder]]
     name = "h264_vaapi"
+    platform = "v4l2"
     description = "VAAPI (AMD/Intel on Linux)"
     gpuVendors = ["amd", "intel"]
     inputParameters = "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096"
-    outputParameters = "-c:v h264_vaapi -rc_mode CBR -b:v 8M"
+    videoFilter = "format=nv12,hwupload"
+    outputParameters = "-c:v h264_vaapi -rc_mode cbr -b:v 8M"
     testInit = "-init_hw_device vaapi=va:/dev/dri/renderD128"
-    platform = "linux"
 
 [[encoder]]
     name = "h264_qsv"
+    platform = "v4l2"
     description = "Intel GPU (QSV / Xe)"
     gpuVendors = ["intel"]
+    inputParameters = "-init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096"
+    videoFilter = "format=nv12"
+    outputParameters = "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode cbr -b:v 8M"
+    testInit = "-init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw"
+
+[[encoder]]
+    name = "h264_qsv"
+    platform = "dshow"
+    description = "Intel GPU (QSV on Windows)"
+    gpuVendors = ["intel"]
     inputParameters = "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096"
-    outputParameters = "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M"
+    videoFilter = "format=nv12"
+    outputParameters = "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode cbr -b:v 8M"
     testInit = "-init_hw_device qsv=hw -filter_hw_device hw"
 
 # =========================================================================

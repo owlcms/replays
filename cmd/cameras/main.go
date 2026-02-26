@@ -376,6 +376,13 @@ func isIntegratedCamera(cam recording.DetectedCamera) bool {
 
 // startStream starts ffmpeg to stream a camera to multicast UDP
 func startStream(stream *cameraStream) (*exec.Cmd, error) {
+	// cameras app behavior
+	// - input
+	//   - input format is obtained by probing cameras
+	//   - format preference is defined in [cameras] priorities
+	// - output
+	//   - H.264 input is copied (no re-encode)
+	//   - MJPEG and raw inputs are encoded to H.264 using encoder block settings
 	cam := stream.camera
 	encoder := stream.encoder
 	port := stream.port
@@ -451,11 +458,8 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	case "mjpeg":
 		// Need to decode MJPEG and encode to H.264
 		if encoder != nil {
-			// Add hwupload filter for hardware encoders that need it (vaapi, qsv)
-			if strings.Contains(encoder.Name, "vaapi") {
-				args = append(args, "-vf", "format=nv12,hwupload")
-			} else if strings.Contains(encoder.Name, "qsv") {
-				args = append(args, "-vf", "format=nv12,hwupload=extra_hw_frames=64")
+			if strings.TrimSpace(encoder.VideoFilter) != "" {
+				args = append(args, "-vf", strings.TrimSpace(encoder.VideoFilter))
 			}
 			args = append(args, strings.Fields(encoder.OutputParameters)...)
 		} else {
@@ -467,11 +471,8 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	default:
 		// Raw format - need to encode
 		if encoder != nil {
-			// Add hwupload filter for hardware encoders that need it (vaapi, qsv)
-			if strings.Contains(encoder.Name, "vaapi") {
-				args = append(args, "-vf", "format=nv12,hwupload")
-			} else if strings.Contains(encoder.Name, "qsv") {
-				args = append(args, "-vf", "format=nv12,hwupload=extra_hw_frames=64")
+			if strings.TrimSpace(encoder.VideoFilter) != "" {
+				args = append(args, "-vf", strings.TrimSpace(encoder.VideoFilter))
 			}
 			args = append(args, strings.Fields(encoder.OutputParameters)...)
 		} else {

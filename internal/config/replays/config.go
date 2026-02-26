@@ -87,6 +87,9 @@ func LoadConfig(configFile string) (*Config, error) {
 		if val, ok := m["camera"].(string); ok {
 			pc.FfmpegCamera = val
 		}
+		if val, ok := m["platform"].(string); ok {
+			pc.Platform = strings.ToLower(strings.TrimSpace(val))
+		}
 		if val, ok := m["format"].(string); ok {
 			pc.Format = val
 		}
@@ -109,6 +112,20 @@ func LoadConfig(configFile string) (*Config, error) {
 			pc.Recode = val
 		} else {
 			pc.Recode = false
+		}
+		if pc.Platform == "" {
+			if runtime.GOOS == "windows" && pc.Format == "v4l2" {
+				logging.InfoLogger.Printf("Camera configuration for section %s skipped due to format/platform mismatch: format=%s current=%s", sectionName, pc.Format, runtime.GOOS)
+				return config.CameraConfiguration{}, fmt.Errorf("camera configuration for section %s skipped due to format/platform mismatch", sectionName)
+			}
+			if runtime.GOOS == "linux" && pc.Format == "dshow" {
+				logging.InfoLogger.Printf("Camera configuration for section %s skipped due to format/platform mismatch: format=%s current=%s", sectionName, pc.Format, runtime.GOOS)
+				return config.CameraConfiguration{}, fmt.Errorf("camera configuration for section %s skipped due to format/platform mismatch", sectionName)
+			}
+		}
+		if pc.Platform != "" && pc.Platform != runtime.GOOS {
+			logging.InfoLogger.Printf("Camera configuration for section %s skipped due to platform mismatch: target=%s current=%s", sectionName, pc.Platform, runtime.GOOS)
+			return config.CameraConfiguration{}, fmt.Errorf("camera configuration for section %s skipped due to platform mismatch", sectionName)
 		}
 		if pc.Format == "dshow" && !strings.HasPrefix(pc.FfmpegCamera, "video=") {
 			pc.FfmpegCamera = "video=" + pc.FfmpegCamera

@@ -1,16 +1,16 @@
 **Change log**
 
 - 2.0.0: replays and cameras are now installed and started from the control panel
-  - configuration is shared there under video_config
-  - a single copy of ffmpeg 7.1 is downloaded there for Linux x64 and Windows (rpi uses system's copy)
+  - preferred resolutions and fps and GPU settings are stored in a shared ffmpeg.toml config file
+  - a shared copy of ffmpeg 7.1 is downloaded in the control panel installation directory
 - 2.0.0: replays will now, by default, use the H.264 streams created by the cameras program
   - from the control panel, start the cameras program to autodetect your cameras
   - check which port is camera 1 etc.
   - if you have cameras attached to several machines, start the cameras on each, and adjust the ports so they don't conflict
   - start replays, and adjust the cameras if needed (change the ports so camera1 is the correct one, etc.)
   - If you want the old behavior, tell replays to stop using multicast
-  - The parameters used by replays and cameras for ffmpeg decoding are in a shared cameras_config.toml file.
-  - 2.0.0: On Windows, dshow cannot handle H.264 input directly, so MJPEG is encoded using the GPU.
+- 2.0.0: The cameras module uses MJPEG instead of H.264 because dshow cannot recover from startup sync issues.
+  - Linux v4l2 has no issues.  Windows laptop needs a good GPU to process.
 
 - 1.9.0 added a new `cameras` (`cameras.exe` on windows) to start a multicast UDP H.264 stream for each of the detected cameras
   - use `-includeraw` to include the laptop built-in cameras during testing.
