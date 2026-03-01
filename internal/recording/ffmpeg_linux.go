@@ -39,6 +39,21 @@ func InitializeFFmpeg() error {
 
 	config.SetFFmpegPath(path)
 	logging.InfoLogger.Printf("FFmpeg executable set to: %s", path)
+
+	// For shared builds, ensure LD_LIBRARY_PATH includes the sibling lib/ directory
+	// so that child ffmpeg processes can find libavdevice.so etc.
+	binDir := filepath.Dir(path)
+	libDir := filepath.Join(filepath.Dir(binDir), "lib")
+	if st, err := os.Stat(libDir); err == nil && st.IsDir() {
+		existing := os.Getenv("LD_LIBRARY_PATH")
+		if existing == "" {
+			_ = os.Setenv("LD_LIBRARY_PATH", libDir)
+		} else if !strings.Contains(existing, libDir) {
+			_ = os.Setenv("LD_LIBRARY_PATH", libDir+":"+existing)
+		}
+		logging.InfoLogger.Printf("LD_LIBRARY_PATH set to: %s", os.Getenv("LD_LIBRARY_PATH"))
+	}
+
 	return nil
 }
 

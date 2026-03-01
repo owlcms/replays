@@ -519,6 +519,8 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		if extra != "" {
 			args = append(args, strings.Fields(extra)...)
 		}
+		// Newer ffmpeg requires explicit stream mapping for the tee muxer
+		args = append(args, "-map", "0:v")
 		// Structured progress to stdout, suppress default stats on stderr
 		args = append(args, "-nostats", "-progress", "pipe:1")
 		args = append(args, "-f", "tee", udpDest)
@@ -1038,12 +1040,23 @@ func stopAllPreviews() {
 	}
 }
 
+// listenURL returns a UDP URL suitable for receiving (listening to) the stream.
+// In multicast mode it returns the multicast group address; in unicast mode
+// it returns udp://127.0.0.1:<port> so that ffplay / ffmpeg can listen on the
+// localhost copy that the tee muxer sends.
+func (s *cameraStream) listenURL() string {
+	if camerasConfig.Unicast.Enabled {
+		return fmt.Sprintf("udp://127.0.0.1:%d", s.port)
+	}
+	return s.udpDest
+}
+
 func launchPreview(stream *cameraStream, onDone func()) error {
 	args := []string{"-fflags", "nobuffer", "-flags", "low_delay"}
 	if width, height, ok := parseResolution(stream.camera.Size); ok {
 		args = append(args, "-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
 	}
-	args = append(args, stream.udpDest)
+	args = append(args, stream.listenURL())
 
 	ffplayPath := resolveFFplayPath()
 	cmd := recording.CreateHiddenCmd(ffplayPath, args...)
@@ -1106,9 +1119,9 @@ func openFile(path string, onDone func()) {
 }
 
 func recordClip(stream *cameraStream) (string, error) {
-	clipInput := stream.udpDest
+	clipInput := stream.listenURL()
 	if runtime.GOOS == "windows" {
-		parsed, err := url.Parse(stream.udpDest)
+		parsed, err := url.Parse(clipInput)
 		if err == nil {
 			query := parsed.Query()
 			query.Del("pkt_size")
@@ -1149,9 +1162,16 @@ func recordClip(stream *cameraStream) (string, error) {
 }
 
 func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder *recording.HwEncoder, initialStatus string) {
+	unicastMode := camerasConfig.Unicast.Enabled
 	myApp := app.New()
 	setAppIcon(myApp)
-	window := myApp.NewWindow("Camera Multicast Streams")
+	var windowTitle string
+	if unicastMode {
+		windowTitle = "Camera Unicast Streams"
+	} else {
+		windowTitle = "Camera Multicast Streams"
+	}
+	window := myApp.NewWindow(windowTitle)
 	window.SetIcon(assets.IconResource)
 	window.Resize(fyne.NewSize(1280, 500))
 
@@ -1188,7 +1208,11 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 	)
 
 	portEntry := widget.NewEntry()
-	portEntry.SetText(strconv.Itoa(camerasConfig.Multicast.StartPort))
+	if unicastMode {
+		portEntry.SetText(strconv.Itoa(camerasConfig.Unicast.StartPort))
+	} else {
+		portEntry.SetText(strconv.Itoa(camerasConfig.Multicast.StartPort))
+	}
 	portEntry.Validator = func(s string) error {
 		if _, err := strconv.Atoi(s); err != nil {
 			return fmt.Errorf("must be a number")
@@ -1327,18 +1351,23 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 
 	// Wire up the restart button
 	restartBtn.OnTapped = func() {
-		newIP := strings.TrimSpace(ipEntry.Text)
-		parsedIP := net.ParseIP(newIP)
-		if parsedIP == nil || !parsedIP.IsMulticast() {
-			actionStatus.SetText("Invalid multicast IP")
-			return
-		}
-
 		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
 		if err != nil || newPort < 1 || newPort > 65535 {
 			actionStatus.SetText("Invalid starting port")
 			return
 		}
+
+		if !unicastMode {
+			newIP := strings.TrimSpace(ipEntry.Text)
+			parsedIP := net.ParseIP(newIP)
+			if parsedIP == nil || !parsedIP.IsMulticast() {
+				actionStatus.SetText("Invalid multicast IP")
+				return
+			}
+			camerasConfig.Multicast.IP = newIP
+			camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
+		}
+
 		actionStatus.SetText("Restarting streams...")
 
 		// Stop existing streams
@@ -1371,9 +1400,11 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		}
 
 		// Update config and restart
-		camerasConfig.Multicast.IP = newIP
-		camerasConfig.Multicast.StartPort = newPort
-		camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
+		if unicastMode {
+			camerasConfig.Unicast.StartPort = newPort
+		} else {
+			camerasConfig.Multicast.StartPort = newPort
+		}
 
 		var newStreams []*cameraStream
 		if len(newFiltered) > 0 {
@@ -1400,27 +1431,32 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 	// Save current starting port to cameras.toml if it was loaded from a file.
 	// If config is from embedded defaults, saving fails and is ignored.
 	saveBtn.OnTapped = func() {
-		newIP := strings.TrimSpace(ipEntry.Text)
-		parsedIP := net.ParseIP(newIP)
-		if parsedIP == nil || !parsedIP.IsMulticast() {
-			actionStatus.SetText("Invalid multicast IP")
-			return
-		}
-
 		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
 		if err != nil || newPort < 1 || newPort > 65535 {
 			actionStatus.SetText("Invalid starting port")
 			return
 		}
 
-		camerasConfig.Multicast.IP = newIP
-		camerasConfig.Multicast.StartPort = newPort
-		camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
-		_ = camerascfg.SaveMulticastSettings(newIP, newPort, localOnlyCheck.Checked)
-		if localOnlyCheck.Checked {
-			actionStatus.SetText(fmt.Sprintf("Multicast %s:%d (Local only enabled)", newIP, newPort))
+		if unicastMode {
+			camerasConfig.Unicast.StartPort = newPort
+			// TODO: add SaveUnicastSettings if persistent save is needed
+			actionStatus.SetText(fmt.Sprintf("Unicast starting port %d", newPort))
 		} else {
-			actionStatus.SetText(fmt.Sprintf("Multicast %s:%d", newIP, newPort))
+			newIP := strings.TrimSpace(ipEntry.Text)
+			parsedIP := net.ParseIP(newIP)
+			if parsedIP == nil || !parsedIP.IsMulticast() {
+				actionStatus.SetText("Invalid multicast IP")
+				return
+			}
+			camerasConfig.Multicast.IP = newIP
+			camerasConfig.Multicast.StartPort = newPort
+			camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
+			_ = camerascfg.SaveMulticastSettings(newIP, newPort, localOnlyCheck.Checked)
+			if localOnlyCheck.Checked {
+				actionStatus.SetText(fmt.Sprintf("Multicast %s:%d (Local only enabled)", newIP, newPort))
+			} else {
+				actionStatus.SetText(fmt.Sprintf("Multicast %s:%d", newIP, newPort))
+			}
 		}
 	}
 
@@ -1458,15 +1494,25 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		window.Close()
 	})
 
-	portRow := container.NewHBox(
-		widget.NewLabel("Multicast IP:"),
-		ipEntryField,
-		widget.NewLabel("Starting port:"),
-		portEntryField,
-		localOnlyCheck,
-		saveBtn,
-		restartBtn,
-	)
+	var portRow *fyne.Container
+	if unicastMode {
+		portRow = container.NewHBox(
+			widget.NewLabel("Unicast — Starting port:"),
+			portEntryField,
+			saveBtn,
+			restartBtn,
+		)
+	} else {
+		portRow = container.NewHBox(
+			widget.NewLabel("Multicast IP:"),
+			ipEntryField,
+			widget.NewLabel("Starting port:"),
+			portEntryField,
+			localOnlyCheck,
+			saveBtn,
+			restartBtn,
+		)
+	}
 
 	content := container.NewBorder(
 		container.NewVBox(
