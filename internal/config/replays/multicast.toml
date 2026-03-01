@@ -1,5 +1,16 @@
-# Multicast camera mapping for replays
+# Camera stream mapping for replays
 # Used when [multicast].enabled = true in config.toml
+#
+# Multicast mode:
+#   Set ip to a multicast group address (e.g. 239.255.0.1).
+#   ffmpeg will join the multicast group to receive the stream.
+#
+# Unicast mode:
+#   When the cameras program sends unicast UDP (via its [unicast] config),
+#   set ip = "0.0.0.0" so replays listens on all interfaces.
+#   The cameras program must include this machine's IP in its destinations list.
+#   Example: ip = "0.0.0.0" with camera1Port = 9001
+#   produces ffmpeg input udp://0.0.0.0:9001 (passive UDP listener).
 
 # Camera source precedence in replays (highest to lowest):
 # 1) multicast.toml mapping (this file, when [multicast].enabled = true in config.toml)

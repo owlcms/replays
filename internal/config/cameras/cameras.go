@@ -22,6 +22,7 @@ var configSourcePath string
 // Encoder/priority settings live in the separate ffmpeg package.
 type Config struct {
 	Multicast MulticastConfig `toml:"multicast"`
+	Unicast   UnicastConfig   `toml:"unicast"`
 	Cameras   CamerasSettings `toml:"cameras"`
 }
 
@@ -31,6 +32,16 @@ type MulticastConfig struct {
 	StartPort int    `toml:"startPort"`
 	PktSize   int    `toml:"pktSize"`
 	LocalOnly bool   `toml:"localOnly"`
+}
+
+// UnicastConfig holds unicast tee streaming settings.
+// When Enabled is true, each camera stream is sent via ffmpeg tee
+// to every address in Destinations, one UDP leg per destination.
+type UnicastConfig struct {
+	Enabled      bool     `toml:"enabled"`
+	StartPort    int      `toml:"startPort"`
+	PktSize      int      `toml:"pktSize"`
+	Destinations []string `toml:"destinations"`
 }
 
 // CamerasSettings holds per-instance camera behaviour flags.
@@ -232,4 +243,22 @@ func (c *Config) applyDefaults() {
 	if c.Multicast.PktSize == 0 {
 		c.Multicast.PktSize = 1316
 	}
+	// Unicast defaults
+	if c.Unicast.StartPort == 0 {
+		c.Unicast.StartPort = 9001
+	}
+	if c.Unicast.PktSize == 0 {
+		c.Unicast.PktSize = 1316
+	}
+}
+
+// UnicastTeeOutput builds the ffmpeg -f tee output string for a given port.
+// Each destination gets its own "[f=mpegts:onfail=ignore]udp://ip:port?pkt_size=N" leg.
+func (c *UnicastConfig) TeeOutput(port int) string {
+	var legs []string
+	for _, dest := range c.Destinations {
+		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", dest, port, c.PktSize)
+		legs = append(legs, leg)
+	}
+	return strings.Join(legs, "|")
 }

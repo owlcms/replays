@@ -273,17 +273,34 @@ func main() {
 	runUI(streams, filtered, bestEncoder, cameraStatus)
 }
 
-// startAllStreams starts multicast streams for all cameras.
+// startAllStreams starts streams for all cameras (multicast or unicast tee).
 // Returns only the streams that started successfully.
 func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEncoder) []*cameraStream {
-	port := camerasConfig.Multicast.StartPort
+	unicastMode := camerasConfig.Unicast.Enabled
+	var startPort int
+	if unicastMode {
+		startPort = camerasConfig.Unicast.StartPort
+	} else {
+		startPort = camerasConfig.Multicast.StartPort
+	}
+	port := startPort
 	var streams []*cameraStream
 
-	fmt.Println("\nStarting camera streams:")
-	fmt.Println("========================")
+	if unicastMode {
+		fmt.Println("\nStarting camera streams (unicast tee):")
+		fmt.Println("=======================================")
+	} else {
+		fmt.Println("\nStarting camera streams (multicast):")
+		fmt.Println("=====================================")
+	}
 
 	for _, cam := range cameras {
-		udpDest := fmt.Sprintf("udp://%s:%d", camerasConfig.Multicast.IP, port)
+		var udpDest string
+		if unicastMode {
+			udpDest = camerasConfig.Unicast.TeeOutput(port)
+		} else {
+			udpDest = fmt.Sprintf("udp://%s:%d", camerasConfig.Multicast.IP, port)
+		}
 		stream := &cameraStream{
 			camera:  cam,
 			port:    port,
@@ -298,7 +315,13 @@ func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEn
 		}
 
 		fmt.Printf("\n[%s] %s (%s, %s @ %d fps)\n", cam.PixFmt, cam.Name, cam.Size, cam.PixFmt, cam.Fps)
-		fmt.Printf("  -> %s\n", udpDest)
+		if unicastMode {
+			for _, dest := range camerasConfig.Unicast.Destinations {
+				fmt.Printf("  -> udp://%s:%d\n", dest, port)
+			}
+		} else {
+			fmt.Printf("  -> %s\n", udpDest)
+		}
 
 		cmd, err := startStream(stream)
 		if err != nil {
@@ -394,7 +417,13 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		ffmpegPath = "ffmpeg"
 	}
 
-	udpDest := multicastOutputURL(camCfg.Multicast, port)
+	var udpDest string
+	unicastMode := camCfg.Unicast.Enabled
+	if unicastMode {
+		udpDest = camCfg.Unicast.TeeOutput(port)
+	} else {
+		udpDest = multicastOutputURL(camCfg.Multicast, port)
+	}
 
 	var args []string
 
@@ -482,12 +511,24 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		args = append(args, "-keyint_min", fmt.Sprintf("%d", gopSize))
 	}
 
-	// Output flags from config (e.g. "-an -f mpegts")
-	args = append(args, strings.Fields(fc.Output.ExtraFlags)...)
-
-	// Structured progress to stdout (key=value lines), suppress default stats on stderr
-	args = append(args, "-nostats", "-progress", "pipe:1")
-	args = append(args, udpDest)
+	if unicastMode {
+		// Unicast tee: strip "-f mpegts" from ExtraFlags (each tee leg carries its own f=mpegts)
+		extra := fc.Output.ExtraFlags
+		extra = strings.ReplaceAll(extra, "-f mpegts", "")
+		extra = strings.TrimSpace(extra)
+		if extra != "" {
+			args = append(args, strings.Fields(extra)...)
+		}
+		// Structured progress to stdout, suppress default stats on stderr
+		args = append(args, "-nostats", "-progress", "pipe:1")
+		args = append(args, "-f", "tee", udpDest)
+	} else {
+		// Output flags from config (e.g. "-an -f mpegts")
+		args = append(args, strings.Fields(fc.Output.ExtraFlags)...)
+		// Structured progress to stdout (key=value lines), suppress default stats on stderr
+		args = append(args, "-nostats", "-progress", "pipe:1")
+		args = append(args, udpDest)
+	}
 
 	// Create the command with hidden console on Windows
 	cmd := recording.CreateHiddenCmd(ffmpegPath, args...)
