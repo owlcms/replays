@@ -18,9 +18,6 @@
     # Starting port number (camera 1 = startPort, camera 2 = startPort+1, …)
     startPort = 9001
     
-    # UDP packet size for MPEG-TS
-    pktSize = 1316
-
     # When true, keep multicast output but set ttl=0 so packets stay local
     localOnly = false
 
@@ -38,9 +35,6 @@
 
     # Starting port (same convention as multicast.startPort)
     startPort = 9001
-
-    # UDP packet size for MPEG-TS
-    pktSize = 1316
 
     # Destination IP addresses.
     # Include every machine that needs to receive the stream:

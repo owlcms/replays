@@ -26,11 +26,13 @@ type Config struct {
 	Cameras   CamerasSettings `toml:"cameras"`
 }
 
+// PktSize is the fixed UDP packet size for MPEG-TS streaming (7 × 188).
+const PktSize = 1316
+
 // MulticastConfig holds multicast streaming settings.
 type MulticastConfig struct {
 	IP        string `toml:"ip"`
 	StartPort int    `toml:"startPort"`
-	PktSize   int    `toml:"pktSize"`
 	LocalOnly bool   `toml:"localOnly"`
 }
 
@@ -40,7 +42,6 @@ type MulticastConfig struct {
 type UnicastConfig struct {
 	Enabled      bool     `toml:"enabled"`
 	StartPort    int      `toml:"startPort"`
-	PktSize      int      `toml:"pktSize"`
 	Destinations []string `toml:"destinations"`
 }
 
@@ -95,8 +96,7 @@ func GetConfigSourcePath() string {
 	return configSourcePath
 }
 
-// SaveMulticastSettings updates multicast.ip, multicast.startPort,
-// and multicast.localOnly in the loaded config.toml file.
+// SaveMulticastSettings updates all [multicast] fields in the loaded config.toml file.
 func SaveMulticastSettings(ip string, startPort int, localOnly bool) error {
 	if strings.TrimSpace(ip) == "" {
 		return fmt.Errorf("invalid multicast ip")
@@ -125,7 +125,7 @@ func SaveMulticastSettings(ip string, startPort int, localOnly bool) error {
 			multicastStart = i
 			for j := i + 1; j < len(lines); j++ {
 				t := strings.TrimSpace(lines[j])
-				if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
+				if strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "[[") {
 					multicastEnd = j
 					break
 				}
@@ -134,62 +134,102 @@ func SaveMulticastSettings(ip string, startPort int, localOnly bool) error {
 		}
 	}
 
-	ipLine := fmt.Sprintf("    ip = \"%s\"", ip)
-	startPortLine := fmt.Sprintf("    startPort = %d", startPort)
-	localOnlyLine := fmt.Sprintf("    localOnly = %t", localOnly)
+	newSection := []string{
+		"[multicast]",
+		fmt.Sprintf("    ip = \"%s\"", ip),
+		fmt.Sprintf("    startPort = %d", startPort),
+		fmt.Sprintf("    localOnly = %t", localOnly),
+	}
 
-	if multicastStart == -1 {
-		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
-			lines = append(lines, "")
-		}
-		lines = append(lines,
-			"[multicast]",
-			ipLine,
-			startPortLine,
-			localOnlyLine,
-		)
+	var newLines []string
+	if multicastStart >= 0 {
+		newLines = append(newLines, lines[:multicastStart]...)
+		newLines = append(newLines, newSection...)
+		newLines = append(newLines, lines[multicastEnd:]...)
 	} else {
-		updatedIP := false
-		updatedStartPort := false
-		updatedLocalOnly := false
-		for i := multicastStart + 1; i < multicastEnd; i++ {
-			trimmed := strings.TrimSpace(lines[i])
-			if strings.HasPrefix(trimmed, "ip") {
-				indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
-				lines[i] = fmt.Sprintf("%sip = \"%s\"", indent, ip)
-				updatedIP = true
-				continue
-			}
-			if strings.HasPrefix(trimmed, "startPort") {
-				indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
-				lines[i] = fmt.Sprintf("%sstartPort = %d", indent, startPort)
-				updatedStartPort = true
-				continue
-			}
-			if strings.HasPrefix(trimmed, "localOnly") {
-				indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
-				lines[i] = fmt.Sprintf("%slocalOnly = %t", indent, localOnly)
-				updatedLocalOnly = true
-			}
+		newLines = append(newLines, lines...)
+		if len(newLines) > 0 && strings.TrimSpace(newLines[len(newLines)-1]) != "" {
+			newLines = append(newLines, "")
 		}
-		if !updatedIP || !updatedStartPort || !updatedLocalOnly {
-			newLines := make([]string, 0, len(lines)+3)
-			newLines = append(newLines, lines[:multicastStart+1]...)
-			if !updatedIP {
-				newLines = append(newLines, ipLine)
+		newLines = append(newLines, newSection...)
+	}
+
+	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+		return fmt.Errorf("failed to write cameras config: %w", err)
+	}
+
+	return nil
+}
+
+// SaveUnicastSettings updates unicast.enabled, unicast.startPort,
+// and unicast.destinations in the loaded config.toml file.
+func SaveUnicastSettings(enabled bool, startPort int, destinations []string) error {
+	if startPort < 1 || startPort > 65535 {
+		return fmt.Errorf("invalid startPort %d", startPort)
+	}
+
+	configPath := GetConfigSourcePath()
+	if configPath == "" {
+		return fmt.Errorf("cameras config loaded from embedded defaults")
+	}
+
+	input, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read cameras config: %w", err)
+	}
+
+	lines := strings.Split(string(input), "\n")
+	unicastStart := -1
+	unicastEnd := len(lines)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "[unicast]" {
+			unicastStart = i
+			for j := i + 1; j < len(lines); j++ {
+				t := strings.TrimSpace(lines[j])
+				if strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "[[") {
+					unicastEnd = j
+					break
+				}
 			}
-			if !updatedStartPort {
-				newLines = append(newLines, startPortLine)
-			}
-			if !updatedLocalOnly {
-				newLines = append(newLines, localOnlyLine)
-			}
-			newLines = append(newLines, lines[multicastStart+1:]...)
-			lines = newLines
+			break
 		}
 	}
 
-	if err := os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+	// Build destinations array string
+	var destLines []string
+	destLines = append(destLines, "    destinations = [")
+	for i, d := range destinations {
+		comma := ","
+		if i == len(destinations)-1 {
+			comma = ","
+		}
+		destLines = append(destLines, fmt.Sprintf("        \"%s\"%s", d, comma))
+	}
+	destLines = append(destLines, "    ]")
+
+	newSection := []string{
+		"[unicast]",
+		fmt.Sprintf("    enabled = %t", enabled),
+		fmt.Sprintf("    startPort = %d", startPort),
+	}
+	newSection = append(newSection, destLines...)
+
+	var newLines []string
+	if unicastStart >= 0 {
+		newLines = append(newLines, lines[:unicastStart]...)
+		newLines = append(newLines, newSection...)
+		newLines = append(newLines, lines[unicastEnd:]...)
+	} else {
+		newLines = append(newLines, lines...)
+		if len(newLines) > 0 && strings.TrimSpace(newLines[len(newLines)-1]) != "" {
+			newLines = append(newLines, "")
+		}
+		newLines = append(newLines, newSection...)
+	}
+
+	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
 		return fmt.Errorf("failed to write cameras config: %w", err)
 	}
 
@@ -240,15 +280,9 @@ func (c *Config) applyDefaults() {
 	if c.Multicast.StartPort == 0 {
 		c.Multicast.StartPort = 9001
 	}
-	if c.Multicast.PktSize == 0 {
-		c.Multicast.PktSize = 1316
-	}
 	// Unicast defaults
 	if c.Unicast.StartPort == 0 {
 		c.Unicast.StartPort = 9001
-	}
-	if c.Unicast.PktSize == 0 {
-		c.Unicast.PktSize = 1316
 	}
 }
 
@@ -257,7 +291,7 @@ func (c *Config) applyDefaults() {
 func (c *UnicastConfig) TeeOutput(port int) string {
 	var legs []string
 	for _, dest := range c.Destinations {
-		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", dest, port, c.PktSize)
+		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", dest, port, PktSize)
 		legs = append(legs, leg)
 	}
 	return strings.Join(legs, "|")

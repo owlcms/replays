@@ -340,7 +340,7 @@ func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEn
 }
 
 func multicastOutputURL(multicast camerascfg.MulticastConfig, port int) string {
-	url := fmt.Sprintf("udp://%s:%d?pkt_size=%d", multicast.IP, port, multicast.PktSize)
+	url := fmt.Sprintf("udp://%s:%d?pkt_size=%d", multicast.IP, port, camerascfg.PktSize)
 	if multicast.LocalOnly {
 		url += "&ttl=0"
 	}
@@ -1445,8 +1445,12 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 
 		if unicastMode {
 			camerasConfig.Unicast.StartPort = newPort
-			// TODO: add SaveUnicastSettings if persistent save is needed
-			actionStatus.SetText(fmt.Sprintf("Unicast starting port %d", newPort))
+			_ = camerascfg.SaveUnicastSettings(
+				camerasConfig.Unicast.Enabled,
+				newPort,
+				camerasConfig.Unicast.Destinations,
+			)
+			actionStatus.SetText(fmt.Sprintf("Unicast starting port %d (saved)", newPort))
 		} else {
 			newIP := strings.TrimSpace(ipEntry.Text)
 			parsedIP := net.ParseIP(newIP)
