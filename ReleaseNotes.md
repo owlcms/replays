@@ -14,6 +14,7 @@
 - 2.0.0: The cameras module can do both multicasting/unicasting
   - When using customer-level switches the traffic from the video propagates up to the main network
   - Use point-to-point unicasting if you only have one or two OBS listening, the overhead is minimal
+  - added wallclock timestamps to better support unicasting vs tee mux
 
 - 1.9.0 added a new `cameras` (`cameras.exe` on windows) to start a multicast UDP H.264 stream for each of the detected cameras
   - use `-includeraw` to include the laptop built-in cameras during testing.
