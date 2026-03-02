@@ -427,6 +427,12 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 
 	var args []string
 
+	// Some UVC cameras (especially in H.264 copy mode) produce duplicate DTS
+	// values which cause the mpegts muxer inside each tee slave to fail with
+	// "non monotonically increasing dts".  Using the system wall clock for
+	// timestamps guarantees strict monotonicity for live device capture.
+	args = append(args, "-use_wallclock_as_timestamps", "1")
+
 	// Determine if we need hardware encoding (not h264 copy mode)
 	needsEncoding := cam.PixFmt != "h264"
 
