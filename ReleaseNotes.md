@@ -4,6 +4,7 @@
   - preferred resolutions and fps and GPU settings are stored in a shared ffmpeg.toml config file
   - a shared copy of ffmpeg 7.1 is downloaded in the control panel installation directory
 - 2.0.0: replays will now, by default, use the H.264 streams created by the cameras program
+  - *with normal consumer-grade switches and routers you want to use unicast mode in your cameras config file but this requires knowing your OBS destination addresses*
   - from the control panel, start the cameras program to autodetect your cameras
   - check which port is camera 1 etc.
   - if you have cameras attached to several machines, start the cameras on each, and adjust the ports so they don't conflict
