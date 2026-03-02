@@ -52,3 +52,4 @@ auto.toml
 go.work.sum
 replays_linux_amd64
 cameras_linux_amd64
+/replays

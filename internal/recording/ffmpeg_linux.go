@@ -8,12 +8,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/logging"
 )
+
+var ffmpegLogSeq uint64
 
 // InitializeFFmpeg finds and stores the ffmpeg path in config for Linux
 func InitializeFFmpeg() error {
@@ -136,8 +139,9 @@ func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) 
 		if err := os.MkdirAll(logsDir, 0755); err != nil {
 			logging.ErrorLogger.Printf("Failed to create logs directory: %v", err)
 		} else {
-			timestamp := time.Now().Format("20060102_150405")
-			logFile := filepath.Join(logsDir, fmt.Sprintf("ffmpeg_%s_%s.log", timestamp, operation))
+			timestamp := time.Now().Format("20060102_150405_000000000")
+			seq := atomic.AddUint64(&ffmpegLogSeq, 1)
+			logFile := filepath.Join(logsDir, fmt.Sprintf("ffmpeg_%s_%s_%d.log", timestamp, operation, seq))
 
 			if file, err := os.Create(logFile); err != nil {
 				logging.ErrorLogger.Printf("Failed to create ffmpeg log file %s: %v", logFile, err)
