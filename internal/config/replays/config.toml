@@ -15,19 +15,26 @@ logFfmpeg = false
 
 
 # =======================================================
-# Multicast Camera Configuration
+# MPEG-TS Camera Stream Configuration
 # =======================================================
-# When enabled, replays reads H.264 streams from multicast UDP
+# When enabled, replays reads H.264 streams from UDP
 # (sent by the cameras program) instead of locally-attached cameras.
+#
+# Use a multicast address (e.g. 239.255.0.1) for multicast mode,
+# or 0.0.0.0 for unicast mode (passive UDP listener).
 # Set a port for each camera (0 = unused).
 
-[multicast]
+[mpeg-ts]
     enabled = true
     ip = "239.255.0.1"
+    camera1Port = 9001
+    camera2Port = 0
+    camera3Port = 0
+    camera4Port = 0
 
 # Camera source precedence in replays (first match used):
-# 1) multicast.toml mapping (when [multicast].enabled = true)
-# 2) auto.toml camera sections (when multicast is disabled and auto.toml exists)
+# 1) [mpeg-ts] section above (when enabled = true)
+# 2) auto.toml camera sections (when mpeg-ts is disabled and auto.toml exists)
 # 3) default_cameras.toml platform sections
 # 4) legacy camera sections in config.toml ([windows*], [linux*], etc.)
 #

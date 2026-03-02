@@ -132,12 +132,6 @@ func maybeExtractConfigAndExit() bool {
 		os.Exit(1)
 	}
 
-	multicastPath := filepath.Join(config.GetInstallDir(), "multicast.toml")
-	if err := replays.ExtractDefaultMulticastConfig(multicastPath); err != nil {
-		fmt.Printf("Failed to extract multicast.toml: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Extract shared ffmpeg.toml (goes to shared config dir, not instance dir)
 	if p := ffmpegcfg.ExtractDefaultConfig(); p == "" {
 		fmt.Println("Warning: Failed to extract ffmpeg.toml")
@@ -438,22 +432,22 @@ func openConfigFile() {
 // Multicast camera helpers
 // ---------------------------------------------------------------------------
 
-// toggleMulticast flips the multicast enabled flag, saves, and prompts for restart.
+// toggleMulticast flips the MPEG-TS enabled flag, saves, and prompts for restart.
 func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	cfg.Multicast.Enabled = !cfg.Multicast.Enabled
 
 	configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-	if err := replays.UpdateMulticastConfig(configFilePath, cfg.Multicast); err != nil {
-		dialog.ShowError(fmt.Errorf("failed to save multicast setting: %w", err), window)
+	if err := replays.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
+		dialog.ShowError(fmt.Errorf("failed to save mpeg-ts setting: %w", err), window)
 		cfg.Multicast.Enabled = !cfg.Multicast.Enabled // revert
 		return
 	}
 
 	var msg string
 	if cfg.Multicast.Enabled {
-		msg = "Multicast cameras enabled."
+		msg = "MPEG-TS camera streams enabled."
 	} else {
-		msg = "Multicast cameras disabled. Local cameras will be used."
+		msg = "MPEG-TS camera streams disabled. Local cameras will be used."
 	}
 	successDialog := dialog.NewInformation("Success", msg+" The application will now exit. Please restart it.", window)
 	successDialog.SetOnClosed(func() {
@@ -463,7 +457,7 @@ func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	successDialog.Show()
 }
 
-// showMulticastConfig shows a dialog to configure the multicast/unicast IP and port mapping.
+// showMulticastConfig shows a dialog to configure the MPEG-TS IP and port mapping.
 func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	m := cfg.Multicast
 	portToText := func(port int) string {
@@ -482,17 +476,6 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 			return 0, fmt.Errorf("%s must be empty or a number between 1 and 65535", name)
 		}
 		return port, nil
-	}
-
-	multicastPath := filepath.Join(config.GetInstallDir(), "multicast.toml")
-	if err := replays.ExtractDefaultMulticastConfig(multicastPath); err == nil {
-		if loaded, err := replays.LoadMulticastConfig(multicastPath); err == nil {
-			m.IP = loaded.IP
-			m.Camera1Port = loaded.Camera1Port
-			m.Camera2Port = loaded.Camera2Port
-			m.Camera3Port = loaded.Camera3Port
-			m.Camera4Port = loaded.Camera4Port
-		}
 	}
 
 	ipEntry := widget.NewEntry()
@@ -554,20 +537,15 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 				return
 			}
 
-			m.IP = ip
-			m.Camera1Port = p1
-			m.Camera2Port = p2
-			m.Camera3Port = p3
-			m.Camera4Port = p4
+			cfg.Multicast.IP = ip
+			cfg.Multicast.Camera1Port = p1
+			cfg.Multicast.Camera2Port = p2
+			cfg.Multicast.Camera3Port = p3
+			cfg.Multicast.Camera4Port = p4
 
-			cfg.Multicast.IP = m.IP
-			cfg.Multicast.Camera1Port = m.Camera1Port
-			cfg.Multicast.Camera2Port = m.Camera2Port
-			cfg.Multicast.Camera3Port = m.Camera3Port
-			cfg.Multicast.Camera4Port = m.Camera4Port
-
-			if err := replays.UpdateMulticastMappingFile(multicastPath, m); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to save multicast config: %w", err), window)
+			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+			if err := replays.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
+				dialog.ShowError(fmt.Errorf("failed to save mpeg-ts config: %w", err), window)
 				return
 			}
 
@@ -575,7 +553,7 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 			if !parsedIP.IsMulticast() {
 				mode = "Unicast"
 			}
-			successDialog := dialog.NewInformation("Success", fmt.Sprintf("%s mapping updated in multicast.toml. The application will now exit. Please restart it.", mode), window)
+			successDialog := dialog.NewInformation("Success", fmt.Sprintf("%s stream configuration saved. The application will now exit. Please restart it.", mode), window)
 			successDialog.SetOnClosed(func() {
 				window.Close()
 				os.Exit(0)

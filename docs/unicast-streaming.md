@@ -45,10 +45,11 @@ Each camera is assigned a sequential port (camera 1 = 9001, camera 2 = 9002, …
 The single multicast group carries all traffic; receivers join the group to
 receive it.
 
-### Replays receiver — `multicast.toml`
+### Replays receiver — `config.toml` `[mpeg-ts]`
 
 ```toml
-[multicast]
+[mpeg-ts]
+    enabled = true
     ip = "239.255.0.1"
     camera1Port = 9001
     camera2Port = 9002
@@ -132,13 +133,14 @@ Starting camera streams (unicast tee):
   -> udp://192.168.1.22:9001
 ```
 
-### Replays receiver — `multicast.toml`
+### Replays receiver — `config.toml` `[mpeg-ts]`
 
 Set `ip` to `0.0.0.0` so ffmpeg opens a passive UDP listener (no IGMP join).
 This works whether replays is on the sender machine or on a remote host:
 
 ```toml
-[multicast]
+[mpeg-ts]
+    enabled = true
     ip = "0.0.0.0"
     camera1Port = 9001
     camera2Port = 9002
@@ -234,8 +236,8 @@ forwarding on the video router for the required ports (e.g. 8080 for owlcms,
 
 | From → To | Changes needed |
 |-----------|---------------|
-| Multicast → Unicast | cameras `config.toml`: set `unicast.enabled = true` + fill `destinations`; replays `multicast.toml`: change `ip` to `0.0.0.0` |
-| Unicast → Multicast | cameras `config.toml`: set `unicast.enabled = false`; replays `multicast.toml`: change `ip` to `239.255.0.1` |
+| Multicast → Unicast | cameras `config.toml`: set `unicast.enabled = true` + fill `destinations`; replays `config.toml` `[mpeg-ts]`: change `ip` to `0.0.0.0` |
+| Unicast → Multicast | cameras `config.toml`: set `unicast.enabled = false`; replays `config.toml` `[mpeg-ts]`: change `ip` to `239.255.0.1` |
 | Flat LAN → Double-NAT | Add video router, re-address video devices to new subnet, update all config IPs |
 
 ---
@@ -248,6 +250,6 @@ forwarding on the video router for the required ports (e.g. 8080 for owlcms,
 | Intermittent glitches/freezes | USB-3 adapter driver issue or jitter | Try a different adapter (ASIX/Intel chipset), increase OBS network buffer |
 | Video leaks to main LAN (unicast) | Destination IP is on a different subnet | Ensure all machines are on the same `/24` |
 | Video leaks to main LAN (multicast) | Dumb switch floods multicast | Use unicast mode, or add a video router (double-NAT) |
-| replays gets no video | `multicast.toml` still has `239.x.x.x` in unicast mode | Change `ip` to `0.0.0.0` |
+| replays gets no video | `config.toml` `[mpeg-ts]` still has `239.x.x.x` in unicast mode | Change `ip` to `0.0.0.0` |
 | High CPU on sender | Software encoding 2× 1080p streams | Check that hardware encoder (`h264_qsv`, `h264_nvenc`) is detected |
 | Video devices can't reach owlcms (double-NAT) | NAT blocks inbound from primary LAN | Port-forward owlcms port on the video router |

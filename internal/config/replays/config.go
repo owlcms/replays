@@ -24,7 +24,7 @@ type Config struct {
 	OwlCMS    string                       `toml:"owlcms"`
 	Platform  string                       `toml:"platform"`
 	LogFfmpeg bool                         `toml:"logFfmpeg"`
-	Multicast config.MulticastSettings     `toml:"multicast"`
+	Multicast config.MulticastSettings     `toml:"mpeg-ts"`
 	Cameras   []config.CameraConfiguration `toml:"-"`
 }
 
@@ -61,7 +61,7 @@ func LoadConfig(configFile string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file for camera configurations: %w", err)
 	}
 
-	if !hasMulticastEnabledKey(raw) {
+	if !hasMpegTSEnabledKey(raw) {
 		cfg.Multicast.Enabled = true
 	}
 
@@ -164,26 +164,13 @@ func LoadConfig(configFile string) (*Config, error) {
 	}
 
 	if cfg.Multicast.Enabled {
-		multicastPath := filepath.Join(config.GetInstallDir(), "multicast.toml")
-		if err := ExtractDefaultMulticastConfig(multicastPath); err != nil {
-			return nil, fmt.Errorf("failed to extract default multicast config: %w", err)
-		}
-		multicastSettings, err := LoadMulticastConfig(multicastPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load multicast config '%s': %w", multicastPath, err)
-		}
-		cfg.Multicast.IP = multicastSettings.IP
-		cfg.Multicast.Camera1Port = multicastSettings.Camera1Port
-		cfg.Multicast.Camera2Port = multicastSettings.Camera2Port
-		cfg.Multicast.Camera3Port = multicastSettings.Camera3Port
-		cfg.Multicast.Camera4Port = multicastSettings.Camera4Port
-
+		cfg.Multicast.ApplyDefaults()
 		multicastCameras := cfg.Multicast.BuildCameraConfigs()
 		if len(multicastCameras) == 0 {
-			return nil, fmt.Errorf("multicast is enabled but no camera ports are configured in %s", multicastPath)
+			return nil, fmt.Errorf("mpeg-ts is enabled but no camera ports are configured in %s", configFile)
 		}
 		cameras = multicastCameras
-		logging.InfoLogger.Printf("Multicast mode enabled: loaded %d multicast camera(s) from %s", len(multicastCameras), multicastPath)
+		logging.InfoLogger.Printf("MPEG-TS mode enabled: loaded %d camera stream(s) from %s", len(multicastCameras), configFile)
 	} else {
 		autoTomlPath := filepath.Join(config.GetInstallDir(), "auto.toml")
 		if _, err := os.Stat(autoTomlPath); err == nil {
@@ -282,7 +269,7 @@ func InitConfig() (*Config, error) {
 
 	configFile := flag.String("config", "", "path to configuration file")
 	flag.StringVar(&config.ConfigDir, "configDir", "",
-		"directory containing editable config files (config.toml, auto.toml, multicast.toml, etc.)")
+		"directory containing editable config files (config.toml, auto.toml, etc.)")
 	flag.StringVar(&config.InstallDir, "dir", "replays", fmt.Sprintf(
 		`Name of an alternate installation directory. Default is 'replays'.
 Value is relative to the platform-specific directory for applcation data (%s)
@@ -400,8 +387,8 @@ func UpdatePlatform(configFile, platform string) error {
 	return nil
 }
 
-// UpdateMulticastConfig writes the [multicast] section to the config file.
-func UpdateMulticastConfig(configFile string, settings config.MulticastSettings) error {
+// UpdateMpegTSConfig writes the [mpeg-ts] section to the config file.
+func UpdateMpegTSConfig(configFile string, settings config.MulticastSettings) error {
 	content, err := os.ReadFile(configFile)
 	if err != nil {
 		return err
@@ -412,7 +399,7 @@ func UpdateMulticastConfig(configFile string, settings config.MulticastSettings)
 	sectionEnd := len(lines)
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "[multicast]" {
+		if trimmed == "[mpeg-ts]" {
 			sectionStart = i
 			continue
 		}
@@ -423,8 +410,9 @@ func UpdateMulticastConfig(configFile string, settings config.MulticastSettings)
 		}
 	}
 
+	settings.ApplyDefaults()
 	newSection := []string{
-		"[multicast]",
+		"[mpeg-ts]",
 		fmt.Sprintf("    enabled = %v", settings.Enabled),
 		fmt.Sprintf("    ip = \"%s\"", settings.IP),
 		fmt.Sprintf("    camera1Port = %d", settings.Camera1Port),
@@ -461,12 +449,12 @@ func UpdateMulticastConfig(configFile string, settings config.MulticastSettings)
 // Private helpers
 // ---------------------------------------------------------------------------
 
-func hasMulticastEnabledKey(raw map[string]interface{}) bool {
-	multicastRaw, ok := raw["multicast"]
+func hasMpegTSEnabledKey(raw map[string]interface{}) bool {
+	mpegTSRaw, ok := raw["mpeg-ts"]
 	if !ok {
 		return false
 	}
-	section, ok := multicastRaw.(map[string]interface{})
+	section, ok := mpegTSRaw.(map[string]interface{})
 	if !ok {
 		return false
 	}

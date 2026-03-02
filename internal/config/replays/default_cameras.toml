@@ -3,7 +3,7 @@
 # =======================================================
 #
 # Replays camera source precedence (first match used):
-# 1) multicast.toml (when [multicast].enabled = true in config.toml)
+# 1) [mpeg-ts] section in config.toml (when enabled = true)
 # 2) auto.toml
 # 3) this file (default_cameras.toml)
 # 4) legacy camera sections in config.toml
