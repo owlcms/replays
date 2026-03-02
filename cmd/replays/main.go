@@ -463,7 +463,7 @@ func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	successDialog.Show()
 }
 
-// showMulticastConfig shows a dialog to configure the multicast IP and port mapping.
+// showMulticastConfig shows a dialog to configure the multicast/unicast IP and port mapping.
 func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	m := cfg.Multicast
 	portToText := func(port int) string {
@@ -508,18 +508,20 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	port4Entry.SetText(portToText(m.Camera4Port))
 
 	form := widget.NewForm(
-		widget.NewFormItem("Multicast IP", ipEntry),
+		widget.NewFormItem("Stream IP", ipEntry),
 		widget.NewFormItem("Camera 1 port", port1Entry),
 		widget.NewFormItem("Camera 2 port", port2Entry),
 		widget.NewFormItem("Camera 3 port", port3Entry),
 		widget.NewFormItem("Camera 4 port", port4Entry),
 	)
 
-	hint := widget.NewLabel("Clear to turn off. If a port is empty, the corresponding multicast camera is turned off.")
+	hint := widget.NewLabel("Use a multicast address (e.g. 239.255.0.1) for multicast mode, " +
+		"or 0.0.0.0 for unicast mode (passive UDP listener).\n" +
+		"If a port is empty, the corresponding camera is disabled.")
 	hint.Wrapping = fyne.TextWrapWord
 	content := container.NewVBox(form, hint)
 
-	dlg := dialog.NewCustomConfirm("Configure Multicast Mapping", "Save", "Cancel", content,
+	dlg := dialog.NewCustomConfirm("MPEG-TS Stream Configuration", "Save", "Cancel", content,
 		func(save bool) {
 			if !save {
 				return
@@ -527,8 +529,8 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 
 			ip := strings.TrimSpace(ipEntry.Text)
 			parsedIP := net.ParseIP(ip)
-			if parsedIP == nil || !parsedIP.IsMulticast() {
-				dialog.ShowError(fmt.Errorf("Multicast IP must be a valid multicast address"), window)
+			if parsedIP == nil {
+				dialog.ShowError(fmt.Errorf("Stream IP must be a valid IP address (multicast or unicast)"), window)
 				return
 			}
 			p1, err := parseOptionalPort("Camera 1 port", port1Entry.Text)
@@ -569,7 +571,11 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 				return
 			}
 
-			successDialog := dialog.NewInformation("Success", "Multicast mapping updated in multicast.toml. The application will now exit. Please restart it.", window)
+			mode := "Multicast"
+			if !parsedIP.IsMulticast() {
+				mode = "Unicast"
+			}
+			successDialog := dialog.NewInformation("Success", fmt.Sprintf("%s mapping updated in multicast.toml. The application will now exit. Please restart it.", mode), window)
 			successDialog.SetOnClosed(func() {
 				window.Close()
 				os.Exit(0)
@@ -583,14 +589,32 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 // multicastToggleLabel returns the menu label text based on current state.
 func multicastToggleLabel(enabled bool) string {
 	if enabled {
-		return "Stop using Multicast"
+		return "Stop using MPEG-TS streams"
 	}
-	return "Use Multicast Cameras"
+	return "Use MPEG-TS Camera Streams"
+}
+
+// isUnicastIP reports whether ip is a unicast listen address (0.0.0.0 or a
+// non-multicast IP), as opposed to a multicast group address.
+func isUnicastIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	return !parsed.IsMulticast()
 }
 
 func localMulticastMismatchNote(cfg *replays.Config) string {
 	if !cfg.Multicast.Enabled {
 		return ""
+	}
+
+	replaysIP := strings.TrimSpace(cfg.Multicast.IP)
+
+	// If replays is configured for unicast listening, show an informational note
+	if isUnicastIP(replaysIP) {
+		logging.InfoLogger.Printf("Replays is in unicast mode (listening on %s)", replaysIP)
+		return fmt.Sprintf("Unicast mode: listening on %s. The sending Cameras program must list this machine in its destinations.", replaysIP)
 	}
 
 	camerasCfg, err := cameras.LoadConfig()
@@ -604,7 +628,6 @@ func localMulticastMismatchNote(cfg *replays.Config) string {
 		return ""
 	}
 
-	replaysIP := strings.TrimSpace(cfg.Multicast.IP)
 	camerasIP := strings.TrimSpace(camerasCfg.Multicast.IP)
 	if replaysIP == "" || camerasIP == "" || replaysIP == camerasIP {
 		return ""
@@ -697,7 +720,12 @@ func main() {
 	if strings.HasPrefix(initialStatus, "Error:") {
 		statusLabel.TextStyle = fyne.TextStyle{Bold: true}
 	}
-	mismatchNote := canvas.NewText(localMulticastMismatchNote(cfg), theme.ErrorColor())
+	noteText := localMulticastMismatchNote(cfg)
+	noteColor := theme.ErrorColor()
+	if strings.HasPrefix(noteText, "Unicast mode") {
+		noteColor = theme.ForegroundColor()
+	}
+	mismatchNote := canvas.NewText(noteText, noteColor)
 	mismatchNote.TextStyle = fyne.TextStyle{Italic: true}
 
 	host := getReplayListHost()
@@ -706,12 +734,17 @@ func main() {
 	replaysListLabel := widget.NewLabel("Open replay list in browser:")
 	hyperlink := widget.NewHyperlink(urlStr, parsedURL)
 
-	content := container.NewPadded(container.NewVBox(
+	upperContent := container.NewVBox(
 		topContainer,
 		container.NewHBox(replaysListLabel, hyperlink),
 		widget.NewSeparator(),
 		statusLabel,
-		mismatchNote,
+	)
+	content := container.NewPadded(container.NewBorder(
+		upperContent, // top
+		mismatchNote, // bottom
+		nil,          // left
+		nil,          // right
 	))
 
 	window.SetContent(content)
@@ -723,7 +756,7 @@ func main() {
 	multicastToggle.Action = func() {
 		toggleMulticast(cfg, window)
 	}
-	multicastConfigItem := fyne.NewMenuItem("Configure Multicast Mapping", func() {
+	multicastConfigItem := fyne.NewMenuItem("MPEG-TS Configuration", func() {
 		showMulticastConfig(cfg, window)
 	})
 
