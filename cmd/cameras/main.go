@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"image/color"
 	"io"
 	"net"
 	"net/url"
@@ -13,7 +14,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +22,10 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
@@ -71,13 +74,30 @@ func setAppIcon(myApp fyne.App) {
 	}
 }
 
+func newSectionTitle(text string) fyne.CanvasObject {
+	title := canvas.NewText(text, theme.Color(theme.ColorNameForeground))
+	title.TextSize = 16
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	return title
+}
+
+func newVerticalGap(height float32) fyne.CanvasObject {
+	rect := canvas.NewRectangle(color.Transparent)
+	rect.SetMinSize(fyne.NewSize(1, height))
+	return rect
+}
+
 type cameraStream struct {
-	camera  recording.DetectedCamera
-	port    int
-	udpDest string
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	encoder *recording.HwEncoder
+	camera     recording.DetectedCamera
+	port       int
+	udpDest    string
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	encoder    *recording.HwEncoder
+	shortID    string
+	summary    string
+	sourceType string
+	transport  string
 
 	mu                 sync.RWMutex
 	running            bool
@@ -216,74 +236,36 @@ func main() {
 		fmt.Printf("Warning: %v\n", err)
 	}
 
-	fmt.Println("Detecting cameras...")
-
-	// Detect cameras
-	cameras := recording.DetectCameras()
-
-	var filtered []recording.DetectedCamera
-	var bestEncoder *recording.HwEncoder
+	fmt.Println("Detecting sources...")
+	inv := buildSourceInventory()
 	var streams []*cameraStream
-	var cameraStatus string
-
-	if len(cameras) == 0 {
-		cameraStatus = "No cameras detected. Connect a camera and click Restart Streams."
-		logging.InfoLogger.Println("No cameras detected")
+	if inv.Encoder != nil {
+		logging.InfoLogger.Printf("Best encoder: %s (%s)", inv.Encoder.Name, inv.Encoder.Description)
 	} else {
-		// Detect encoders using config-defined encoder list
-		encoders := recording.DetectEncodersWithConfig(ffmpegConfig)
-		bestEncoder = recording.PickBestEncoder(encoders)
-
-		if bestEncoder != nil {
-			logging.InfoLogger.Printf("Best encoder: %s (%s)", bestEncoder.Name, bestEncoder.Description)
-		} else {
-			logging.InfoLogger.Printf("No hardware encoder available, will use software: %s", ffmpegConfig.Software.OutputParameters)
+		logging.InfoLogger.Printf("No hardware encoder available, will use software: %s", ffmpegConfig.Software.OutputParameters)
+	}
+	if len(inv.Errors) > 0 {
+		for _, item := range inv.Errors {
+			logging.ErrorLogger.Println(item)
 		}
-
-		// Filter out integrated cameras
-		for _, cam := range cameras {
-			if !camerasConfig.Cameras.IncludeAll && isIntegratedCamera(cam) {
-				fmt.Printf("Skipping integrated camera: %s (%s)\n", cam.Name, cam.PixFmt)
-				continue
-			}
-			filtered = append(filtered, cam)
-		}
-
-		if len(filtered) == 0 {
-			cameraStatus = "No suitable cameras found (all are integrated cameras). Uncheck 'Exclude integrated' and restart."
-			logging.InfoLogger.Println("No suitable cameras found (all filtered as integrated)")
+	}
+	if len(inv.Active) > 0 && len(inv.Errors) == 0 {
+		streams = startAllStreams(inv.Active, inv.Encoder)
+		if len(streams) > 0 {
+			inv.Status = fmt.Sprintf("%d source(s) streaming.", len(streams))
 		} else {
-			// Sort cameras by format priority from config
-			sort.Slice(filtered, func(i, j int) bool {
-				return ffmpegConfig.FormatPriorityValue(filtered[i].PixFmt) > ffmpegConfig.FormatPriorityValue(filtered[j].PixFmt)
-			})
-
-			// Start ffmpeg for each camera
-			streams = startAllStreams(filtered, bestEncoder)
-
-			if len(streams) == 0 {
-				cameraStatus = "No streams started successfully. Check logs for errors."
-			} else {
-				cameraStatus = fmt.Sprintf("%d camera(s) streaming.", len(streams))
-			}
+			inv.Status = "No streams started successfully. Check logs for errors."
 		}
 	}
 
-	fmt.Printf("\n%s Launching status window...\n", cameraStatus)
-	runUI(streams, filtered, bestEncoder, cameraStatus)
+	fmt.Printf("\n%s Launching status window...\n", inv.Status)
+	runUI(streams, nil, inv.Encoder, inv.Status)
 }
 
-// startAllStreams starts streams for all cameras (multicast or unicast tee).
+// startAllStreams starts streams for all configured or autodetected sources.
 // Returns only the streams that started successfully.
-func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEncoder) []*cameraStream {
+func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder) []*cameraStream {
 	unicastMode := camerasConfig.Unicast.Enabled
-	var startPort int
-	if unicastMode {
-		startPort = camerasConfig.Unicast.StartPort
-	} else {
-		startPort = camerasConfig.Multicast.StartPort
-	}
-	port := startPort
 	var streams []*cameraStream
 
 	if unicastMode {
@@ -294,7 +276,9 @@ func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEn
 		fmt.Println("=====================================")
 	}
 
-	for _, cam := range cameras {
+	for _, source := range sources {
+		cam := source.Camera
+		port := source.OutputPort
 		var udpDest string
 		if unicastMode {
 			udpDest = camerasConfig.Unicast.TeeOutput(port)
@@ -302,22 +286,26 @@ func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEn
 			udpDest = fmt.Sprintf("udp://%s:%d", camerasConfig.Multicast.IP, port)
 		}
 		stream := &cameraStream{
-			camera:  cam,
-			port:    port,
-			encoder: encoder,
-			udpDest: udpDest,
-			status:  "starting",
-			running: false,
-			fps:     "-",
-			frame:   "-",
-			bitrate: "-",
-			speed:   "-",
+			camera:     cam,
+			port:       port,
+			encoder:    encoder,
+			udpDest:    udpDest,
+			status:     "starting",
+			running:    false,
+			fps:        "-",
+			frame:      "-",
+			bitrate:    "-",
+			speed:      "-",
+			shortID:    source.ShortID,
+			summary:    source.Summary,
+			sourceType: source.SourceType,
+			transport:  source.Transport,
 		}
 
 		fmt.Printf("\n[%s] %s (%s, %s @ %d fps)\n", cam.PixFmt, cam.Name, cam.Size, cam.PixFmt, cam.Fps)
 		if unicastMode {
 			for _, dest := range camerasConfig.Unicast.Destinations {
-				fmt.Printf("  -> udp://%s:%d\n", dest, port)
+				fmt.Printf("  -> udp://%s:%d\n", dest.Address, port)
 			}
 		} else {
 			fmt.Printf("  -> %s\n", udpDest)
@@ -333,7 +321,6 @@ func startAllStreams(cameras []recording.DetectedCamera, encoder *recording.HwEn
 			streams = append(streams, stream)
 		}
 
-		port++
 	}
 
 	return streams
@@ -434,7 +421,7 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	args = append(args, "-use_wallclock_as_timestamps", "1")
 
 	// Determine if we need hardware encoding (not h264 copy mode)
-	needsEncoding := cam.PixFmt != "h264"
+	needsEncoding := strings.ToLower(strings.TrimSpace(cam.PixFmt)) != "h264"
 
 	// Add encoder input parameters BEFORE the input specification
 	// This is required for hardware encoders like vaapi that need hwaccel init
@@ -480,15 +467,37 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		args = append(args, "-video_size", cam.Size)
 		args = append(args, "-framerate", fmt.Sprintf("%d", cam.Fps))
 		args = append(args, "-i", cam.Device)
+
+	case "rtsp":
+		transport := strings.ToLower(strings.TrimSpace(stream.transport))
+		if sourceTransport := strings.ToLower(strings.TrimSpace(transport)); sourceTransport == "udp" || sourceTransport == "tcp" {
+			args = append(args, "-rtsp_transport", sourceTransport)
+		}
+		args = append(args, "-i", cam.Device)
 	}
 
 	// Build output arguments based on input format
-	gopSize := cam.Fps * fc.Output.GopMultiplier
+	gopFPS := cam.Fps
+	if gopFPS <= 0 {
+		gopFPS = 60
+	}
+	gopSize := gopFPS * fc.Output.GopMultiplier
 
 	switch cam.PixFmt {
 	case "h264":
 		// Camera already outputs H.264 — just remux, no re-encode needed.
 		args = append(args, "-c:v", "copy")
+		// RTSP sources may deliver H.264 in AVCC (MP4-style) format; MPEG-TS
+		// requires Annex B. The bitstream filter converts transparently and is
+		// a no-op when the stream is already in Annex B format.
+		if cam.Format == "rtsp" {
+			args = append(args, "-bsf:v", "h264_mp4toannexb")
+		}
+	case "hevc", "h265":
+		args = append(args, "-c:v", "copy")
+		if cam.Format == "rtsp" {
+			args = append(args, "-bsf:v", "hevc_mp4toannexb")
+		}
 
 	case "mjpeg":
 		// Need to decode MJPEG and encode to H.264
@@ -957,8 +966,13 @@ func (s *cameraStream) snapshotRow() [10]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	name := s.camera.Name
+	if strings.TrimSpace(s.shortID) != "" {
+		name = fmt.Sprintf("%s [%s]", name, s.shortID)
+	}
+
 	return [10]string{
-		s.camera.Name,
+		name,
 		s.camera.PixFmt,
 		s.camera.Size,
 		formatExpectedFPSValue(s.camera.Fps),
@@ -1167,19 +1181,24 @@ func recordClip(stream *cameraStream) (string, error) {
 	return outputPath, nil
 }
 
-func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder *recording.HwEncoder, initialStatus string) {
-	unicastMode := camerasConfig.Unicast.Enabled
-	myApp := app.New()
-	setAppIcon(myApp)
-	var windowTitle string
-	if unicastMode {
-		windowTitle = "Camera Unicast Streams"
-	} else {
-		windowTitle = "Camera Multicast Streams"
+type appTheme struct{ fyne.Theme }
+
+func (t appTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNameButton {
+		// Visible steel-blue for medium-importance buttons
+		return color.RGBA{R: 185, G: 205, B: 225, A: 255}
 	}
+	return t.Theme.Color(name, variant)
+}
+
+func runUI(streams []*cameraStream, _ []recording.DetectedCamera, encoder *recording.HwEncoder, initialStatus string) {
+	myApp := app.New()
+	myApp.Settings().SetTheme(appTheme{theme.DefaultTheme()})
+	setAppIcon(myApp)
+	windowTitle := "Camera Streams"
 	window := myApp.NewWindow(windowTitle)
 	window.SetIcon(assets.IconResource)
-	window.Resize(fyne.NewSize(1280, 500))
+	window.Resize(fyne.NewSize(1480, 880))
 
 	headers := []string{"Camera", "Format", "Resolution", "Expected FPS", "Measured FPS", "Drift", "Port", "Preview", "Record", "Status"}
 	cameraStatusLabel := widget.NewLabel(initialStatus)
@@ -1199,44 +1218,312 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		})
 	}
 
-	// Starting port entry + restart button
 	ipEntry := widget.NewEntry()
 	ipEntry.SetText(camerasConfig.Multicast.IP)
-	ipEntry.Validator = func(s string) error {
-		if net.ParseIP(strings.TrimSpace(s)) == nil {
-			return fmt.Errorf("must be a valid multicast IP")
-		}
-		return nil
-	}
-	ipEntryField := container.NewGridWrap(
-		fyne.NewSize(180, ipEntry.MinSize().Height),
-		ipEntry,
-	)
-
-	portEntry := widget.NewEntry()
-	if unicastMode {
-		portEntry.SetText(strconv.Itoa(camerasConfig.Unicast.StartPort))
+	ipEntryField := container.NewGridWrap(fyne.NewSize(170, ipEntry.MinSize().Height), ipEntry)
+	modeSelect := widget.NewSelect([]string{"Multicast", "Unicast"}, nil)
+	if camerasConfig.Unicast.Enabled {
+		modeSelect.SetSelected("Unicast")
 	} else {
-		portEntry.SetText(strconv.Itoa(camerasConfig.Multicast.StartPort))
+		modeSelect.SetSelected("Multicast")
 	}
-	portEntry.Validator = func(s string) error {
-		if _, err := strconv.Atoi(s); err != nil {
-			return fmt.Errorf("must be a number")
+	unicastDestinations := append([]camerascfg.UnicastDestination(nil), camerasConfig.Unicast.Destinations...)
+	unicastContainer := container.NewVBox()
+
+	var saveUnicastNow func()
+	var renderUnicastRows func()
+	renderUnicastRows = func() {
+		unicastContainer.Objects = nil
+		for i := range unicastDestinations {
+			idx := i
+			check := widget.NewCheck("", nil)
+			check.SetChecked(unicastDestinations[idx].Enabled)
+			check.OnChanged = func(v bool) { unicastDestinations[idx].Enabled = v }
+			entry := widget.NewEntry()
+			entry.SetText(unicastDestinations[idx].Address)
+			var applyBtn *widget.Button
+			applyBtn = widget.NewButton("Apply", func() {
+				if saveUnicastNow != nil {
+					saveUnicastNow()
+				}
+				applyBtn.Importance = widget.MediumImportance
+				applyBtn.Refresh()
+			})
+			entry.OnChanged = func(v string) {
+				unicastDestinations[idx].Address = v
+				applyBtn.Importance = widget.HighImportance
+				applyBtn.Refresh()
+			}
+			removeBtn := widget.NewButton("Remove", func() {
+				unicastDestinations = append(unicastDestinations[:idx], unicastDestinations[idx+1:]...)
+				renderUnicastRows()
+			})
+			unicastContainer.Add(container.NewHBox(
+				check,
+				container.NewGridWrap(fyne.NewSize(320, entry.MinSize().Height), entry),
+				container.NewGridWrap(fyne.NewSize(80, applyBtn.MinSize().Height), applyBtn),
+				container.NewGridWrap(fyne.NewSize(80, removeBtn.MinSize().Height), removeBtn),
+			))
 		}
-		return nil
+		// Blank add row at the bottom
+		addEntry := widget.NewEntry()
+		addEntry.SetPlaceHolder("Enter destination IP or host...")
+		addBtn := widget.NewButton("Add", func() {
+			val := strings.TrimSpace(addEntry.Text)
+			if val == "" {
+				return
+			}
+			unicastDestinations = append(unicastDestinations, camerascfg.UnicastDestination{Address: val, Enabled: true})
+			renderUnicastRows()
+		})
+		checkSpacer := widget.NewCheck("", nil)
+		checkSpacer.Disable()
+		unicastContainer.Add(container.NewHBox(
+			checkSpacer,
+			container.NewGridWrap(fyne.NewSize(320, addEntry.MinSize().Height), addEntry),
+			container.NewGridWrap(fyne.NewSize(80, addBtn.MinSize().Height), addBtn),
+		))
+		unicastContainer.Refresh()
 	}
-	portEntryField := container.NewGridWrap(
-		fyne.NewSize(140, portEntry.MinSize().Height),
-		portEntry,
-	)
+	renderUnicastRows()
 	localOnlyCheck := widget.NewCheck("Local only", nil)
 	localOnlyCheck.SetChecked(camerasConfig.Multicast.LocalOnly)
 
-	// We need a mutable reference so the table and restart can update it
 	currentStreams := &streams
-
 	restartBtn := widget.NewButton("Restart Streams", nil)
-	saveBtn := widget.NewButton("Save", nil)
+	restartBtn.Importance = widget.HighImportance
+	saveBtn := widget.NewButton("Apply", nil)
+	refreshRTSPBtn := widget.NewButton("Refresh RTSP", nil)
+
+	usbRowsContainer := container.NewVBox()
+	rtspRowsContainer := container.NewVBox()
+	var usbRows []*usbSourceRow
+	var rtspRows []*rtspSourceRow
+	var saveConfigNow func()
+	var applyUIToConfig func() error
+	normalizeRTSPRows := func() {
+		var normalized []*rtspSourceRow
+		for _, row := range rtspRows {
+			if row == nil {
+				continue
+			}
+			if row.isAddRow && row.hasContent() {
+				row.isAddRow = false
+			}
+			if row.isAddRow {
+				continue
+			}
+			normalized = append(normalized, row)
+		}
+		rtspRows = normalized
+		rtspRows = append(rtspRows, newBlankRTSPSourceRow())
+	}
+
+	renderUSBRows := func() {
+		objects := []fyne.CanvasObject{
+			container.NewHBox(
+				fixedWidth(usbIdentityWidth, widget.NewLabel("Stable Identity")),
+				fixedWidth(usbNameWidth, widget.NewLabel("Name")),
+				fixedWidth(usbShortIDWidth, widget.NewLabel("Short ID")),
+				fixedWidth(usbPortWidth, widget.NewLabel("Port")),
+				widget.NewLabel("Type"),
+				fixedWidth(usbProbeWidth, widget.NewLabel("")),
+				fixedWidth(usbSaveWidth, widget.NewLabel("")),
+			),
+		}
+		for i, row := range usbRows {
+			index := i
+			objects = append(objects, row.object(func() {
+				// Probe: re-detect the camera on demand
+				actionStatus.SetText("Probing USB camera...")
+				probeUSBSource(usbRows[index].matchKey, func(cam *recording.DetectedCamera) {
+					if cam == nil {
+						dialog.ShowInformation("USB Probe", "Camera not found or not connected.", window)
+						actionStatus.SetText("")
+						return
+					}
+					msg := fmt.Sprintf("%s  %s  %d fps", cam.PixFmt, cam.Size, cam.Fps)
+					dialog.ShowInformation("USB Camera Detected", msg, window)
+					actionStatus.SetText(msg)
+				})
+			}, saveConfigNow))
+		}
+		usbRowsContainer.Objects = objects
+		usbRowsContainer.Refresh()
+	}
+
+	var renderRTSPRows func()
+	renderRTSPRows = func() {
+		normalizeRTSPRows()
+		objects := []fyne.CanvasObject{
+			container.NewHBox(
+				fixedWidth(rtspEnabledWidth, widget.NewLabel("Enabled")),
+				fixedWidth(rtspNameWidth, widget.NewLabel("Name")),
+				fixedWidth(rtspShortIDWidth, widget.NewLabel("Short ID")),
+				fixedWidth(rtspURLWidth, widget.NewLabel("RTSP URL")),
+				fixedWidth(rtspPortWidth, widget.NewLabel("Port")),
+				fixedWidth(rtspTransportWidth, widget.NewLabel("Transport")),
+				fixedWidth(rtspSaveWidth, widget.NewLabel("")),
+				fixedWidth(rtspProbeWidth, widget.NewLabel("")),
+				fixedWidth(rtspRemoveWidth, widget.NewLabel("")),
+			),
+		}
+		for i, row := range rtspRows {
+			index := i
+			objects = append(objects, row.object(func() {
+				// Add handler
+				if !rtspRows[index].hasContent() {
+					return
+				}
+				rtspRows[index].isAddRow = false
+				if !rtspRows[index].enabledCheck.Checked {
+					rtspRows[index].enabledCheck.SetChecked(true)
+				}
+				renderRTSPRows()
+				if saveConfigNow != nil {
+					saveConfigNow()
+				}
+			}, func() {
+				// Save handler for this row
+				if saveConfigNow != nil {
+					saveConfigNow()
+				}
+			}, func() {
+				// Probe handler for this row
+				row := rtspRows[index]
+				src, skip, err := row.source()
+				if skip || err != nil || strings.TrimSpace(src.RTSPURL) == "" {
+					actionStatus.SetText("Enter a URL before probing")
+					return
+				}
+				actionStatus.SetText(fmt.Sprintf("Probing %s...", summarizeRTSPURL(src.RTSPURL)))
+				probeAndFillRTSPRow(src, func(codec, size string, fps int, probeErr error) {
+					if probeErr != nil {
+						dialog.ShowInformation("Probe Failed", probeErr.Error(), window)
+						actionStatus.SetText(fmt.Sprintf("Probe failed: %v", probeErr))
+						return
+					}
+					msg := fmt.Sprintf("%s  %s", codec, size)
+					if fps > 0 {
+						msg = fmt.Sprintf("%s  %s  %d fps", codec, size, fps)
+					}
+					dialog.ShowCustomConfirm("RTSP Probe Result", "Apply", "Cancel",
+						widget.NewLabel(msg),
+						func(apply bool) {
+							if apply {
+								row.detectedCodec = codec
+								if saveConfigNow != nil {
+									saveConfigNow()
+								}
+							}
+						}, window)
+					actionStatus.SetText(msg)
+				})
+			}, func() {
+				// Remove handler
+				rtspRows = append(rtspRows[:index], rtspRows[index+1:]...)
+				renderRTSPRows()
+				if saveConfigNow != nil {
+					saveConfigNow()
+				}
+			}))
+		}
+		rtspRowsContainer.Objects = objects
+		rtspRowsContainer.Refresh()
+	}
+
+	loadInventoryIntoRows := func(inv sourceInventory) {
+		usbRows = usbRows[:0]
+		for _, spec := range inv.USB {
+			usbRows = append(usbRows, newUSBSourceRow(spec))
+		}
+		renderUSBRows()
+
+		rtspRows = rtspRows[:0]
+		for _, spec := range inv.RTSP {
+			row := newRTSPSourceRow(spec)
+			row.isAddRow = false
+			rtspRows = append(rtspRows, row)
+		}
+		renderRTSPRows()
+	}
+
+	saveConfigNow = func() {
+		if err := applyUIToConfig(); err != nil {
+			actionStatus.SetText(fmt.Sprintf("Auto-save failed: %v", err))
+			return
+		}
+		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+			actionStatus.SetText(fmt.Sprintf("Auto-save failed: %v", err))
+			return
+		}
+		actionStatus.SetText("Configuration saved")
+	}
+
+	applyUIToConfig = func() error {
+		selectedMode := strings.TrimSpace(modeSelect.Selected)
+		if selectedMode == "Unicast" {
+			var destinations []camerascfg.UnicastDestination
+			for _, d := range unicastDestinations {
+				if strings.TrimSpace(d.Address) != "" {
+					destinations = append(destinations, d)
+				}
+			}
+			if len(destinations) == 0 {
+				return fmt.Errorf("at least one unicast destination is required")
+			}
+			camerasConfig.Unicast.Enabled = true
+			camerasConfig.Unicast.Destinations = destinations
+		} else {
+			newIP := strings.TrimSpace(ipEntry.Text)
+			parsedIP := net.ParseIP(newIP)
+			if parsedIP == nil || !parsedIP.IsMulticast() {
+				return fmt.Errorf("invalid multicast IP")
+			}
+			camerasConfig.Unicast.Enabled = false
+			camerasConfig.Multicast.IP = newIP
+			camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
+		}
+
+		assignments := make([]camerascfg.DeviceAssignment, 0, len(usbRows))
+		portOwners := make(map[int]string)
+		for _, row := range usbRows {
+			assignment, err := row.assignment()
+			if err != nil {
+				return err
+			}
+			if assignment.OutputPort > 0 {
+				if owner, exists := portOwners[assignment.OutputPort]; exists {
+					return fmt.Errorf("duplicate output port %d for %s and %s", assignment.OutputPort, owner, assignment.Name)
+				}
+				portOwners[assignment.OutputPort] = assignment.Name
+			}
+			assignments = append(assignments, assignment)
+		}
+
+		normalizeRTSPRows()
+		rtspSources := make([]camerascfg.RTSPSource, 0, len(rtspRows))
+		for _, row := range rtspRows {
+			source, skip, err := row.source()
+			if err != nil {
+				return err
+			}
+			if skip {
+				continue
+			}
+			if source.OutputPort > 0 {
+				if owner, exists := portOwners[source.OutputPort]; exists {
+					return fmt.Errorf("duplicate output port %d for %s and %s", source.OutputPort, owner, source.Name)
+				}
+				portOwners[source.OutputPort] = source.Name
+			}
+			rtspSources = append(rtspSources, source)
+		}
+
+		camerasConfig.DeviceAssignments = assignments
+		camerasConfig.RTSPSources = rtspSources
+		return nil
+	}
 
 	table := widget.NewTable(
 		func() (int, int) {
@@ -1337,7 +1624,7 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		},
 	)
 
-	table.SetColumnWidth(0, 260)
+	table.SetColumnWidth(0, 280)
 	table.SetColumnWidth(1, 80)
 	table.SetColumnWidth(2, 110)
 	table.SetColumnWidth(3, 100)
@@ -1355,120 +1642,70 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		}
 	}
 
-	// Wire up the restart button
-	restartBtn.OnTapped = func() {
-		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
-		if err != nil || newPort < 1 || newPort > 65535 {
-			actionStatus.SetText("Invalid starting port")
+	restartStreams := func() {
+		if err := applyUIToConfig(); err != nil {
+			actionStatus.SetText(err.Error())
 			return
-		}
-
-		if !unicastMode {
-			newIP := strings.TrimSpace(ipEntry.Text)
-			parsedIP := net.ParseIP(newIP)
-			if parsedIP == nil || !parsedIP.IsMulticast() {
-				actionStatus.SetText("Invalid multicast IP")
-				return
-			}
-			camerasConfig.Multicast.IP = newIP
-			camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
 		}
 
 		actionStatus.SetText("Restarting streams...")
+		stopAll()
+		time.Sleep(500 * time.Millisecond)
 
-		// Stop existing streams
-		stopAllPreviews()
-		for _, stream := range *currentStreams {
-			stopProcess(stream)
-		}
-		time.Sleep(500 * time.Millisecond) // let processes exit
-
-		// Re-detect cameras
-		newCameras := recording.DetectCameras()
-		var newFiltered []recording.DetectedCamera
-		var newEncoder *recording.HwEncoder
-
-		if len(newCameras) == 0 {
-			cameraStatusLabel.SetText("No cameras detected. Connect a camera and click Restart Streams.")
-		} else {
-			newEncoders := recording.DetectEncodersWithConfig(ffmpegConfig)
-			newEncoder = recording.PickBestEncoder(newEncoders)
-
-			for _, cam := range newCameras {
-				if !camerasConfig.Cameras.IncludeAll && isIntegratedCamera(cam) {
-					continue
-				}
-				newFiltered = append(newFiltered, cam)
-			}
-			if len(newFiltered) == 0 {
-				cameraStatusLabel.SetText("No suitable cameras found (all are integrated cameras).")
-			}
-		}
-
-		// Update config and restart
-		if unicastMode {
-			camerasConfig.Unicast.StartPort = newPort
-		} else {
-			camerasConfig.Multicast.StartPort = newPort
-		}
-
+		inv := buildSourceInventory()
+		loadInventoryIntoRows(inv)
 		var newStreams []*cameraStream
-		if len(newFiltered) > 0 {
-			sort.Slice(newFiltered, func(i, j int) bool {
-				return ffmpegConfig.FormatPriorityValue(newFiltered[i].PixFmt) > ffmpegConfig.FormatPriorityValue(newFiltered[j].PixFmt)
-			})
-			if newEncoder != nil {
-				newStreams = startAllStreams(newFiltered, newEncoder)
-			} else {
-				newStreams = startAllStreams(newFiltered, encoder)
-			}
-			if len(newStreams) > 0 {
-				cameraStatusLabel.SetText(fmt.Sprintf("%d camera(s) streaming.", len(newStreams)))
-			} else {
-				cameraStatusLabel.SetText("No streams started successfully. Check logs for errors.")
-			}
+		newEncoder := encoder
+		if inv.Encoder != nil {
+			newEncoder = inv.Encoder
 		}
-
+		if len(inv.Errors) == 0 && len(inv.Active) > 0 {
+			newStreams = startAllStreams(inv.Active, newEncoder)
+		}
 		*currentStreams = newStreams
 		table.Refresh()
-		actionStatus.SetText(fmt.Sprintf("%d stream(s) restarted on port %d+", len(newStreams), newPort))
+
+		status := inv.Status
+		if len(inv.Errors) > 0 {
+			status = strings.Join(inv.Errors, " | ")
+		}
+		if len(newStreams) > 0 {
+			status = fmt.Sprintf("%d source(s) streaming.", len(newStreams))
+		}
+		cameraStatusLabel.SetText(status)
+		actionStatus.SetText("Streams restarted")
 	}
 
-	// Save current starting port to cameras.toml if it was loaded from a file.
-	// If config is from embedded defaults, saving fails and is ignored.
+	restartBtn.OnTapped = func() {
+		restartStreams()
+	}
 	saveBtn.OnTapped = func() {
-		newPort, err := strconv.Atoi(strings.TrimSpace(portEntry.Text))
-		if err != nil || newPort < 1 || newPort > 65535 {
-			actionStatus.SetText("Invalid starting port")
+		if err := applyUIToConfig(); err != nil {
+			actionStatus.SetText(err.Error())
 			return
 		}
-
-		if unicastMode {
-			camerasConfig.Unicast.StartPort = newPort
-			_ = camerascfg.SaveUnicastSettings(
-				camerasConfig.Unicast.Enabled,
-				newPort,
-				camerasConfig.Unicast.Destinations,
-			)
-			actionStatus.SetText(fmt.Sprintf("Unicast starting port %d (saved)", newPort))
-		} else {
-			newIP := strings.TrimSpace(ipEntry.Text)
-			parsedIP := net.ParseIP(newIP)
-			if parsedIP == nil || !parsedIP.IsMulticast() {
-				actionStatus.SetText("Invalid multicast IP")
-				return
-			}
-			camerasConfig.Multicast.IP = newIP
-			camerasConfig.Multicast.StartPort = newPort
-			camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
-			_ = camerascfg.SaveMulticastSettings(newIP, newPort, localOnlyCheck.Checked)
-			if localOnlyCheck.Checked {
-				actionStatus.SetText(fmt.Sprintf("Multicast %s:%d (Local only enabled)", newIP, newPort))
-			} else {
-				actionStatus.SetText(fmt.Sprintf("Multicast %s:%d", newIP, newPort))
-			}
+		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+			actionStatus.SetText(err.Error())
+			return
 		}
+		saveBtn.Importance = widget.MediumImportance
+		saveBtn.Refresh()
+		actionStatus.SetText("Configuration saved")
 	}
+	refreshRTSPBtn.OnTapped = func() {
+		cfg, err := camerascfg.LoadConfig()
+		if err != nil {
+			actionStatus.SetText(fmt.Sprintf("RTSP refresh failed: %v", err))
+			return
+		}
+		camerasConfig.RTSPSources = append([]camerascfg.RTSPSource(nil), cfg.RTSPSources...)
+		inv := buildSourceInventory()
+		loadInventoryIntoRows(inv)
+		actionStatus.SetText("RTSP sources reloaded from config")
+	}
+
+	inv := buildSourceInventory()
+	loadInventoryIntoRows(inv)
 
 	stopped := false
 	stopOnce := sync.Once{}
@@ -1504,36 +1741,116 @@ func runUI(streams []*cameraStream, cameras []recording.DetectedCamera, encoder 
 		window.Close()
 	})
 
-	var portRow *fyne.Container
-	if unicastMode {
-		portRow = container.NewHBox(
-			widget.NewLabel("Unicast — Starting port:"),
-			portEntryField,
-			saveBtn,
-			restartBtn,
-		)
-	} else {
-		portRow = container.NewHBox(
-			widget.NewLabel("Multicast IP:"),
-			ipEntryField,
-			widget.NewLabel("Starting port:"),
-			portEntryField,
-			localOnlyCheck,
-			saveBtn,
-			restartBtn,
-		)
+	multicastRow := container.NewHBox(
+		widget.NewLabel("Multicast IP:"),
+		ipEntryField,
+		localOnlyCheck,
+	)
+	saveUnicastNow = func() {
+		var destinations []camerascfg.UnicastDestination
+		for _, d := range unicastDestinations {
+			if strings.TrimSpace(d.Address) != "" {
+				destinations = append(destinations, d)
+			}
+		}
+		if err := camerascfg.SaveUnicastSettings(
+			strings.TrimSpace(modeSelect.Selected) == "Unicast",
+			camerasConfig.Unicast.StartPort,
+			destinations,
+		); err != nil {
+			actionStatus.SetText("Error: " + err.Error())
+			return
+		}
+		camerasConfig.Unicast.Destinations = destinations
+		actionStatus.SetText("Unicast settings saved")
 	}
+	unicastRow := container.NewVBox(
+		widget.NewLabel("Unicast destinations:"),
+		unicastContainer,
+	)
+	updateModeUI := func() {
+		if strings.TrimSpace(modeSelect.Selected) == "Unicast" {
+			multicastRow.Hide()
+			unicastRow.Show()
+		} else {
+			unicastRow.Hide()
+			multicastRow.Show()
+		}
+	}
+	modeSelect.OnChanged = func(selected string) {
+		updateModeUI()
+		saveBtn.Importance = widget.HighImportance
+		saveBtn.Refresh()
+	}
+	updateModeUI()
 
-	content := container.NewBorder(
+	portRow := container.NewHBox(
+		widget.NewLabel("Mode:"),
+		fixedWidth(120, modeSelect),
+		saveBtn,
+	)
+
+	usbScroll := container.NewVScroll(usbRowsContainer)
+	usbScroll.SetMinSize(fyne.NewSize(0, 80))
+	rtspScroll := container.NewVScroll(rtspRowsContainer)
+	rtspScroll.SetMinSize(fyne.NewSize(0, 120))
+	broadcastSection := container.NewVBox(
+		newSectionTitle("Broadcast Mode"),
+		newVerticalGap(6),
+		portRow,
+		multicastRow,
+		unicastRow,
+	)
+	usbSection := container.NewVBox(
+		newSectionTitle("USB Sources"),
+		newVerticalGap(6),
+		usbScroll,
+	)
+	rtspSection := container.NewVBox(
+		newSectionTitle("RTSP Sources"),
+		newVerticalGap(6),
+		rtspScroll,
+	)
+
+	monitoringTab := container.NewBorder(
 		container.NewVBox(
 			cameraStatusLabel,
-			portRow,
-			container.NewHBox(actionStatus, clipLink),
+			container.NewHBox(actionStatus, clipLink, restartBtn),
 		),
 		nil,
 		nil,
 		nil,
 		table,
+	)
+	saveAllBtn := widget.NewButton("Save All Settings", func() {
+		if saveConfigNow != nil {
+			saveConfigNow()
+			actionStatus.SetText("All settings saved")
+		}
+	})
+	saveAllBtn.Importance = widget.HighImportance
+	restartFromConfigBtn := widget.NewButton("Restart Streams", func() {
+		restartStreams()
+	})
+	restartFromConfigBtn.Importance = widget.HighImportance
+	configurationTab := container.NewVScroll(
+		container.NewPadded(container.NewVBox(
+			newVerticalGap(4),
+			container.NewHBox(saveAllBtn, restartFromConfigBtn),
+			newVerticalGap(8),
+			broadcastSection,
+			newVerticalGap(12),
+			usbSection,
+			newVerticalGap(12),
+			rtspSection,
+			newVerticalGap(8),
+		)),
+	)
+	configurationTab.SetMinSize(fyne.NewSize(0, 420))
+
+	content := container.NewAppTabs(
+		container.NewTabItem("Monitoring", monitoringTab),
+		container.NewTabItem("Configuration", configurationTab),
 	)
 
 	window.SetContent(content)

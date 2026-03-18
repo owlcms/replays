@@ -23,12 +23,14 @@ import (
 
 // DetectedCamera holds information about a detected camera device
 type DetectedCamera struct {
-	Name   string
-	Device string // device path (Linux) or device name (Windows)
-	Format string // v4l2 or dshow
-	PixFmt string // mjpeg, yuyv422, etc.
-	Size   string // best resolution found
-	Fps    int    // best fps for that resolution
+	Name     string
+	Device   string // device path (Linux) or device name (Windows)
+	Format   string // v4l2, dshow, or rtsp
+	PixFmt   string // mjpeg, yuyv422, etc.
+	Size     string // best resolution found
+	Fps      int    // best fps for that resolution
+	MatchKey string // stable-ish key for persistence across restarts
+	Identity string // human-readable stable identity (USB topology, by-path, etc.)
 }
 
 // HwEncoder holds information about a detected hardware encoder
@@ -472,18 +474,22 @@ func detectCamerasLinux(cfg *ffmpeg.Config) []DetectedCamera {
 
 	// Parse device list: camera name followed by indented /dev/videoN lines
 	type deviceEntry struct {
-		name   string
-		device string
+		name     string
+		device   string
+		location string
 	}
 	var devices []deviceEntry
 	var currentName string
+	var currentLocation string
 	scanner := bufio.NewScanner(&out)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, " ") {
-			// Camera name line - strip any parenthetical suffix like (usb-...) or (platform:...)
+			currentLocation = ""
+			// Camera name line - keep any parenthetical suffix as a stable identity hint.
 			if idx := strings.Index(line, " ("); idx != -1 {
 				currentName = strings.TrimSpace(line[:idx])
+				currentLocation = strings.TrimRight(strings.TrimSpace(line[idx+1:]), "):")
 			} else {
 				currentName = strings.TrimRight(strings.TrimSpace(line), ":")
 			}
@@ -493,15 +499,16 @@ func detectCamerasLinux(cfg *ffmpeg.Config) []DetectedCamera {
 			if strings.HasPrefix(trimmed, "/dev/video") && currentName != "" {
 				// Strip "Webcam gadget: " prefix from Linux USB gadget virtual cameras
 				currentName = strings.TrimPrefix(currentName, "Webcam gadget: ")
-				devices = append(devices, deviceEntry{name: currentName, device: trimmed})
+				devices = append(devices, deviceEntry{name: currentName, device: trimmed, location: currentLocation})
 				currentName = "" // skip subsequent devices for same camera
+				currentLocation = ""
 			}
 		}
 	}
 
 	var cameras []DetectedCamera
 	for _, dev := range devices {
-		cam := probeV4L2Device(dev.name, dev.device, cfg)
+		cam := probeV4L2Device(dev.name, dev.device, dev.location, cfg)
 		if cam != nil {
 			cameras = append(cameras, *cam)
 		}
@@ -510,7 +517,7 @@ func detectCamerasLinux(cfg *ffmpeg.Config) []DetectedCamera {
 }
 
 // probeV4L2Device probes a single v4l2 device for its best format
-func probeV4L2Device(name, device string, cfg *ffmpeg.Config) *DetectedCamera {
+func probeV4L2Device(name, device, location string, cfg *ffmpeg.Config) *DetectedCamera {
 	cmd := CreateHiddenCmd("v4l2-ctl", "-d", device, "--list-formats-ext")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -615,14 +622,17 @@ func probeV4L2Device(name, device string, cfg *ffmpeg.Config) *DetectedCamera {
 	}
 
 	best := PickBestCameraModeWithConfig(modes, cfg)
+	matchKey, identity := resolveStableCameraIdentity(name, device, location)
 
 	return &DetectedCamera{
-		Name:   name,
-		Device: device,
-		Format: "v4l2",
-		PixFmt: best.pixFmt,
-		Size:   fmt.Sprintf("%dx%d", best.width, best.height),
-		Fps:    best.fps,
+		Name:     name,
+		Device:   device,
+		Format:   "v4l2",
+		PixFmt:   best.pixFmt,
+		Size:     fmt.Sprintf("%dx%d", best.width, best.height),
+		Fps:      best.fps,
+		MatchKey: matchKey,
+		Identity: identity,
 	}
 }
 
@@ -796,12 +806,14 @@ func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCame
 	if len(options) == 0 {
 		// Camera found but couldn't parse formats; add with defaults
 		return &DetectedCamera{
-			Name:   name,
-			Device: name,
-			Format: "dshow",
-			PixFmt: "unknown",
-			Size:   "1280x720",
-			Fps:    30,
+			Name:     name,
+			Device:   name,
+			Format:   "dshow",
+			PixFmt:   "unknown",
+			Size:     "1280x720",
+			Fps:      30,
+			MatchKey: "dshow:" + strings.ToLower(strings.TrimSpace(name)),
+			Identity: name,
 		}
 	}
 
@@ -829,13 +841,54 @@ func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCame
 	}
 
 	return &DetectedCamera{
-		Name:   name,
-		Device: name,
-		Format: "dshow",
-		PixFmt: best.pixFmt,
-		Size:   fmt.Sprintf("%dx%d", best.width, best.height),
-		Fps:    best.fps,
+		Name:     name,
+		Device:   name,
+		Format:   "dshow",
+		PixFmt:   best.pixFmt,
+		Size:     fmt.Sprintf("%dx%d", best.width, best.height),
+		Fps:      best.fps,
+		MatchKey: "dshow:" + strings.ToLower(strings.TrimSpace(name)),
+		Identity: name,
 	}
+}
+
+func resolveStableCameraIdentity(name, device, location string) (string, string) {
+	if linkName := resolveV4LLinkBase("/dev/v4l/by-path", device); linkName != "" {
+		return "by-path:" + linkName, linkName
+	}
+	if trimmedLocation := strings.TrimSpace(location); trimmedLocation != "" {
+		return "usb:" + trimmedLocation, trimmedLocation
+	}
+	if linkName := resolveV4LLinkBase("/dev/v4l/by-id", device); linkName != "" {
+		return "by-id:" + linkName, linkName
+	}
+	weakName := strings.ToLower(strings.TrimSpace(name))
+	if weakName == "" {
+		weakName = strings.ToLower(strings.TrimSpace(device))
+	}
+	return "device:" + weakName, name
+}
+
+func resolveV4LLinkBase(dirPath, device string) string {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return ""
+	}
+	resolvedDevice, err := filepath.EvalSymlinks(device)
+	if err != nil {
+		resolvedDevice = device
+	}
+	for _, entry := range entries {
+		linkPath := filepath.Join(dirPath, entry.Name())
+		resolvedLink, err := filepath.EvalSymlinks(linkPath)
+		if err != nil {
+			continue
+		}
+		if filepath.Clean(resolvedLink) == filepath.Clean(resolvedDevice) {
+			return entry.Name()
+		}
+	}
+	return ""
 }
 
 // PickBestCameraModeWithConfig selects the best camera mode using config-driven priorities.

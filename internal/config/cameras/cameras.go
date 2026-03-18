@@ -1,10 +1,15 @@
 package cameras
 
 import (
+	"bytes"
+	"crypto/sha1"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -21,9 +26,11 @@ var configSourcePath string
 // Config is the per-instance runtime configuration for the cameras program.
 // Encoder/priority settings live in the separate ffmpeg package.
 type Config struct {
-	Multicast MulticastConfig `toml:"multicast"`
-	Unicast   UnicastConfig   `toml:"unicast"`
-	Cameras   CamerasSettings `toml:"cameras"`
+	Multicast         MulticastConfig    `toml:"multicast"`
+	Unicast           UnicastConfig      `toml:"unicast"`
+	Cameras           CamerasSettings    `toml:"cameras"`
+	RTSPSources       []RTSPSource       `toml:"rtsp"`
+	DeviceAssignments []DeviceAssignment `toml:"deviceAssignment"`
 }
 
 // PktSize is the fixed UDP packet size for MPEG-TS streaming (7 × 188).
@@ -36,18 +43,71 @@ type MulticastConfig struct {
 	LocalOnly bool   `toml:"localOnly"`
 }
 
+// UnicastDestination is one unicast target with an optional enabled flag.
+type UnicastDestination struct {
+	Address string `toml:"address"`
+	Enabled bool   `toml:"enabled"`
+}
+
 // UnicastConfig holds unicast tee streaming settings.
 // When Enabled is true, each camera stream is sent via ffmpeg tee
 // to every address in Destinations, one UDP leg per destination.
 type UnicastConfig struct {
-	Enabled      bool     `toml:"enabled"`
-	StartPort    int      `toml:"startPort"`
-	Destinations []string `toml:"destinations"`
+	Enabled      bool                  `toml:"enabled"`
+	StartPort    int                   `toml:"startPort"`
+	Destinations []UnicastDestination  `toml:"destinations"`
 }
 
 // CamerasSettings holds per-instance camera behaviour flags.
 type CamerasSettings struct {
 	IncludeAll bool `toml:"includeAll"`
+}
+
+// RTSPSource defines one configured RTSP input that should be republished.
+type RTSPSource struct {
+	SourceID   string `toml:"sourceId"`
+	Name       string `toml:"name"`
+	ShortID    string `toml:"shortId"`
+	Enabled    bool   `toml:"enabled"`
+	RTSPURL    string `toml:"rtspUrl"`
+	OutputPort int    `toml:"outputPort"`
+	Transport  string `toml:"transport"`
+	Codec      string `toml:"codec"` // detected by Probe: h264, hevc, etc. Empty = assume h264.
+}
+
+// DeviceAssignment persists operator-facing metadata for one autodetected USB source.
+type DeviceAssignment struct {
+	MatchKey   string `toml:"matchKey"`
+	Name       string `toml:"name"`
+	ShortID    string `toml:"shortId"`
+	OutputPort int    `toml:"outputPort"`
+}
+
+// decodeCameraConfig decodes TOML into a Config, migrating the legacy
+// destinations = ["ip", ...] string-array format to []UnicastDestination.
+func decodeCameraConfig(data string) (Config, error) {
+	var cfg Config
+	_, err := toml.Decode(data, &cfg)
+	if err != nil && strings.Contains(err.Error(), "unicast.destinations") {
+		// Legacy format: destinations was a plain string array.
+		// Decode it separately and migrate each address to UnicastDestination.
+		type legacyCfg struct {
+			Unicast struct {
+				Destinations []string `toml:"destinations"`
+			} `toml:"unicast"`
+		}
+		var legacy legacyCfg
+		if _, legErr := toml.Decode(data, &legacy); legErr == nil {
+			cfg.Unicast.Destinations = nil
+			for _, addr := range legacy.Unicast.Destinations {
+				cfg.Unicast.Destinations = append(cfg.Unicast.Destinations,
+					UnicastDestination{Address: addr, Enabled: true})
+			}
+			logging.InfoLogger.Printf("Migrated %d legacy unicast destinations", len(cfg.Unicast.Destinations))
+			return cfg, nil
+		}
+	}
+	return cfg, err
 }
 
 // LoadConfig loads the cameras instance configuration from config.toml.
@@ -70,8 +130,14 @@ func LoadConfig() (*Config, error) {
 		if _, err := os.Stat(path); err == nil {
 			fmt.Printf("Cameras instance config: %s\n", path)
 			logging.InfoLogger.Printf("Loading cameras instance config from %s", path)
-			if _, err := toml.DecodeFile(path, &cfg); err != nil {
-				return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil, fmt.Errorf("failed to read %s: %w", path, readErr)
+			}
+			var parseErr error
+			cfg, parseErr = decodeCameraConfig(string(data))
+			if parseErr != nil {
+				return nil, fmt.Errorf("failed to parse %s: %w", path, parseErr)
 			}
 			configSourcePath = path
 			break
@@ -81,8 +147,10 @@ func LoadConfig() (*Config, error) {
 	if configSourcePath == "" {
 		fmt.Println("Cameras instance config: using embedded defaults")
 		logging.InfoLogger.Println("No config.toml found, using embedded instance defaults")
-		if _, err := toml.Decode(string(defaultInstanceConfig), &cfg); err != nil {
-			return nil, fmt.Errorf("failed to parse embedded config.toml: %w", err)
+		var parseErr error
+		cfg, parseErr = decodeCameraConfig(string(defaultInstanceConfig))
+		if parseErr != nil {
+			return nil, fmt.Errorf("failed to parse embedded config.toml: %w", parseErr)
 		}
 	}
 
@@ -96,6 +164,32 @@ func GetConfigSourcePath() string {
 	return configSourcePath
 }
 
+// SaveConfig writes the full cameras config to disk.
+// If config.toml was previously loaded from embedded defaults, it is written
+// to the install directory and becomes the active config file.
+func SaveConfig(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("nil cameras config")
+	}
+
+	configPath := GetConfigSourcePath()
+	if configPath == "" {
+		configPath = filepath.Join(config.GetInstallDir(), "config.toml")
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	cfg.applyDefaults()
+	cfg.ensureSourceIDs()
+	content := cfg.serialize()
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write cameras config: %w", err)
+	}
+	configSourcePath = configPath
+	return nil
+}
+
 // SaveMulticastSettings updates all [multicast] fields in the loaded config.toml file.
 func SaveMulticastSettings(ip string, startPort int, localOnly bool) error {
 	if strings.TrimSpace(ip) == "" {
@@ -105,135 +199,31 @@ func SaveMulticastSettings(ip string, startPort int, localOnly bool) error {
 		return fmt.Errorf("invalid startPort %d", startPort)
 	}
 
-	configPath := GetConfigSourcePath()
-	if configPath == "" {
-		return fmt.Errorf("cameras config loaded from embedded defaults")
-	}
-
-	input, err := os.ReadFile(configPath)
+	cfg, err := LoadConfig()
 	if err != nil {
-		return fmt.Errorf("failed to read cameras config: %w", err)
+		return err
 	}
-
-	lines := strings.Split(string(input), "\n")
-	multicastStart := -1
-	multicastEnd := len(lines)
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "[multicast]" {
-			multicastStart = i
-			for j := i + 1; j < len(lines); j++ {
-				t := strings.TrimSpace(lines[j])
-				if strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "[[") {
-					multicastEnd = j
-					break
-				}
-			}
-			break
-		}
-	}
-
-	newSection := []string{
-		"[multicast]",
-		fmt.Sprintf("    ip = \"%s\"", ip),
-		fmt.Sprintf("    startPort = %d", startPort),
-		fmt.Sprintf("    localOnly = %t", localOnly),
-	}
-
-	var newLines []string
-	if multicastStart >= 0 {
-		newLines = append(newLines, lines[:multicastStart]...)
-		newLines = append(newLines, newSection...)
-		newLines = append(newLines, lines[multicastEnd:]...)
-	} else {
-		newLines = append(newLines, lines...)
-		if len(newLines) > 0 && strings.TrimSpace(newLines[len(newLines)-1]) != "" {
-			newLines = append(newLines, "")
-		}
-		newLines = append(newLines, newSection...)
-	}
-
-	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
-		return fmt.Errorf("failed to write cameras config: %w", err)
-	}
-
-	return nil
+	cfg.Multicast.IP = ip
+	cfg.Multicast.StartPort = startPort
+	cfg.Multicast.LocalOnly = localOnly
+	return SaveConfig(cfg)
 }
 
 // SaveUnicastSettings updates unicast.enabled, unicast.startPort,
 // and unicast.destinations in the loaded config.toml file.
-func SaveUnicastSettings(enabled bool, startPort int, destinations []string) error {
+func SaveUnicastSettings(enabled bool, startPort int, destinations []UnicastDestination) error {
 	if startPort < 1 || startPort > 65535 {
 		return fmt.Errorf("invalid startPort %d", startPort)
 	}
 
-	configPath := GetConfigSourcePath()
-	if configPath == "" {
-		return fmt.Errorf("cameras config loaded from embedded defaults")
-	}
-
-	input, err := os.ReadFile(configPath)
+	cfg, err := LoadConfig()
 	if err != nil {
-		return fmt.Errorf("failed to read cameras config: %w", err)
+		return err
 	}
-
-	lines := strings.Split(string(input), "\n")
-	unicastStart := -1
-	unicastEnd := len(lines)
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "[unicast]" {
-			unicastStart = i
-			for j := i + 1; j < len(lines); j++ {
-				t := strings.TrimSpace(lines[j])
-				if strings.HasPrefix(t, "[") && !strings.HasPrefix(t, "[[") {
-					unicastEnd = j
-					break
-				}
-			}
-			break
-		}
-	}
-
-	// Build destinations array string
-	var destLines []string
-	destLines = append(destLines, "    destinations = [")
-	for i, d := range destinations {
-		comma := ","
-		if i == len(destinations)-1 {
-			comma = ","
-		}
-		destLines = append(destLines, fmt.Sprintf("        \"%s\"%s", d, comma))
-	}
-	destLines = append(destLines, "    ]")
-
-	newSection := []string{
-		"[unicast]",
-		fmt.Sprintf("    enabled = %t", enabled),
-		fmt.Sprintf("    startPort = %d", startPort),
-	}
-	newSection = append(newSection, destLines...)
-
-	var newLines []string
-	if unicastStart >= 0 {
-		newLines = append(newLines, lines[:unicastStart]...)
-		newLines = append(newLines, newSection...)
-		newLines = append(newLines, lines[unicastEnd:]...)
-	} else {
-		newLines = append(newLines, lines...)
-		if len(newLines) > 0 && strings.TrimSpace(newLines[len(newLines)-1]) != "" {
-			newLines = append(newLines, "")
-		}
-		newLines = append(newLines, newSection...)
-	}
-
-	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
-		return fmt.Errorf("failed to write cameras config: %w", err)
-	}
-
-	return nil
+	cfg.Unicast.Enabled = enabled
+	cfg.Unicast.StartPort = startPort
+	cfg.Unicast.Destinations = append([]UnicastDestination(nil), destinations...)
+	return SaveConfig(cfg)
 }
 
 // SaveStartPort updates multicast.startPort in the loaded config.toml file.
@@ -284,14 +274,121 @@ func (c *Config) applyDefaults() {
 	if c.Unicast.StartPort == 0 {
 		c.Unicast.StartPort = 9001
 	}
+	for i := range c.RTSPSources {
+		if strings.TrimSpace(c.RTSPSources[i].Transport) == "" {
+			c.RTSPSources[i].Transport = "tcp"
+		}
+	}
+	c.ensureSourceIDs()
+}
+
+func (c *Config) ensureSourceIDs() {
+	for i := range c.RTSPSources {
+		src := &c.RTSPSources[i]
+		if strings.TrimSpace(src.SourceID) == "" {
+			src.SourceID = generateRTSPSourceID(src.RTSPURL, i)
+		}
+		if strings.TrimSpace(src.Transport) == "" {
+			src.Transport = "tcp"
+		}
+	}
+}
+
+func generateRTSPSourceID(rtspURL string, index int) string {
+	normalized := normalizeRTSPFingerprint(rtspURL)
+	if normalized == "" {
+		return fmt.Sprintf("rtsp-%d", index+1)
+	}
+	hash := sha1.Sum([]byte(normalized))
+	return "rtsp-" + hex.EncodeToString(hash[:])[:10]
+}
+
+func normalizeRTSPFingerprint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func (c *Config) serialize() string {
+	var buf bytes.Buffer
+
+	buf.WriteString("# =========================================================================\n")
+	buf.WriteString("# config.toml — per-instance runtime configuration for cameras\n")
+	buf.WriteString("# =========================================================================\n\n")
+	buf.WriteString("[multicast]\n")
+	buf.WriteString(fmt.Sprintf("    ip = %s\n", strconv.Quote(c.Multicast.IP)))
+	buf.WriteString(fmt.Sprintf("    startPort = %d\n", c.Multicast.StartPort))
+	buf.WriteString(fmt.Sprintf("    localOnly = %t\n\n", c.Multicast.LocalOnly))
+
+	buf.WriteString("[unicast]\n")
+	buf.WriteString(fmt.Sprintf("    enabled = %t\n", c.Unicast.Enabled))
+	buf.WriteString(fmt.Sprintf("    startPort = %d\n", c.Unicast.StartPort))
+	for _, dest := range c.Unicast.Destinations {
+		buf.WriteString("\n[[unicast.destinations]]\n")
+		buf.WriteString(fmt.Sprintf("    address = %s\n", strconv.Quote(dest.Address)))
+		buf.WriteString(fmt.Sprintf("    enabled = %t\n", dest.Enabled))
+	}
+	buf.WriteString("\n")
+
+	buf.WriteString("[cameras]\n")
+	buf.WriteString(fmt.Sprintf("    includeAll = %t\n", c.Cameras.IncludeAll))
+
+	for _, assignment := range c.DeviceAssignments {
+		if strings.TrimSpace(assignment.MatchKey) == "" {
+			continue
+		}
+		buf.WriteString("\n[[deviceAssignment]]\n")
+		buf.WriteString(fmt.Sprintf("    matchKey = %s\n", strconv.Quote(assignment.MatchKey)))
+		if strings.TrimSpace(assignment.Name) != "" {
+			buf.WriteString(fmt.Sprintf("    name = %s\n", strconv.Quote(assignment.Name)))
+		}
+		if strings.TrimSpace(assignment.ShortID) != "" {
+			buf.WriteString(fmt.Sprintf("    shortId = %s\n", strconv.Quote(assignment.ShortID)))
+		}
+		if assignment.OutputPort > 0 {
+			buf.WriteString(fmt.Sprintf("    outputPort = %d\n", assignment.OutputPort))
+		}
+	}
+
+	for _, source := range c.RTSPSources {
+		buf.WriteString("\n[[rtsp]]\n")
+		buf.WriteString(fmt.Sprintf("    sourceId = %s\n", strconv.Quote(source.SourceID)))
+		buf.WriteString(fmt.Sprintf("    name = %s\n", strconv.Quote(source.Name)))
+		if strings.TrimSpace(source.ShortID) != "" {
+			buf.WriteString(fmt.Sprintf("    shortId = %s\n", strconv.Quote(source.ShortID)))
+		}
+		buf.WriteString(fmt.Sprintf("    enabled = %t\n", source.Enabled))
+		buf.WriteString(fmt.Sprintf("    rtspUrl = %s\n", strconv.Quote(source.RTSPURL)))
+		if source.OutputPort > 0 {
+			buf.WriteString(fmt.Sprintf("    outputPort = %d\n", source.OutputPort))
+		}
+		buf.WriteString(fmt.Sprintf("    transport = %s\n", strconv.Quote(source.Transport)))
+		if strings.TrimSpace(source.Codec) != "" {
+			buf.WriteString(fmt.Sprintf("    codec = %s\n", strconv.Quote(source.Codec)))
+		}
+	}
+
+	return buf.String() + "\n"
 }
 
 // UnicastTeeOutput builds the ffmpeg -f tee output string for a given port.
-// Each destination gets its own "[f=mpegts:onfail=ignore]udp://ip:port?pkt_size=N" leg.
+// Each enabled destination gets its own "[f=mpegts:onfail=ignore]udp://ip:port?pkt_size=N" leg.
 func (c *UnicastConfig) TeeOutput(port int) string {
 	var legs []string
 	for _, dest := range c.Destinations {
-		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", dest, port, PktSize)
+		if !dest.Enabled {
+			continue
+		}
+		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", dest.Address, port, PktSize)
 		legs = append(legs, leg)
 	}
 	return strings.Join(legs, "|")

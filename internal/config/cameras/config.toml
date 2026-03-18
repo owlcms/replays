@@ -36,16 +36,47 @@
     # Starting port (same convention as multicast.startPort)
     startPort = 9001
 
-    # Destination IP addresses.
-    # Include every machine that needs to receive the stream:
-    #   "127.0.0.1" — local replays/ffmpeg reader on the sender machine
-    #   remote IPs  — OBS or replays instances on other machines
-    destinations = [
-        "127.0.0.1",
-        # "192.168.2.21",
-        # "192.168.2.22",
-    ]
+# Destination addresses (one [[unicast.destinations]] table per entry).
+# Include every machine that needs to receive the stream:
+#   "127.0.0.1" — local replays/ffmpeg reader on the sender machine
+#   remote IPs  — OBS or replays instances on other machines
+# enabled = false means the destination is skipped without removing it.
+
+# [[unicast.destinations]]
+#     address = "127.0.0.1"
+#     enabled = true
+
+# [[unicast.destinations]]
+#     address = "192.168.2.21"
+#     enabled = true
 
 [cameras]
     # Include integrated/raw webcam modes for this instance.
     includeAll = false
+
+# =========================================================================
+# Autodetected USB Camera Assignments
+# =========================================================================
+# Persist operator-facing names, short IDs, and output ports for autodetected
+# local cameras. matchKey is derived from stable USB topology when available.
+
+# [[deviceAssignment]]
+#     matchKey = "usb-example"
+#     name = "Platform Left"
+#     shortId = "C1"
+#     outputPort = 9001
+
+# =========================================================================
+# Configured RTSP Inputs
+# =========================================================================
+# Add RTSP cameras here so they run alongside autodetected USB cameras.
+# Use the full RTSP URL for the desired camera stream/profile.
+
+# [[rtsp]]
+#     sourceId = "rtsp-example"
+#     name = "Remote PTZ"
+#     shortId = "R1"
+#     enabled = false
+#     rtspUrl = "rtsp://user:password@192.168.2.50:554/stream1"
+#     outputPort = 9005
+#     transport = "tcp"
