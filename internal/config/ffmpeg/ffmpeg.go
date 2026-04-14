@@ -159,14 +159,32 @@ func ExtractDefaultConfig() string {
 }
 
 // filterEncodersForPlatform removes encoder entries that don't match the current OS.
+// Platform values can be OS names ("linux", "windows") or capture API names
+// ("v4l2" for Linux, "dshow" for Windows).
 func (c *Config) filterEncodersForPlatform() {
 	var filtered []EncoderConfig
 	for _, enc := range c.Encoders {
-		if enc.Platform == "" || enc.Platform == runtime.GOOS {
+		if encoderPlatformMatch(enc.Platform) {
 			filtered = append(filtered, enc)
 		}
 	}
 	c.Encoders = filtered
+}
+
+// encoderPlatformMatch reports whether a platform tag matches the current OS.
+func encoderPlatformMatch(platform string) bool {
+	p := strings.ToLower(strings.TrimSpace(platform))
+	if p == "" {
+		return true
+	}
+	switch runtime.GOOS {
+	case "windows":
+		return p == "windows" || p == "dshow"
+	case "linux":
+		return p == "linux" || p == "v4l2"
+	default:
+		return p == runtime.GOOS
+	}
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.

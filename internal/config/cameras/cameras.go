@@ -53,9 +53,9 @@ type UnicastDestination struct {
 // When Enabled is true, each camera stream is sent via ffmpeg tee
 // to every address in Destinations, one UDP leg per destination.
 type UnicastConfig struct {
-	Enabled      bool                  `toml:"enabled"`
-	StartPort    int                   `toml:"startPort"`
-	Destinations []UnicastDestination  `toml:"destinations"`
+	Enabled      bool                 `toml:"enabled"`
+	StartPort    int                  `toml:"startPort"`
+	Destinations []UnicastDestination `toml:"destinations"`
 }
 
 // CamerasSettings holds per-instance camera behaviour flags.
@@ -77,10 +77,12 @@ type RTSPSource struct {
 
 // DeviceAssignment persists operator-facing metadata for one autodetected USB source.
 type DeviceAssignment struct {
-	MatchKey   string `toml:"matchKey"`
-	Name       string `toml:"name"`
-	ShortID    string `toml:"shortId"`
-	OutputPort int    `toml:"outputPort"`
+	MatchKey             string `toml:"matchKey"`
+	Name                 string `toml:"name"`
+	ShortID              string `toml:"shortId"`
+	OutputPort           int    `toml:"outputPort"`
+	Disabled             bool   `toml:"disabled,omitempty"`
+	PreferredPixelFormat string `toml:"preferredPixelFormat,omitempty"`
 }
 
 // decodeCameraConfig decodes TOML into a Config, migrating the legacy
@@ -356,6 +358,12 @@ func (c *Config) serialize() string {
 		}
 		if assignment.OutputPort > 0 {
 			buf.WriteString(fmt.Sprintf("    outputPort = %d\n", assignment.OutputPort))
+		}
+		if assignment.Disabled {
+			buf.WriteString("    disabled = true\n")
+		}
+		if strings.TrimSpace(assignment.PreferredPixelFormat) != "" {
+			buf.WriteString(fmt.Sprintf("    preferredPixelFormat = %s\n", strconv.Quote(assignment.PreferredPixelFormat)))
 		}
 	}
 

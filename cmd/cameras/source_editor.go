@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	usbIdentityWidth = 320
-	usbNameWidth     = 220
-	usbShortIDWidth  = 90
-	usbPortWidth     = 90
+	usbEnabledWidth  = 70
+	usbIdentityWidth = 300
+	usbNameWidth     = 180
+	usbShortIDWidth  = 80
+	usbPortWidth     = 80
+	usbFormatWidth   = 110
 	usbProbeWidth    = 80
 	usbSaveWidth     = 80
 
@@ -42,12 +44,16 @@ type usbSourceRow struct {
 	identity     string
 	dirty        bool
 	saveBtn      *widget.Button
+	enabledCheck *widget.Check
 	nameEntry    *widget.Entry
 	shortIDEntry *widget.Entry
 	portEntry    *widget.Entry
+	formatSelect *widget.Select
 }
 
 func newUSBSourceRow(spec sourceSpec) *usbSourceRow {
+	enabledCheck := widget.NewCheck("", nil)
+	enabledCheck.SetChecked(spec.Enabled)
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(spec.Name)
 	shortIDEntry := widget.NewEntry()
@@ -56,14 +62,23 @@ func newUSBSourceRow(spec sourceSpec) *usbSourceRow {
 	if spec.OutputPort > 0 {
 		portEntry.SetText(strconv.Itoa(spec.OutputPort))
 	}
+	formatOptions := append([]string{"Auto"}, spec.SupportedFormats...)
+	formatSelect := widget.NewSelect(formatOptions, nil)
+	if spec.PreferredFormat != "" {
+		formatSelect.SetSelected(spec.PreferredFormat)
+	} else {
+		formatSelect.SetSelected("Auto")
+	}
 	saveBtn := widget.NewButton("Apply", nil)
 	r := &usbSourceRow{
 		matchKey:     spec.Key,
 		identity:     spec.Summary,
 		saveBtn:      saveBtn,
+		enabledCheck: enabledCheck,
 		nameEntry:    nameEntry,
 		shortIDEntry: shortIDEntry,
 		portEntry:    portEntry,
+		formatSelect: formatSelect,
 	}
 	markDirty := func(_ string) { r.markDirty() }
 	nameEntry.OnChanged = markDirty
@@ -80,7 +95,7 @@ func (r *usbSourceRow) markDirty() {
 	}
 }
 
-func (r *usbSourceRow) object(probe, save func()) fyne.CanvasObject {
+func (r *usbSourceRow) object(probe, save, restartNeeded func()) fyne.CanvasObject {
 	r.saveBtn.OnTapped = func() {
 		if save != nil {
 			save()
@@ -88,6 +103,24 @@ func (r *usbSourceRow) object(probe, save func()) fyne.CanvasObject {
 		r.dirty = false
 		r.saveBtn.Importance = widget.MediumImportance
 		r.saveBtn.Refresh()
+	}
+	r.enabledCheck.OnChanged = func(_ bool) {
+		r.markDirty()
+		if save != nil {
+			save()
+		}
+		if restartNeeded != nil {
+			restartNeeded()
+		}
+	}
+	r.formatSelect.OnChanged = func(_ string) {
+		r.markDirty()
+		if save != nil {
+			save()
+		}
+		if restartNeeded != nil {
+			restartNeeded()
+		}
 	}
 	probeBtn := widget.NewButton("Probe", func() {
 		if probe != nil {
@@ -97,11 +130,12 @@ func (r *usbSourceRow) object(probe, save func()) fyne.CanvasObject {
 	identity := widget.NewLabel(r.identity)
 	identity.Truncation = fyne.TextTruncateEllipsis
 	return container.NewHBox(
+		fixedWidth(usbEnabledWidth, r.enabledCheck),
 		fixedWidth(usbIdentityWidth, identity),
 		fixedWidth(usbNameWidth, r.nameEntry),
 		fixedWidth(usbShortIDWidth, r.shortIDEntry),
 		fixedWidth(usbPortWidth, r.portEntry),
-		widget.NewLabel("USB"),
+		fixedWidth(usbFormatWidth, r.formatSelect),
 		fixedWidth(usbProbeWidth, probeBtn),
 		fixedWidth(usbSaveWidth, r.saveBtn),
 	)
@@ -112,11 +146,17 @@ func (r *usbSourceRow) assignment() (camerascfg.DeviceAssignment, error) {
 	if err != nil {
 		return camerascfg.DeviceAssignment{}, err
 	}
+	preferredFormat := ""
+	if r.formatSelect.Selected != "Auto" && r.formatSelect.Selected != "" {
+		preferredFormat = r.formatSelect.Selected
+	}
 	return camerascfg.DeviceAssignment{
-		MatchKey:   r.matchKey,
-		Name:       strings.TrimSpace(r.nameEntry.Text),
-		ShortID:    strings.TrimSpace(r.shortIDEntry.Text),
-		OutputPort: port,
+		MatchKey:             r.matchKey,
+		Name:                 strings.TrimSpace(r.nameEntry.Text),
+		ShortID:              strings.TrimSpace(r.shortIDEntry.Text),
+		OutputPort:           port,
+		Disabled:             !r.enabledCheck.Checked,
+		PreferredPixelFormat: preferredFormat,
 	}, nil
 }
 

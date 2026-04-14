@@ -18,24 +18,26 @@ import (
 )
 
 type sourceSpec struct {
-	Key        string
-	SourceType string
-	Name       string
-	ShortID    string
-	Summary    string
-	Enabled    bool
-	OutputPort int
-	Transport  string
-	Camera     recording.DetectedCamera
-	RTSP       camerascfg.RTSPSource
+	Key              string
+	SourceType       string
+	Name             string
+	ShortID          string
+	Summary          string
+	Enabled          bool
+	OutputPort       int
+	Transport        string
+	SupportedFormats []string
+	PreferredFormat  string
+	Camera           recording.DetectedCamera
+	RTSP             camerascfg.RTSPSource
 }
 
 type sourceInventory struct {
-	USB    []sourceSpec
-	RTSP   []sourceSpec
-	Active []sourceSpec
-	Status string
-	Errors []string
+	USB     []sourceSpec
+	RTSP    []sourceSpec
+	Active  []sourceSpec
+	Status  string
+	Errors  []string
 	Encoder *recording.HwEncoder
 }
 
@@ -59,7 +61,9 @@ func buildSourceInventory() sourceInventory {
 
 	active := make([]sourceSpec, 0, len(rtspSpecs)+len(usbSpecs))
 	for _, src := range usbSpecs {
-		active = append(active, src)
+		if src.Enabled {
+			active = append(active, src)
+		}
 	}
 	for _, src := range rtspSpecs {
 		if src.Enabled && strings.TrimSpace(src.RTSP.RTSPURL) != "" {
@@ -133,6 +137,12 @@ func buildUSBSources(startPort int, usedPorts map[int]struct{}, usedShortIDs map
 	sources := make([]sourceSpec, 0, len(filtered))
 	for _, cam := range filtered {
 		assignment := assignments[cam.MatchKey]
+
+		// Apply preferred pixel format before selecting mode
+		if assignment.PreferredPixelFormat != "" {
+			cam.RepickForFormat(assignment.PreferredPixelFormat, ffmpegConfig)
+		}
+
 		name := strings.TrimSpace(assignment.Name)
 		if name == "" {
 			name = cam.Name
@@ -151,14 +161,16 @@ func buildUSBSources(startPort int, usedPorts map[int]struct{}, usedShortIDs map
 
 		cam.Name = name
 		sources = append(sources, sourceSpec{
-			Key:        cam.MatchKey,
-			SourceType: "usb",
-			Name:       name,
-			ShortID:    shortID,
-			Summary:    summarizeUSBIdentity(cam),
-			Enabled:    true,
-			OutputPort: port,
-			Camera:     cam,
+			Key:              cam.MatchKey,
+			SourceType:       "usb",
+			Name:             name,
+			ShortID:          shortID,
+			Summary:          summarizeUSBIdentity(cam),
+			Enabled:          !assignment.Disabled,
+			OutputPort:       port,
+			SupportedFormats: cam.SupportedFormats,
+			PreferredFormat:  assignment.PreferredPixelFormat,
+			Camera:           cam,
 		})
 	}
 

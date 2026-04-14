@@ -23,14 +23,51 @@ import (
 
 // DetectedCamera holds information about a detected camera device
 type DetectedCamera struct {
-	Name     string
-	Device   string // device path (Linux) or device name (Windows)
-	Format   string // v4l2, dshow, or rtsp
-	PixFmt   string // mjpeg, yuyv422, etc.
-	Size     string // best resolution found
-	Fps      int    // best fps for that resolution
-	MatchKey string // stable-ish key for persistence across restarts
-	Identity string // human-readable stable identity (USB topology, by-path, etc.)
+	Name             string
+	Device           string       // device path (Linux) or device name (Windows)
+	Format           string       // v4l2, dshow, or rtsp
+	PixFmt           string       // mjpeg, yuyv422, etc.
+	Size             string       // best resolution found
+	Fps              int          // best fps for that resolution
+	MatchKey         string       // stable-ish key for persistence across restarts
+	Identity         string       // human-readable stable identity (USB topology, by-path, etc.)
+	SupportedFormats []string     // unique pixel format names (e.g. "mjpeg", "yuyv422")
+	modes            []cameraMode // all detected modes, for RepickForFormat
+}
+
+// RepickForFormat re-selects the best camera mode restricted to the given pixel format.
+// If preferredFormat is empty or unavailable, the camera is left unchanged.
+func (cam *DetectedCamera) RepickForFormat(preferredFormat string, cfg *ffmpeg.Config) {
+	if preferredFormat == "" || len(cam.modes) == 0 {
+		return
+	}
+	var filtered []cameraMode
+	for _, m := range cam.modes {
+		if m.pixFmt == preferredFormat {
+			filtered = append(filtered, m)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	best := PickBestCameraModeWithConfig(filtered, cfg)
+	cam.PixFmt = best.pixFmt
+	cam.Size = fmt.Sprintf("%dx%d", best.width, best.height)
+	cam.Fps = best.fps
+}
+
+// uniqueFormats returns sorted unique format names from a set of camera modes.
+func uniqueFormats(modes []cameraMode) []string {
+	seen := make(map[string]struct{})
+	var formats []string
+	for _, m := range modes {
+		if _, ok := seen[m.pixFmt]; !ok {
+			seen[m.pixFmt] = struct{}{}
+			formats = append(formats, m.pixFmt)
+		}
+	}
+	sort.Strings(formats)
+	return formats
 }
 
 // HwEncoder holds information about a detected hardware encoder
@@ -288,8 +325,8 @@ func encoderPlatformMatchesRuntime(platform string) bool {
 func detectGPUVendors() map[string]bool {
 	vendors := map[string]bool{}
 
-	if runtime.GOOS != "linux" {
-		return vendors
+	if runtime.GOOS == "windows" {
+		return detectGPUVendorsWindows(vendors)
 	}
 
 	// Method 1: Check NVIDIA driver file
@@ -386,6 +423,39 @@ func sortedVendorKeys(vendors map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// detectGPUVendorsWindows uses wmic to enumerate GPU adapters on Windows.
+func detectGPUVendorsWindows(vendors map[string]bool) map[string]bool {
+	cmd := CreateHiddenCmd("wmic", "path", "win32_VideoController", "get", "Name")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		logging.InfoLogger.Printf("Could not query GPU via wmic: %v", err)
+		return vendors
+	}
+
+	for _, line := range strings.Split(strings.ToLower(out.String()), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "name" {
+			continue
+		}
+		if strings.Contains(line, "nvidia") && !vendors["nvidia"] {
+			logging.InfoLogger.Printf("NVIDIA detected via wmic (%s)", line)
+			vendors["nvidia"] = true
+		}
+		if (strings.Contains(line, "amd") || strings.Contains(line, "radeon")) && !vendors["amd"] {
+			logging.InfoLogger.Printf("AMD detected via wmic (%s)", line)
+			vendors["amd"] = true
+		}
+		if strings.Contains(line, "intel") && !vendors["intel"] {
+			logging.InfoLogger.Printf("Intel detected via wmic (%s)", line)
+			vendors["intel"] = true
+		}
+	}
+
+	return vendors
 }
 
 func summarizeEncoderProbeError(stderr string) string {
@@ -625,14 +695,16 @@ func probeV4L2Device(name, device, location string, cfg *ffmpeg.Config) *Detecte
 	matchKey, identity := resolveStableCameraIdentity(name, device, location)
 
 	return &DetectedCamera{
-		Name:     name,
-		Device:   device,
-		Format:   "v4l2",
-		PixFmt:   best.pixFmt,
-		Size:     fmt.Sprintf("%dx%d", best.width, best.height),
-		Fps:      best.fps,
-		MatchKey: matchKey,
-		Identity: identity,
+		Name:             name,
+		Device:           device,
+		Format:           "v4l2",
+		PixFmt:           best.pixFmt,
+		Size:             fmt.Sprintf("%dx%d", best.width, best.height),
+		Fps:              best.fps,
+		MatchKey:         matchKey,
+		Identity:         identity,
+		SupportedFormats: uniqueFormats(modes),
+		modes:            modes,
 	}
 }
 
@@ -822,6 +894,7 @@ func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCame
 		modes = append(modes, cameraMode{pixFmt: o.pixFmt, width: o.width, height: o.height, fps: o.fps})
 	}
 
+	effectiveModes := modes
 	best := PickBestCameraModeWithConfig(modes, cfg)
 	if best.pixFmt == "h264" {
 		ffprobePath := resolveFFprobePath(ffmpegPath)
@@ -833,6 +906,7 @@ func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCame
 				}
 			}
 			if len(nonH264Modes) > 0 {
+				effectiveModes = nonH264Modes
 				fallback := PickBestCameraModeWithConfig(nonH264Modes, cfg)
 				logging.InfoLogger.Printf("Camera %s advertised h264 on dshow but probe did not confirm it; falling back to %s %dx%d@%dfps", name, fallback.pixFmt, fallback.width, fallback.height, fallback.fps)
 				best = fallback
@@ -841,14 +915,16 @@ func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCame
 	}
 
 	return &DetectedCamera{
-		Name:     name,
-		Device:   name,
-		Format:   "dshow",
-		PixFmt:   best.pixFmt,
-		Size:     fmt.Sprintf("%dx%d", best.width, best.height),
-		Fps:      best.fps,
-		MatchKey: "dshow:" + strings.ToLower(strings.TrimSpace(name)),
-		Identity: name,
+		Name:             name,
+		Device:           name,
+		Format:           "dshow",
+		PixFmt:           best.pixFmt,
+		Size:             fmt.Sprintf("%dx%d", best.width, best.height),
+		Fps:              best.fps,
+		MatchKey:         "dshow:" + strings.ToLower(strings.TrimSpace(name)),
+		Identity:         name,
+		SupportedFormats: uniqueFormats(effectiveModes),
+		modes:            effectiveModes,
 	}
 }
 
