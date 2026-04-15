@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/owlcms/replays/internal/config"
 	camerascfg "github.com/owlcms/replays/internal/config/cameras"
@@ -19,6 +20,7 @@ import (
 
 type sourceSpec struct {
 	Key              string
+	AttachmentPath   string
 	SourceType       string
 	Name             string
 	ShortID          string
@@ -26,6 +28,8 @@ type sourceSpec struct {
 	Enabled          bool
 	OutputPort       int
 	Transport        string
+	ProbeDirty       bool
+	DirtyReasons     []string
 	SupportedFormats []string
 	PreferredFormat  string
 	Camera           recording.DetectedCamera
@@ -33,12 +37,13 @@ type sourceSpec struct {
 }
 
 type sourceInventory struct {
-	USB     []sourceSpec
-	RTSP    []sourceSpec
-	Active  []sourceSpec
-	Status  string
-	Errors  []string
-	Encoder *recording.HwEncoder
+	USB                 []sourceSpec
+	RTSP                []sourceSpec
+	Active              []sourceSpec
+	Status              string
+	Errors              []string
+	PendingVerification []string
+	Encoder             *recording.HwEncoder
 }
 
 func currentStartPort() int {
@@ -51,13 +56,50 @@ func currentStartPort() int {
 	return 9001
 }
 
-func buildSourceInventory() sourceInventory {
+func buildSourceInventoryWithProgress(progress func(string)) sourceInventory {
+	start := time.Now()
+	logging.InfoLogger.Printf("Source inventory build started")
+	startPort := currentStartPort()
+	usedPorts := make(map[int]struct{})
+	usedShortIDs := make(map[string]struct{})
+
+	if progress != nil {
+		progress("Examining configured RTSP sources...")
+	}
+	rtspSpecs := buildRTSPSourcesWithProgress(startPort, usedPorts, usedShortIDs, progress)
+	logging.InfoLogger.Printf("Source inventory RTSP phase completed in %s with %d source(s)", time.Since(start), len(rtspSpecs))
+	usbStart := time.Now()
+	if progress != nil {
+		progress("Examining USB capture devices...")
+	}
+	usbSpecs := buildUSBSourcesWithProgress(startPort, usedPorts, usedShortIDs, progress)
+	logging.InfoLogger.Printf("Source inventory USB phase completed in %s with %d source(s)", time.Since(usbStart), len(usbSpecs))
+	encoderStart := time.Now()
+	if progress != nil {
+		progress("Examining available encoders...")
+	}
+	encoders := recording.DetectEncodersWithConfigAndProgress(ffmpegConfig, progress)
+	logging.InfoLogger.Printf("Source inventory encoder phase completed in %s with %d candidate(s)", time.Since(encoderStart), len(encoders))
+	inv := assembleSourceInventory(usbSpecs, rtspSpecs, recording.PickBestEncoder(encoders))
+	logging.InfoLogger.Printf("Source inventory build completed in %s: usb=%d rtsp=%d active=%d errors=%d pending=%d",
+		time.Since(start), len(inv.USB), len(inv.RTSP), len(inv.Active), len(inv.Errors), len(inv.PendingVerification))
+	if progress != nil {
+		progress(fmt.Sprintf("Inventory ready: %d USB, %d RTSP, %d active", len(inv.USB), len(inv.RTSP), len(inv.Active)))
+	}
+	return inv
+}
+
+func buildCachedSourceInventory(previous sourceInventory, encoder *recording.HwEncoder) sourceInventory {
 	startPort := currentStartPort()
 	usedPorts := make(map[int]struct{})
 	usedShortIDs := make(map[string]struct{})
 
 	rtspSpecs := buildRTSPSources(startPort, usedPorts, usedShortIDs)
-	usbSpecs := buildUSBSources(startPort, usedPorts, usedShortIDs)
+	usbSpecs := buildUSBSourcesFromDetected(cachedDetectedCameras(previous.USB), startPort, usedPorts, usedShortIDs)
+	return assembleSourceInventory(usbSpecs, rtspSpecs, encoder)
+}
+
+func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recording.HwEncoder) sourceInventory {
 
 	active := make([]sourceSpec, 0, len(rtspSpecs)+len(usbSpecs))
 	for _, src := range usbSpecs {
@@ -79,9 +121,11 @@ func buildSourceInventory() sourceInventory {
 	})
 
 	inv := sourceInventory{
-		USB:    usbSpecs,
-		RTSP:   rtspSpecs,
-		Active: active,
+		USB:                 usbSpecs,
+		RTSP:                rtspSpecs,
+		Active:              active,
+		PendingVerification: collectPendingVerification(append(append([]sourceSpec{}, usbSpecs...), rtspSpecs...)),
+		Encoder:             encoder,
 	}
 
 	if conflicts := detectPortConflicts(active); len(conflicts) > 0 {
@@ -90,9 +134,6 @@ func buildSourceInventory() sourceInventory {
 		inv.Active = nil
 		return inv
 	}
-
-	encoders := recording.DetectEncodersWithConfig(ffmpegConfig)
-	inv.Encoder = recording.PickBestEncoder(encoders)
 
 	switch {
 	case len(inv.Active) == 0 && len(inv.RTSP) > 0:
@@ -106,14 +147,22 @@ func buildSourceInventory() sourceInventory {
 	return inv
 }
 
-func buildUSBSources(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}) []sourceSpec {
-	cameras := recording.DetectCameras()
-	assignments := make(map[string]camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
-	for _, assignment := range camerasConfig.DeviceAssignments {
-		if strings.TrimSpace(assignment.MatchKey) == "" {
-			continue
+func buildUSBSourcesWithProgress(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
+	cameras := recording.DetectCamerasWithConfigAndProgress(ffmpegConfig, progress)
+	return buildUSBSourcesFromDetected(cameras, startPort, usedPorts, usedShortIDs)
+}
+
+func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}) []sourceSpec {
+	assignmentsByAttachment := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
+	assignmentsByMatchKey := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
+	for i := range camerasConfig.DeviceAssignments {
+		assignment := &camerasConfig.DeviceAssignments[i]
+		if attachmentPath := strings.TrimSpace(assignment.AttachmentPath); attachmentPath != "" {
+			assignmentsByAttachment[attachmentPath] = assignment
 		}
-		assignments[assignment.MatchKey] = assignment
+		if matchKey := strings.TrimSpace(assignment.MatchKey); matchKey != "" {
+			assignmentsByMatchKey[matchKey] = assignment
+		}
 		if assignment.OutputPort > 0 {
 			usedPorts[assignment.OutputPort] = struct{}{}
 		}
@@ -136,40 +185,72 @@ func buildUSBSources(startPort int, usedPorts map[int]struct{}, usedShortIDs map
 
 	sources := make([]sourceSpec, 0, len(filtered))
 	for _, cam := range filtered {
-		assignment := assignments[cam.MatchKey]
+		assignment := matchingDeviceAssignment(cam, assignmentsByAttachment, assignmentsByMatchKey)
 
 		// Apply preferred pixel format before selecting mode
-		if assignment.PreferredPixelFormat != "" {
+		if assignment != nil && assignment.PreferredPixelFormat != "" {
 			cam.RepickForFormat(assignment.PreferredPixelFormat, ffmpegConfig)
 		}
+		if assignment != nil {
+			assignment.ProbePixelFormat = cam.PixFmt
+			assignment.ProbeSize = cam.Size
+			assignment.ProbeFPS = cam.Fps
+			assignment.ProbeFormats = append([]string(nil), cam.SupportedFormats...)
+			assignment.DirtyReasons = removeDirtyReason(assignment.DirtyReasons, "probe")
+		}
 
-		name := strings.TrimSpace(assignment.Name)
+		name := ""
+		if assignment != nil {
+			name = strings.TrimSpace(assignment.Name)
+		}
 		if name == "" {
 			name = cam.Name
 		}
-		shortID := strings.TrimSpace(assignment.ShortID)
+		shortID := ""
+		if assignment != nil {
+			shortID = strings.TrimSpace(assignment.ShortID)
+		}
 		if shortID == "" {
 			shortID = nextShortID("C", usedShortIDs)
 		} else {
 			usedShortIDs[strings.ToUpper(shortID)] = struct{}{}
 		}
-		port := assignment.OutputPort
+		port := 0
+		if assignment != nil {
+			port = assignment.OutputPort
+		}
 		if port <= 0 {
 			port = nextAvailablePort(startPort, usedPorts)
 		}
 		usedPorts[port] = struct{}{}
 
+		supportedFormats := append([]string(nil), cam.SupportedFormats...)
+		dirtyReasons := []string(nil)
+		preferredFormat := ""
+		enabled := true
+		if assignment != nil {
+			if len(supportedFormats) == 0 && len(assignment.ProbeFormats) > 0 {
+				supportedFormats = append([]string(nil), assignment.ProbeFormats...)
+			}
+			dirtyReasons = normalizeSourceDirtyReasons(assignment.DirtyReasons)
+			preferredFormat = assignment.PreferredPixelFormat
+			enabled = !assignment.Disabled
+		}
+
 		cam.Name = name
 		sources = append(sources, sourceSpec{
 			Key:              cam.MatchKey,
+			AttachmentPath:   cam.AttachmentPath,
 			SourceType:       "usb",
 			Name:             name,
 			ShortID:          shortID,
 			Summary:          summarizeUSBIdentity(cam),
-			Enabled:          !assignment.Disabled,
+			Enabled:          enabled,
 			OutputPort:       port,
-			SupportedFormats: cam.SupportedFormats,
-			PreferredFormat:  assignment.PreferredPixelFormat,
+			ProbeDirty:       hasDirtyReason(dirtyReasons, "probe"),
+			DirtyReasons:     dirtyReasons,
+			SupportedFormats: supportedFormats,
+			PreferredFormat:  preferredFormat,
 			Camera:           cam,
 		})
 	}
@@ -177,7 +258,35 @@ func buildUSBSources(startPort int, usedPorts map[int]struct{}, usedShortIDs map
 	return sources
 }
 
+func cachedDetectedCameras(specs []sourceSpec) []recording.DetectedCamera {
+	cameras := make([]recording.DetectedCamera, 0, len(specs))
+	for _, spec := range specs {
+		cameras = append(cameras, spec.Camera)
+	}
+	return cameras
+}
+
+func matchingDeviceAssignment(cam recording.DetectedCamera, assignmentsByAttachment, assignmentsByMatchKey map[string]*camerascfg.DeviceAssignment) *camerascfg.DeviceAssignment {
+	if attachmentPath := strings.TrimSpace(cam.AttachmentPath); attachmentPath != "" {
+		if assignment, ok := assignmentsByAttachment[attachmentPath]; ok {
+			return assignment
+		}
+	}
+	if assignment, ok := assignmentsByMatchKey[cam.MatchKey]; ok {
+		return assignment
+	}
+	legacyWindowsKey := "dshow:" + strings.ToLower(strings.TrimSpace(cam.Name))
+	if assignment, ok := assignmentsByMatchKey[legacyWindowsKey]; ok {
+		return assignment
+	}
+	return nil
+}
+
 func buildRTSPSources(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}) []sourceSpec {
+	return buildRTSPSourcesWithProgress(startPort, usedPorts, usedShortIDs, nil)
+}
+
+func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
 	for _, assignment := range camerasConfig.DeviceAssignments {
 		if assignment.OutputPort > 0 {
 			usedPorts[assignment.OutputPort] = struct{}{}
@@ -196,6 +305,16 @@ func buildRTSPSources(startPort int, usedPorts map[int]struct{}, usedShortIDs ma
 	}
 	for i := range camerasConfig.RTSPSources {
 		src := &camerasConfig.RTSPSources[i]
+		if progress != nil {
+			name := strings.TrimSpace(src.Name)
+			if name == "" {
+				name = summarizeRTSPURL(src.RTSPURL)
+			}
+			if name == "" {
+				name = fmt.Sprintf("RTSP %d", i+1)
+			}
+			progress(fmt.Sprintf("Examining RTSP source %d/%d: %s", i+1, len(camerasConfig.RTSPSources), name))
+		}
 		if strings.TrimSpace(src.ShortID) == "" {
 			src.ShortID = nextShortID("R", usedShortIDs)
 		}
@@ -215,16 +334,18 @@ func buildRTSPSources(startPort int, usedPorts map[int]struct{}, usedShortIDs ma
 		camera.Identity = summarizeRTSPURL(src.RTSPURL)
 
 		sources = append(sources, sourceSpec{
-			Key:        src.SourceID,
-			SourceType: "rtsp",
-			Name:       camera.Name,
-			ShortID:    src.ShortID,
-			Summary:    summarizeRTSPURL(src.RTSPURL),
-			Enabled:    src.Enabled,
-			OutputPort: port,
-			Transport:  src.Transport,
-			Camera:     camera,
-			RTSP:       *src,
+			Key:          src.SourceID,
+			SourceType:   "rtsp",
+			Name:         camera.Name,
+			ShortID:      src.ShortID,
+			Summary:      summarizeRTSPURL(src.RTSPURL),
+			Enabled:      src.Enabled,
+			OutputPort:   port,
+			Transport:    src.Transport,
+			ProbeDirty:   hasDirtyReason(rtspDirtyReasons(*src), "probe"),
+			DirtyReasons: rtspDirtyReasons(*src),
+			Camera:       camera,
+			RTSP:         *src,
 		})
 	}
 
@@ -338,16 +459,92 @@ func rtspSourceCamera(src camerascfg.RTSPSource) recording.DetectedCamera {
 	if codec == "" {
 		codec = "h264"
 	}
+	size := strings.TrimSpace(src.ProbeSize)
+	if size == "" {
+		size = "-"
+	}
 	return recording.DetectedCamera{
 		Name:     strings.TrimSpace(src.Name),
 		Device:   normalizeRTSPURL(src.RTSPURL),
 		Format:   "rtsp",
 		PixFmt:   codec,
-		Size:     "-",
-		Fps:      0,
+		Size:     size,
+		Fps:      src.ProbeFPS,
 		MatchKey: src.SourceID,
 		Identity: summarizeRTSPURL(src.RTSPURL),
 	}
+}
+
+func collectPendingVerification(sources []sourceSpec) []string {
+	pending := make([]string, 0)
+	for _, src := range sources {
+		if len(src.DirtyReasons) == 0 {
+			continue
+		}
+		name := strings.TrimSpace(src.Name)
+		if name == "" {
+			name = strings.TrimSpace(src.Summary)
+		}
+		if name != "" {
+			pending = append(pending, fmt.Sprintf("%s (%s)", name, strings.Join(src.DirtyReasons, ", ")))
+		}
+	}
+	sort.Strings(pending)
+	return pending
+}
+
+func normalizeSourceDirtyReasons(reasons []string) []string {
+	seen := make(map[string]struct{}, len(reasons))
+	normalized := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		trimmed := strings.ToLower(strings.TrimSpace(reason))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func removeDirtyReason(reasons []string, target string) []string {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		return normalizeSourceDirtyReasons(reasons)
+	}
+	filtered := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if strings.ToLower(strings.TrimSpace(reason)) == target {
+			continue
+		}
+		filtered = append(filtered, reason)
+	}
+	return normalizeSourceDirtyReasons(filtered)
+}
+
+func hasDirtyReason(reasons []string, target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	for _, reason := range reasons {
+		if strings.ToLower(strings.TrimSpace(reason)) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func rtspDirtyReasons(src camerascfg.RTSPSource) []string {
+	reasons := append([]string(nil), src.DirtyReasons...)
+	if src.ProbeDirty {
+		reasons = append(reasons, "probe")
+	}
+	return normalizeSourceDirtyReasons(reasons)
 }
 
 // probeAndFillRTSPRow runs ffprobe on the row's URL in the background,

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -65,24 +66,34 @@ type CamerasSettings struct {
 
 // RTSPSource defines one configured RTSP input that should be republished.
 type RTSPSource struct {
-	SourceID   string `toml:"sourceId"`
-	Name       string `toml:"name"`
-	ShortID    string `toml:"shortId"`
-	Enabled    bool   `toml:"enabled"`
-	RTSPURL    string `toml:"rtspUrl"`
-	OutputPort int    `toml:"outputPort"`
-	Transport  string `toml:"transport"`
-	Codec      string `toml:"codec"` // detected by Probe: h264, hevc, etc. Empty = assume h264.
+	SourceID     string   `toml:"sourceId"`
+	Name         string   `toml:"name"`
+	ShortID      string   `toml:"shortId"`
+	Enabled      bool     `toml:"enabled"`
+	RTSPURL      string   `toml:"rtspUrl"`
+	OutputPort   int      `toml:"outputPort"`
+	Transport    string   `toml:"transport"`
+	Codec        string   `toml:"codec"` // detected by Probe: h264, hevc, etc. Empty = assume h264.
+	ProbeSize    string   `toml:"probeSize"`
+	ProbeFPS     int      `toml:"probeFps"`
+	ProbeDirty   bool     `toml:"probeDirty,omitempty"`
+	DirtyReasons []string `toml:"dirtyReasons,omitempty"`
 }
 
 // DeviceAssignment persists operator-facing metadata for one autodetected USB source.
 type DeviceAssignment struct {
-	MatchKey             string `toml:"matchKey"`
-	Name                 string `toml:"name"`
-	ShortID              string `toml:"shortId"`
-	OutputPort           int    `toml:"outputPort"`
-	Disabled             bool   `toml:"disabled,omitempty"`
-	PreferredPixelFormat string `toml:"preferredPixelFormat,omitempty"`
+	AttachmentPath       string   `toml:"attachmentPath,omitempty"`
+	MatchKey             string   `toml:"matchKey"`
+	Name                 string   `toml:"name"`
+	ShortID              string   `toml:"shortId"`
+	OutputPort           int      `toml:"outputPort"`
+	Disabled             bool     `toml:"disabled,omitempty"`
+	PreferredPixelFormat string   `toml:"preferredPixelFormat,omitempty"`
+	ProbePixelFormat     string   `toml:"probePixelFormat,omitempty"`
+	ProbeSize            string   `toml:"probeSize,omitempty"`
+	ProbeFPS             int      `toml:"probeFps,omitempty"`
+	ProbeFormats         []string `toml:"probeFormats,omitempty"`
+	DirtyReasons         []string `toml:"dirtyReasons,omitempty"`
 }
 
 // decodeCameraConfig decodes TOML into a Config, migrating the legacy
@@ -280,15 +291,61 @@ func (c *Config) applyDefaults() {
 		if strings.TrimSpace(c.RTSPSources[i].Transport) == "" {
 			c.RTSPSources[i].Transport = "tcp"
 		}
+		if strings.TrimSpace(c.RTSPSources[i].RTSPURL) != "" && strings.TrimSpace(c.RTSPSources[i].Codec) == "" {
+			c.RTSPSources[i].ProbeDirty = true
+			c.RTSPSources[i].DirtyReasons = appendDirtyReason(c.RTSPSources[i].DirtyReasons, "probe")
+		}
+		c.RTSPSources[i].DirtyReasons = normalizeDirtyReasons(c.RTSPSources[i].DirtyReasons)
+	}
+	for i := range c.DeviceAssignments {
+		if strings.TrimSpace(c.DeviceAssignments[i].MatchKey) != "" && strings.TrimSpace(c.DeviceAssignments[i].ProbePixelFormat) == "" {
+			c.DeviceAssignments[i].DirtyReasons = appendDirtyReason(c.DeviceAssignments[i].DirtyReasons, "probe")
+		}
+		c.DeviceAssignments[i].DirtyReasons = normalizeDirtyReasons(c.DeviceAssignments[i].DirtyReasons)
 	}
 	c.ensureSourceIDs()
 }
 
+func normalizeDirtyReasons(reasons []string) []string {
+	if len(reasons) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(reasons))
+	normalized := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		trimmed := strings.ToLower(strings.TrimSpace(reason))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func appendDirtyReason(reasons []string, reason string) []string {
+	return normalizeDirtyReasons(append(reasons, reason))
+}
+
 func (c *Config) ensureSourceIDs() {
+	used := make(map[string]struct{}, len(c.RTSPSources))
 	for i := range c.RTSPSources {
 		src := &c.RTSPSources[i]
-		if strings.TrimSpace(src.SourceID) == "" {
-			src.SourceID = generateRTSPSourceID(src.RTSPURL, i)
+		id := strings.TrimSpace(src.SourceID)
+		key := strings.ToLower(id)
+		if id == "" {
+			src.SourceID = generateRTSPSourceID(src.RTSPURL, i, used)
+		} else if _, exists := used[key]; exists {
+			src.SourceID = generateRTSPSourceID(src.RTSPURL, i, used)
+		} else {
+			used[key] = struct{}{}
 		}
 		if strings.TrimSpace(src.Transport) == "" {
 			src.Transport = "tcp"
@@ -296,13 +353,28 @@ func (c *Config) ensureSourceIDs() {
 	}
 }
 
-func generateRTSPSourceID(rtspURL string, index int) string {
+func generateRTSPSourceID(rtspURL string, index int, used map[string]struct{}) string {
 	normalized := normalizeRTSPFingerprint(rtspURL)
+	base := ""
 	if normalized == "" {
-		return fmt.Sprintf("rtsp-%d", index+1)
+		base = fmt.Sprintf("rtsp-%d", index+1)
+	} else {
+		hash := sha1.Sum([]byte(normalized))
+		base = "rtsp-" + hex.EncodeToString(hash[:])[:10]
 	}
-	hash := sha1.Sum([]byte(normalized))
-	return "rtsp-" + hex.EncodeToString(hash[:])[:10]
+
+	for suffix := 1; ; suffix++ {
+		candidate := base
+		if suffix > 1 {
+			candidate = fmt.Sprintf("%s-%d", base, suffix)
+		}
+		key := strings.ToLower(candidate)
+		if _, exists := used[key]; exists {
+			continue
+		}
+		used[key] = struct{}{}
+		return candidate
+	}
 }
 
 func normalizeRTSPFingerprint(raw string) string {
@@ -345,10 +417,13 @@ func (c *Config) serialize() string {
 	buf.WriteString(fmt.Sprintf("    includeAll = %t\n", c.Cameras.IncludeAll))
 
 	for _, assignment := range c.DeviceAssignments {
-		if strings.TrimSpace(assignment.MatchKey) == "" {
+		if strings.TrimSpace(assignment.MatchKey) == "" && strings.TrimSpace(assignment.AttachmentPath) == "" {
 			continue
 		}
 		buf.WriteString("\n[[deviceAssignment]]\n")
+		if strings.TrimSpace(assignment.AttachmentPath) != "" {
+			buf.WriteString(fmt.Sprintf("    attachmentPath = %s\n", strconv.Quote(assignment.AttachmentPath)))
+		}
 		buf.WriteString(fmt.Sprintf("    matchKey = %s\n", strconv.Quote(assignment.MatchKey)))
 		if strings.TrimSpace(assignment.Name) != "" {
 			buf.WriteString(fmt.Sprintf("    name = %s\n", strconv.Quote(assignment.Name)))
@@ -364,6 +439,21 @@ func (c *Config) serialize() string {
 		}
 		if strings.TrimSpace(assignment.PreferredPixelFormat) != "" {
 			buf.WriteString(fmt.Sprintf("    preferredPixelFormat = %s\n", strconv.Quote(assignment.PreferredPixelFormat)))
+		}
+		if strings.TrimSpace(assignment.ProbePixelFormat) != "" {
+			buf.WriteString(fmt.Sprintf("    probePixelFormat = %s\n", strconv.Quote(assignment.ProbePixelFormat)))
+		}
+		if strings.TrimSpace(assignment.ProbeSize) != "" {
+			buf.WriteString(fmt.Sprintf("    probeSize = %s\n", strconv.Quote(assignment.ProbeSize)))
+		}
+		if assignment.ProbeFPS > 0 {
+			buf.WriteString(fmt.Sprintf("    probeFps = %d\n", assignment.ProbeFPS))
+		}
+		if len(assignment.ProbeFormats) > 0 {
+			buf.WriteString(fmt.Sprintf("    probeFormats = [%s]\n", quoteStrings(assignment.ProbeFormats)))
+		}
+		if len(assignment.DirtyReasons) > 0 {
+			buf.WriteString(fmt.Sprintf("    dirtyReasons = [%s]\n", quoteStrings(assignment.DirtyReasons)))
 		}
 	}
 
@@ -383,9 +473,33 @@ func (c *Config) serialize() string {
 		if strings.TrimSpace(source.Codec) != "" {
 			buf.WriteString(fmt.Sprintf("    codec = %s\n", strconv.Quote(source.Codec)))
 		}
+		if strings.TrimSpace(source.ProbeSize) != "" {
+			buf.WriteString(fmt.Sprintf("    probeSize = %s\n", strconv.Quote(source.ProbeSize)))
+		}
+		if source.ProbeFPS > 0 {
+			buf.WriteString(fmt.Sprintf("    probeFps = %d\n", source.ProbeFPS))
+		}
+		if source.ProbeDirty {
+			buf.WriteString("    probeDirty = true\n")
+		}
+		if len(source.DirtyReasons) > 0 {
+			buf.WriteString(fmt.Sprintf("    dirtyReasons = [%s]\n", quoteStrings(source.DirtyReasons)))
+		}
 	}
 
 	return buf.String() + "\n"
+}
+
+func quoteStrings(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		quoted = append(quoted, strconv.Quote(trimmed))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // UnicastTeeOutput builds the ffmpeg -f tee output string for a given port.

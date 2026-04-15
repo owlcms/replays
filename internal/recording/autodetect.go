@@ -30,6 +30,7 @@ type DetectedCamera struct {
 	Size             string       // best resolution found
 	Fps              int          // best fps for that resolution
 	MatchKey         string       // stable-ish key for persistence across restarts
+	AttachmentPath   string       // stable path/moniker for the physical attachment location
 	Identity         string       // human-readable stable identity (USB topology, by-path, etc.)
 	SupportedFormats []string     // unique pixel format names (e.g. "mjpeg", "yuyv422")
 	modes            []cameraMode // all detected modes, for RepickForFormat
@@ -86,6 +87,8 @@ type cameraMode struct {
 	height int
 	fps    int
 }
+
+type ProbeProgressFunc func(string)
 
 // DetectAndWriteConfig probes cameras and GPU encoders, then writes auto.toml.
 // It loads ffmpeg.toml configuration so auto.toml benefits from the same
@@ -149,9 +152,16 @@ func DetectEncoders() []HwEncoder {
 // DetectEncodersWithConfig probes ffmpeg for available H.264 hardware encoders,
 // using the encoder definitions from cfg.
 func DetectEncodersWithConfig(cfg *ffmpeg.Config) []HwEncoder {
+	return DetectEncodersWithConfigAndProgress(cfg, nil)
+}
+
+func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgressFunc) []HwEncoder {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
+	}
+	if progress != nil {
+		progress("Checking available hardware encoders...")
 	}
 
 	detectedGPUVendors := detectGPUVendors()
@@ -218,7 +228,10 @@ func DetectEncodersWithConfig(cfg *ffmpeg.Config) []HwEncoder {
 
 	// Verify each candidate encoder actually works on this hardware
 	var found []HwEncoder
-	for _, enc := range candidates {
+	for i, enc := range candidates {
+		if progress != nil {
+			progress(fmt.Sprintf("Examining encoder %d/%d: %s", i+1, len(candidates), enc.Name))
+		}
 		if testEncoderWithInit(path, enc) {
 			logging.InfoLogger.Printf("Encoder %s verified working", enc.Name)
 			found = append(found, enc)
@@ -520,18 +533,25 @@ func DetectCameras() []DetectedCamera {
 // DetectCamerasWithConfig detects cameras using config-driven mode priorities
 // when cfg is non-nil; falls back to legacy hardcoded priorities otherwise.
 func DetectCamerasWithConfig(cfg *ffmpeg.Config) []DetectedCamera {
+	return DetectCamerasWithConfigAndProgress(cfg, nil)
+}
+
+func DetectCamerasWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
 	switch runtime.GOOS {
 	case "linux":
-		return detectCamerasLinux(cfg)
+		return detectCamerasLinux(cfg, progress)
 	case "windows":
-		return detectCamerasWindows(cfg)
+		return detectCamerasWindows(cfg, progress)
 	default:
 		return nil
 	}
 }
 
 // detectCamerasLinux uses v4l2-ctl to detect cameras and their formats
-func detectCamerasLinux(cfg *ffmpeg.Config) []DetectedCamera {
+func detectCamerasLinux(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
+	if progress != nil {
+		progress("Listing V4L2 devices...")
+	}
 	// First get the device list
 	cmd := CreateHiddenCmd("v4l2-ctl", "--list-devices")
 	var out bytes.Buffer
@@ -577,7 +597,10 @@ func detectCamerasLinux(cfg *ffmpeg.Config) []DetectedCamera {
 	}
 
 	var cameras []DetectedCamera
-	for _, dev := range devices {
+	for i, dev := range devices {
+		if progress != nil {
+			progress(fmt.Sprintf("Examining USB source %d/%d: %s", i+1, len(devices), dev.name))
+		}
 		cam := probeV4L2Device(dev.name, dev.device, dev.location, cfg)
 		if cam != nil {
 			cameras = append(cameras, *cam)
@@ -692,7 +715,7 @@ func probeV4L2Device(name, device, location string, cfg *ffmpeg.Config) *Detecte
 	}
 
 	best := PickBestCameraModeWithConfig(modes, cfg)
-	matchKey, identity := resolveStableCameraIdentity(name, device, location)
+	matchKey, attachmentPath, identity := resolveStableCameraIdentity(name, device, location)
 
 	return &DetectedCamera{
 		Name:             name,
@@ -702,6 +725,7 @@ func probeV4L2Device(name, device, location string, cfg *ffmpeg.Config) *Detecte
 		Size:             fmt.Sprintf("%dx%d", best.width, best.height),
 		Fps:              best.fps,
 		MatchKey:         matchKey,
+		AttachmentPath:   attachmentPath,
 		Identity:         identity,
 		SupportedFormats: uniqueFormats(modes),
 		modes:            modes,
@@ -709,10 +733,13 @@ func probeV4L2Device(name, device, location string, cfg *ffmpeg.Config) *Detecte
 }
 
 // detectCamerasWindows uses ffmpeg dshow to detect cameras
-func detectCamerasWindows(cfg *ffmpeg.Config) []DetectedCamera {
+func detectCamerasWindows(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
+	}
+	if progress != nil {
+		progress("Listing DirectShow devices...")
 	}
 
 	// List devices
@@ -722,7 +749,12 @@ func detectCamerasWindows(cfg *ffmpeg.Config) []DetectedCamera {
 	cmd.Stderr = &out
 	cmd.Run() // This always returns error because "dummy" isn't a real device
 
-	var cameraNames []string
+	type dshowDeviceEntry struct {
+		name            string
+		alternativeName string
+	}
+	var devices []dshowDeviceEntry
+	lastVideoIndex := -1
 	scanner := bufio.NewScanner(&out)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -730,14 +762,27 @@ func detectCamerasWindows(cfg *ffmpeg.Config) []DetectedCamera {
 			start := strings.Index(line, "\"")
 			end := strings.LastIndex(line, "\"")
 			if start != -1 && end != -1 && start != end {
-				cameraNames = append(cameraNames, line[start+1:end])
+				devices = append(devices, dshowDeviceEntry{name: line[start+1 : end]})
+				lastVideoIndex = len(devices) - 1
 			}
+			continue
+		}
+		if strings.Contains(line, "Alternative name") && lastVideoIndex >= 0 {
+			start := strings.Index(line, "\"")
+			end := strings.LastIndex(line, "\"")
+			if start != -1 && end != -1 && start != end {
+				devices[lastVideoIndex].alternativeName = line[start+1 : end]
+			}
+			lastVideoIndex = -1
 		}
 	}
 
 	var cameras []DetectedCamera
-	for _, name := range cameraNames {
-		cam := probeDshowDevice(path, name, cfg)
+	for i, device := range devices {
+		if progress != nil {
+			progress(fmt.Sprintf("Examining USB source %d/%d: %s", i+1, len(devices), device.name))
+		}
+		cam := probeDshowDevice(path, device.name, device.alternativeName, cfg)
 		if cam != nil {
 			cameras = append(cameras, *cam)
 		}
@@ -803,13 +848,15 @@ func verifyDshowH264Delivery(ffprobePath, name string) bool {
 	return false
 }
 
-// probeDshowDevice probes a single dshow device for its capabilities
-func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCamera {
+// probeDshowDevice probes a single dshow device for its capabilities.
+func probeDshowDevice(ffmpegPath, name, alternativeName string, cfg *ffmpeg.Config) *DetectedCamera {
 	cmd := CreateHiddenCmd(ffmpegPath, "-hide_banner", "-f", "dshow", "-list_options", "true", "-i", fmt.Sprintf("video=%s", name))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	cmd.Run() // Always returns error
+
+	matchKey, attachmentPath, identity := resolveWindowsCameraIdentity(name, alternativeName)
 
 	// Parse output for pixel formats, sizes, fps
 	// Lines like: "  pixel_format=mjpeg  min s=1920x1080 fps=30 ..."
@@ -878,14 +925,15 @@ func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCame
 	if len(options) == 0 {
 		// Camera found but couldn't parse formats; add with defaults
 		return &DetectedCamera{
-			Name:     name,
-			Device:   name,
-			Format:   "dshow",
-			PixFmt:   "unknown",
-			Size:     "1280x720",
-			Fps:      30,
-			MatchKey: "dshow:" + strings.ToLower(strings.TrimSpace(name)),
-			Identity: name,
+			Name:           name,
+			Device:         name,
+			Format:         "dshow",
+			PixFmt:         "unknown",
+			Size:           "1280x720",
+			Fps:            30,
+			MatchKey:       matchKey,
+			AttachmentPath: attachmentPath,
+			Identity:       identity,
 		}
 	}
 
@@ -921,28 +969,41 @@ func probeDshowDevice(ffmpegPath, name string, cfg *ffmpeg.Config) *DetectedCame
 		PixFmt:           best.pixFmt,
 		Size:             fmt.Sprintf("%dx%d", best.width, best.height),
 		Fps:              best.fps,
-		MatchKey:         "dshow:" + strings.ToLower(strings.TrimSpace(name)),
-		Identity:         name,
+		MatchKey:         matchKey,
+		AttachmentPath:   attachmentPath,
+		Identity:         identity,
 		SupportedFormats: uniqueFormats(effectiveModes),
 		modes:            effectiveModes,
 	}
 }
 
-func resolveStableCameraIdentity(name, device, location string) (string, string) {
+func resolveWindowsCameraIdentity(name, alternativeName string) (string, string, string) {
+	trimmedAlt := strings.TrimSpace(alternativeName)
+	if trimmedAlt != "" {
+		return "dshow-alt:" + strings.ToLower(trimmedAlt), trimmedAlt, trimmedAlt
+	}
+	weakName := strings.ToLower(strings.TrimSpace(name))
+	if weakName == "" {
+		weakName = "unknown"
+	}
+	return "dshow:" + weakName, "", name
+}
+
+func resolveStableCameraIdentity(name, device, location string) (string, string, string) {
 	if linkName := resolveV4LLinkBase("/dev/v4l/by-path", device); linkName != "" {
-		return "by-path:" + linkName, linkName
+		return "by-path:" + strings.ToLower(strings.TrimSpace(linkName)), linkName, linkName
 	}
 	if trimmedLocation := strings.TrimSpace(location); trimmedLocation != "" {
-		return "usb:" + trimmedLocation, trimmedLocation
+		return "usb:" + strings.ToLower(trimmedLocation), trimmedLocation, trimmedLocation
 	}
 	if linkName := resolveV4LLinkBase("/dev/v4l/by-id", device); linkName != "" {
-		return "by-id:" + linkName, linkName
+		return "by-id:" + strings.ToLower(strings.TrimSpace(linkName)), linkName, linkName
 	}
 	weakName := strings.ToLower(strings.TrimSpace(name))
 	if weakName == "" {
 		weakName = strings.ToLower(strings.TrimSpace(device))
 	}
-	return "device:" + weakName, name
+	return "device:" + weakName, "", name
 }
 
 func resolveV4LLinkBase(dirPath, device string) string {
