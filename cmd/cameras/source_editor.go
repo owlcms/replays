@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	usbEnabledWidth  = 70
+	usbEnabledWidth  = 100
 	usbIdentityWidth = 300
 	usbNameWidth     = 180
 	usbShortIDWidth  = 80
@@ -37,6 +37,11 @@ const (
 
 func fixedWidth(width float32, obj fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewGridWrap(fyne.NewSize(width, obj.MinSize().Height), obj)
+}
+
+func boolRef(v bool) *bool {
+	value := v
+	return &value
 }
 
 func newReadOnlyEntry(text string) *widget.Entry {
@@ -66,7 +71,7 @@ func applyRestartButtonStyle(button *widget.Button, highlighted bool) {
 		button.Importance = widget.MediumImportance
 	}
 	if button.Text == "" {
-		button.SetText("Restart")
+		button.SetText("Apply")
 	}
 	button.Refresh()
 }
@@ -81,6 +86,7 @@ type usbSourceRow struct {
 	detectedSize    string
 	detectedFPS     int
 	detectedFormats []string
+	monitoringOn    bool
 	restartBtn      *widget.Button
 	enabledCheck    *widget.Check
 	nameEntry       *portTableEntry
@@ -116,6 +122,7 @@ func newUSBSourceRow(spec sourceSpec) *usbSourceRow {
 		detectedSize:    spec.Camera.Size,
 		detectedFPS:     spec.Camera.Fps,
 		detectedFormats: append([]string(nil), spec.SupportedFormats...),
+		monitoringOn:    spec.MonitoringOn,
 		enabledCheck:    enabledCheck,
 		nameEntry:       nameEntry,
 		shortIDEntry:    shortIDEntry,
@@ -195,7 +202,7 @@ func (r *usbSourceRow) object(probe func(), save func() bool, restartNeeded, res
 			probe()
 		}
 	})
-	restartBtn := widget.NewButton("Restart", func() {
+	restartBtn := widget.NewButton("Apply", func() {
 		if restart != nil {
 			restart()
 		}
@@ -210,8 +217,8 @@ func (r *usbSourceRow) object(probe func(), save func() bool, restartNeeded, res
 		fixedWidth(usbShortIDWidth, r.shortIDEntry),
 		fixedWidth(usbPortWidth, r.portEntry),
 		fixedWidth(usbFormatWidth, r.formatSelect),
-		fixedWidth(usbProbeWidth, probeBtn),
 		fixedWidth(usbRestartWidth, restartBtn),
+		fixedWidth(usbProbeWidth, probeBtn),
 	)
 }
 
@@ -231,6 +238,7 @@ func (r *usbSourceRow) assignment() (camerascfg.DeviceAssignment, error) {
 		ShortID:              strings.TrimSpace(r.shortIDEntry.Text),
 		OutputPort:           port,
 		Disabled:             !r.enabledCheck.Checked,
+		On:                   boolRef(r.monitoringOn),
 		PreferredPixelFormat: preferredFormat,
 		ProbePixelFormat:     strings.TrimSpace(r.detectedPixFmt),
 		ProbeSize:            strings.TrimSpace(r.detectedSize),
@@ -259,6 +267,7 @@ type rtspSourceRow struct {
 	detectedCodec    string
 	detectedSize     string
 	detectedFPS      int
+	monitoringOn     bool
 }
 
 func newRTSPSourceRow(spec sourceSpec) *rtspSourceRow {
@@ -297,6 +306,7 @@ func newRTSPSourceRow(spec sourceSpec) *rtspSourceRow {
 		detectedCodec:   spec.RTSP.Codec,
 		detectedSize:    spec.RTSP.ProbeSize,
 		detectedFPS:     spec.RTSP.ProbeFPS,
+		monitoringOn:    spec.MonitoringOn,
 	}
 	row.installAutoEnable()
 	row.enabledChanged = row.enabledCheck.OnChanged
@@ -392,7 +402,7 @@ func (r *rtspSourceRow) object(add func(), save func() bool, restart func(), pro
 			probe()
 		}
 	})
-	restartButton := widget.NewButton("Restart", func() {
+	restartButton := widget.NewButton("Apply", func() {
 		if restart != nil {
 			restart()
 		}
@@ -505,6 +515,7 @@ func (r *rtspSourceRow) source() (camerascfg.RTSPSource, bool, error) {
 		Name:         nameValue,
 		ShortID:      strings.TrimSpace(r.shortIDEntry.Text),
 		Enabled:      r.enabledCheck.Checked,
+		On:           boolRef(r.monitoringOn),
 		RTSPURL:      urlValue,
 		OutputPort:   port,
 		Transport:    transport,

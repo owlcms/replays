@@ -70,6 +70,7 @@ type RTSPSource struct {
 	Name         string   `toml:"name"`
 	ShortID      string   `toml:"shortId"`
 	Enabled      bool     `toml:"enabled"`
+	On           *bool    `toml:"on,omitempty"`
 	RTSPURL      string   `toml:"rtspUrl"`
 	OutputPort   int      `toml:"outputPort"`
 	Transport    string   `toml:"transport"`
@@ -88,6 +89,7 @@ type DeviceAssignment struct {
 	ShortID              string   `toml:"shortId"`
 	OutputPort           int      `toml:"outputPort"`
 	Disabled             bool     `toml:"disabled,omitempty"`
+	On                   *bool    `toml:"on,omitempty"`
 	PreferredPixelFormat string   `toml:"preferredPixelFormat,omitempty"`
 	ProbePixelFormat     string   `toml:"probePixelFormat,omitempty"`
 	ProbeSize            string   `toml:"probeSize,omitempty"`
@@ -288,6 +290,9 @@ func (c *Config) applyDefaults() {
 		c.Unicast.StartPort = 9001
 	}
 	for i := range c.RTSPSources {
+		if c.RTSPSources[i].On == nil {
+			c.RTSPSources[i].On = boolPtr(true)
+		}
 		if strings.TrimSpace(c.RTSPSources[i].Transport) == "" {
 			c.RTSPSources[i].Transport = "tcp"
 		}
@@ -298,12 +303,24 @@ func (c *Config) applyDefaults() {
 		c.RTSPSources[i].DirtyReasons = normalizeDirtyReasons(c.RTSPSources[i].DirtyReasons)
 	}
 	for i := range c.DeviceAssignments {
+		if c.DeviceAssignments[i].On == nil {
+			c.DeviceAssignments[i].On = boolPtr(true)
+		}
 		if strings.TrimSpace(c.DeviceAssignments[i].MatchKey) != "" && strings.TrimSpace(c.DeviceAssignments[i].ProbePixelFormat) == "" {
 			c.DeviceAssignments[i].DirtyReasons = appendDirtyReason(c.DeviceAssignments[i].DirtyReasons, "probe")
 		}
 		c.DeviceAssignments[i].DirtyReasons = normalizeDirtyReasons(c.DeviceAssignments[i].DirtyReasons)
 	}
 	c.ensureSourceIDs()
+}
+
+func boolPtr(v bool) *bool {
+	value := v
+	return &value
+}
+
+func monitoringOn(value *bool) bool {
+	return value == nil || *value
 }
 
 func normalizeDirtyReasons(reasons []string) []string {
@@ -437,6 +454,7 @@ func (c *Config) serialize() string {
 		if assignment.Disabled {
 			buf.WriteString("    disabled = true\n")
 		}
+		buf.WriteString(fmt.Sprintf("    on = %t\n", monitoringOn(assignment.On)))
 		if strings.TrimSpace(assignment.PreferredPixelFormat) != "" {
 			buf.WriteString(fmt.Sprintf("    preferredPixelFormat = %s\n", strconv.Quote(assignment.PreferredPixelFormat)))
 		}
@@ -465,6 +483,7 @@ func (c *Config) serialize() string {
 			buf.WriteString(fmt.Sprintf("    shortId = %s\n", strconv.Quote(source.ShortID)))
 		}
 		buf.WriteString(fmt.Sprintf("    enabled = %t\n", source.Enabled))
+		buf.WriteString(fmt.Sprintf("    on = %t\n", monitoringOn(source.On)))
 		buf.WriteString(fmt.Sprintf("    rtspUrl = %s\n", strconv.Quote(source.RTSPURL)))
 		if source.OutputPort > 0 {
 			buf.WriteString(fmt.Sprintf("    outputPort = %d\n", source.OutputPort))

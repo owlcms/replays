@@ -59,24 +59,31 @@
 # =========================================================================
 # Persist operator-facing names, short IDs, and output ports for autodetected
 # local cameras. matchKey is derived from stable USB topology when available.
+# disabled controls whether the source is available in Configuration.
+# on controls whether an enabled source should be started in Monitoring.
 
 # [[deviceAssignment]]
 #     matchKey = "usb-example"
 #     name = "Platform Left"
 #     shortId = "C1"
 #     outputPort = 9001
+#     disabled = false
+#     on = true
 
 # =========================================================================
 # Configured RTSP Inputs
 # =========================================================================
 # Add RTSP cameras here so they run alongside autodetected USB cameras.
 # Use the full RTSP URL for the desired camera stream/profile.
+# enabled controls whether the source is available in Configuration.
+# on controls whether an enabled source should be started in Monitoring.
 
 # [[rtsp]]
 #     sourceId = "rtsp-example"
 #     name = "Remote PTZ"
 #     shortId = "R1"
-#     enabled = false
+#     enabled = true
+#     on = true
 #     rtspUrl = "rtsp://user:password@192.168.2.50:554/stream1"
 #     outputPort = 9005
 #     transport = "tcp"

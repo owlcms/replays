@@ -26,6 +26,7 @@ type sourceSpec struct {
 	ShortID          string
 	Summary          string
 	Enabled          bool
+	MonitoringOn     bool
 	OutputPort       int
 	Transport        string
 	ProbeDirty       bool
@@ -102,13 +103,20 @@ func buildCachedSourceInventory(previous sourceInventory, encoder *recording.HwE
 func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recording.HwEncoder) sourceInventory {
 
 	active := make([]sourceSpec, 0, len(rtspSpecs)+len(usbSpecs))
+	enabledCount := 0
 	for _, src := range usbSpecs {
 		if src.Enabled {
+			enabledCount++
+		}
+		if src.Enabled && src.MonitoringOn {
 			active = append(active, src)
 		}
 	}
 	for _, src := range rtspSpecs {
 		if src.Enabled && strings.TrimSpace(src.RTSP.RTSPURL) != "" {
+			enabledCount++
+		}
+		if src.Enabled && src.MonitoringOn && strings.TrimSpace(src.RTSP.RTSPURL) != "" {
 			active = append(active, src)
 		}
 	}
@@ -136,6 +144,8 @@ func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recordin
 	}
 
 	switch {
+	case enabledCount > 0 && len(inv.Active) == 0:
+		inv.Status = "No sources are on. Use Monitoring to start an enabled source."
 	case len(inv.Active) == 0 && len(inv.RTSP) > 0:
 		inv.Status = "No active sources. Enable an RTSP source or connect a camera."
 	case len(inv.Active) == 0:
@@ -236,6 +246,10 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 			preferredFormat = assignment.PreferredPixelFormat
 			enabled = !assignment.Disabled
 		}
+		monitoringOn := true
+		if assignment != nil && assignment.On != nil {
+			monitoringOn = *assignment.On
+		}
 
 		cam.Name = name
 		sources = append(sources, sourceSpec{
@@ -246,6 +260,7 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 			ShortID:          shortID,
 			Summary:          summarizeUSBIdentity(cam),
 			Enabled:          enabled,
+			MonitoringOn:     monitoringOn,
 			OutputPort:       port,
 			ProbeDirty:       hasDirtyReason(dirtyReasons, "probe"),
 			DirtyReasons:     dirtyReasons,
@@ -340,6 +355,7 @@ func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, use
 			ShortID:      src.ShortID,
 			Summary:      summarizeRTSPURL(src.RTSPURL),
 			Enabled:      src.Enabled,
+				MonitoringOn: src.On == nil || *src.On,
 			OutputPort:   port,
 			Transport:    src.Transport,
 			ProbeDirty:   hasDirtyReason(rtspDirtyReasons(*src), "probe"),

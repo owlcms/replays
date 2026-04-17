@@ -1,6 +1,9 @@
 package cameras
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEnsureSourceIDsKeepsRTSPSourcesUnique(t *testing.T) {
 	cfg := &Config{
@@ -69,5 +72,53 @@ func TestApplyDefaultsMarksUnprobedDeviceAssignmentDirty(t *testing.T) {
 	}
 	if len(cfg.DeviceAssignments[1].DirtyReasons) != 0 {
 		t.Fatalf("expected previously probed device assignment to stay clean, got %v", cfg.DeviceAssignments[1].DirtyReasons)
+	}
+}
+
+func TestApplyDefaultsSetsMonitoringOnForLegacyConfig(t *testing.T) {
+	cfg := &Config{
+		DeviceAssignments: []DeviceAssignment{{MatchKey: "usb-1"}},
+		RTSPSources:       []RTSPSource{{RTSPURL: "rtsp://192.168.1.10:8554/live"}},
+	}
+
+	cfg.applyDefaults()
+
+	if cfg.DeviceAssignments[0].On == nil || !*cfg.DeviceAssignments[0].On {
+		t.Fatalf("expected legacy USB assignment to default on=true, got %#v", cfg.DeviceAssignments[0].On)
+	}
+	if cfg.RTSPSources[0].On == nil || !*cfg.RTSPSources[0].On {
+		t.Fatalf("expected legacy RTSP source to default on=true, got %#v", cfg.RTSPSources[0].On)
+	}
+}
+
+func TestSerializeIncludesMonitoringOnFlag(t *testing.T) {
+	cfg := &Config{
+		Multicast: MulticastConfig{IP: "239.255.0.1", StartPort: 9001},
+		Unicast:   UnicastConfig{StartPort: 9001},
+		DeviceAssignments: []DeviceAssignment{{
+			MatchKey:   "usb-1",
+			Name:       "USB",
+			ShortID:    "C1",
+			OutputPort: 9001,
+			On:         boolPtr(false),
+		}},
+		RTSPSources: []RTSPSource{{
+			SourceID:   "rtsp-1",
+			Name:       "RTSP",
+			Enabled:    true,
+			On:         boolPtr(false),
+			RTSPURL:    "rtsp://192.168.1.11:8554/live",
+			OutputPort: 9005,
+			Transport:  "tcp",
+		}},
+	}
+
+	serialized := cfg.serialize()
+
+	if !strings.Contains(serialized, "    on = false") {
+		t.Fatalf("expected serialized config to contain on = false, got:\n%s", serialized)
+	}
+	if !strings.Contains(serialized, "    enabled = true\n    on = false") {
+		t.Fatalf("expected RTSP enabled/on semantics in serialized config, got:\n%s", serialized)
 	}
 }
