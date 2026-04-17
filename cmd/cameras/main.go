@@ -426,6 +426,16 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder) []*came
 	return streams
 }
 
+func combineStopError(current error, next error) error {
+	if next == nil {
+		return current
+	}
+	if current == nil {
+		return next
+	}
+	return fmt.Errorf("%v; %w", current, next)
+}
+
 func multicastOutputURL(multicast camerascfg.MulticastConfig, port int) string {
 	url := fmt.Sprintf("udp://%s:%d?pkt_size=%d", multicast.IP, port, camerascfg.PktSize)
 	if multicast.LocalOnly {
@@ -782,10 +792,10 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// stopProcess gracefully stops a camera ffmpeg process.
-func stopProcess(stream *cameraStream, reason string) {
+// stopProcess stops a camera-related process and verifies the stream port is free afterwards.
+func stopProcess(stream *cameraStream, reason string) error {
 	if stream == nil {
-		return
+		return nil
 	}
 
 	stream.markStopping(reason)
@@ -793,11 +803,12 @@ func stopProcess(stream *cameraStream, reason string) {
 	stream.mu.Lock()
 	cmd := stream.cmd
 	stdin := stream.stdin
+	port := stream.port
 	stream.stdin = nil
 	stream.mu.Unlock()
 
 	if cmd == nil || cmd.Process == nil {
-		return
+		return nil
 	}
 
 	if reason != "" {
@@ -817,21 +828,21 @@ func stopProcess(stream *cameraStream, reason string) {
 	}
 
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-		return
+		if port > 0 {
+			return jobutil.WaitForUDPPortFree(port, 500*time.Millisecond)
+		}
+		return nil
 	}
 
-	// Try graceful shutdown first
-	if runtime.GOOS == "windows" {
-		// On Windows, use taskkill
-		kill := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", cmd.Process.Pid))
-		_ = kill.Run()
-	} else {
-		// On Unix, send SIGTERM then SIGKILL
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-		time.Sleep(150 * time.Millisecond)
-		// Give it a moment then force kill
-		_ = cmd.Process.Kill()
+	stopErr := jobutil.StopProcessTree(cmd.Process.Pid, 2*time.Second)
+	if port > 0 {
+		stopErr = combineStopError(stopErr, jobutil.StopUDPPortOwners(port, 2*time.Second))
+		stopErr = combineStopError(stopErr, jobutil.WaitForUDPPortFree(port, 500*time.Millisecond))
 	}
+	if stopErr != nil {
+		logging.ErrorLogger.Printf("Failed to fully stop %s (%s): %v", stream.camera.Name, stream.udpDest, stopErr)
+	}
+	return stopErr
 }
 
 func splitCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -995,7 +1006,7 @@ func (s *cameraStream) hasRecentProgressLocked(now time.Time, maxIdle time.Durat
 		return true
 	}
 	return now.Sub(s.progressSeenAt) <= maxIdle
-	}
+}
 
 func (s *cameraStream) updateDisplayMetadata(name, shortID string) {
 	s.mu.Lock()
@@ -1236,6 +1247,57 @@ func monitoringSourceNeedsRestart(spec sourceSpec, stream *cameraStream, now tim
 	}
 	_, shouldRestart := stream.autoRestartReason(now, rtspRetryDelay(0))
 	return shouldRestart
+}
+
+func rtspStartingAttemptLabel(recovery *rtspRecoveryState) string {
+	attempt := 1
+	if recovery != nil {
+		attempt += recovery.attempts
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > maxRTSPRetryAttempts {
+		attempt = maxRTSPRetryAttempts
+	}
+	return fmt.Sprintf("starting (%d/%d)", attempt, maxRTSPRetryAttempts)
+}
+
+func monitoringSourceStatus(spec sourceSpec, stream *cameraStream, recovery *rtspRecoveryState) string {
+	if strings.EqualFold(spec.SourceType, "rtsp") && recovery != nil && !recovery.exhausted {
+		if stream == nil {
+			if recovery.attention || !recovery.nextRetry.IsZero() {
+				return rtspStartingAttemptLabel(recovery)
+			}
+		}
+	}
+
+	if stream == nil {
+		return "stopped"
+	}
+
+	status := stream.snapshotRow()[8]
+	if !strings.EqualFold(spec.SourceType, "rtsp") {
+		return status
+	}
+	if stream.isInteractiveReady() {
+		return status
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	if strings.HasPrefix(normalized, "stopped") || strings.HasPrefix(normalized, "failed") {
+		if recovery != nil && !recovery.exhausted {
+			return rtspStartingAttemptLabel(recovery)
+		}
+		return "stopped"
+	}
+	if recovery != nil && recovery.attention {
+		return rtspStartingAttemptLabel(recovery)
+	}
+	if normalized == "running" || normalized == "starting" {
+		return rtspStartingAttemptLabel(recovery)
+	}
+	return status
 }
 
 func (s *cameraStream) snapshotRow() [9]string {
@@ -1796,6 +1858,10 @@ func runUI() {
 	var saveRTSPRow func(*rtspSourceRow) error
 	var removeRTSPRow func(*rtspSourceRow) error
 	var clearRestartDirtyForSource func(sourceSpec) error
+	var toggleSingleSource func(sourceSpec, bool) error
+	var validateSourceStart func(*sourceSpec) error
+	var promptToFreeBusyPort func(*sourceSpec, func())
+	var startSourceFromUI func(sourceSpec)
 	normalizeRTSPRows := func() {
 		var normalized []*rtspSourceRow
 		for _, row := range rtspRows {
@@ -2194,16 +2260,113 @@ func runUI() {
 		return nil
 	}
 
-	stopSingleSource := func(key, reason string) {
+	stopSingleSource := func(key, reason string) error {
 		idx := findStreamIndex(key)
 		if idx < 0 {
-			return
+			return nil
 		}
 		stream := (*currentStreams)[idx]
-		stopProcess(stream, reason)
+		stopErr := stopProcess(stream, reason)
 		updated := append([]*cameraStream(nil), (*currentStreams)[:idx]...)
 		updated = append(updated, (*currentStreams)[idx+1:]...)
 		*currentStreams = updated
+		return stopErr
+	}
+
+	ensurePortFreeForRestart := func(item *sourceSpec) error {
+		if item == nil || item.OutputPort <= 0 {
+			return nil
+		}
+		owners, err := jobutil.FindUDPPortOwners(item.OutputPort)
+		if err != nil {
+			return err
+		}
+		if len(owners) == 0 {
+			return nil
+		}
+		logging.InfoLogger.Printf("Port %d busy before start/restart of %s; stopping %s", item.OutputPort, item.Name, jobutil.DescribePortProcesses(owners))
+		if err := jobutil.StopUDPPortOwners(item.OutputPort, 2*time.Second); err != nil {
+			return err
+		}
+		return jobutil.WaitForUDPPortFree(item.OutputPort, 500*time.Millisecond)
+	}
+
+	promptToFreeBusyPort = func(item *sourceSpec, onReady func()) {
+		if item == nil {
+			return
+		}
+		owners, err := jobutil.FindUDPPortOwners(item.OutputPort)
+		if err != nil {
+			dialog.ShowError(err, window)
+			actionStatus.SetText(fmt.Sprintf("Start failed: %v", err))
+			return
+		}
+		if len(owners) == 0 {
+			if onReady != nil {
+				onReady()
+			}
+			return
+		}
+
+		heading := widget.NewLabel("Port is busy. Kill the existing process?")
+		details := widget.NewLabel(fmt.Sprintf("Port %d is in use by %s.", item.OutputPort, jobutil.DescribePortProcesses(owners)))
+		status := widget.NewLabel("")
+		cancelBtn := widget.NewButton("Cancel", nil)
+		killBtn := widget.NewButton("Kill", nil)
+		buttons := container.NewHBox(cancelBtn, killBtn)
+		body := container.NewVBox(heading, details, status, buttons)
+		prompt := dialog.NewCustomWithoutButtons("Port Busy", body, window)
+
+		cancelBtn.OnTapped = func() {
+			prompt.Hide()
+			actionStatus.SetText(fmt.Sprintf("Start canceled for %s.", item.Name))
+		}
+		killBtn.OnTapped = func() {
+			killBtn.Disable()
+			cancelBtn.Disable()
+			status.SetText(fmt.Sprintf("Stopping process on port %d...", item.OutputPort))
+			go func(port int, name string) {
+				killErr := jobutil.StopUDPPortOwners(port, 3*time.Second)
+				if killErr == nil {
+					killErr = jobutil.WaitForUDPPortFree(port, 500*time.Millisecond)
+				}
+				if killErr != nil {
+					status.SetText(fmt.Sprintf("Failed to kill existing process: %v", killErr))
+					cancelBtn.SetText("Close")
+					cancelBtn.Enable()
+					killBtn.Enable()
+					actionStatus.SetText(fmt.Sprintf("Start failed: %v", killErr))
+					return
+				}
+				prompt.Hide()
+				if onReady != nil {
+					onReady()
+				}
+			}(item.OutputPort, item.Name)
+		}
+		prompt.Show()
+	}
+
+	startSourceFromUI = func(spec sourceSpec) {
+		item, ok := findInventorySource(spec.Key)
+		if !ok {
+			err := fmt.Errorf("source %s not found", spec.Name)
+			dialog.ShowError(err, window)
+			actionStatus.SetText(fmt.Sprintf("Start failed: %v", err))
+			return
+		}
+		if err := validateSourceStart(item); err != nil {
+			dialog.ShowError(err, window)
+			actionStatus.SetText(fmt.Sprintf("Start failed: %v", err))
+			return
+		}
+		promptToFreeBusyPort(item, func() {
+			actionStatus.SetText(fmt.Sprintf("Starting %s...", item.Name))
+			if err := toggleSingleSource(spec, true); err != nil {
+				dialog.ShowError(err, window)
+				actionStatus.SetText(fmt.Sprintf("Start failed: %v", err))
+			}
+		})
 	}
 
 	setSourceMonitoringOn := func(spec sourceSpec, on bool) error {
@@ -2254,7 +2417,7 @@ func runUI() {
 		return nil
 	}
 
-	toggleSingleSource := func(spec sourceSpec, enabled bool) error {
+	toggleSingleSource = func(spec sourceSpec, enabled bool) error {
 		item, ok := findInventorySource(spec.Key)
 		if !ok {
 			return fmt.Errorf("source %s not found", spec.Name)
@@ -2286,7 +2449,9 @@ func runUI() {
 		if err := setSourceMonitoringOn(*item, false); err != nil {
 			return err
 		}
-		stopSingleSource(spec.Key, "toggle source off")
+		if err := stopSingleSource(spec.Key, "toggle source off"); err != nil {
+			return err
+		}
 		resetRTSPRecovery(spec.Key)
 		if err := clearRestartDirtyForSource(*item); err != nil {
 			return err
@@ -2295,7 +2460,7 @@ func runUI() {
 		return nil
 	}
 
-	validateSourceStart := func(item *sourceSpec) error {
+	validateSourceStart = func(item *sourceSpec) error {
 		if item.OutputPort <= 0 {
 			return fmt.Errorf("%s has no output port configured", item.Name)
 		}
@@ -2317,7 +2482,12 @@ func runUI() {
 			return err
 		}
 		if findStreamIndex(spec.Key) >= 0 {
-			stopSingleSource(spec.Key, "restart source")
+			if err := stopSingleSource(spec.Key, "restart source"); err != nil {
+				return err
+			}
+		}
+		if err := ensurePortFreeForRestart(item); err != nil {
+			return err
 		}
 		if err := startSingleSource(*item, resetRecovery); err != nil {
 			return fmt.Errorf("failed to restart %s: %w", item.Name, err)
@@ -2377,7 +2547,9 @@ func runUI() {
 			}
 
 			state := recoveryStateFor(stream.camera.MatchKey)
-			stopSingleSource(stream.camera.MatchKey, fmt.Sprintf("rtsp watchdog timeout: %s", reason))
+			if err := stopSingleSource(stream.camera.MatchKey, fmt.Sprintf("rtsp watchdog timeout: %s", reason)); err != nil {
+				logging.ErrorLogger.Printf("RTSP WATCHDOG STOP FAILED: source=%s port=%d error=%v", item.Name, item.OutputPort, err)
+			}
 
 			delay, retryAllowed := rtspRetryWindow(state.attempts)
 			if !retryAllowed {
@@ -3037,10 +3209,7 @@ func runUI() {
 			if stream != nil {
 				snapshot := stream.snapshotRow()
 				row[7] = snapshot[4]
-				row[10] = snapshot[8]
-				if recoveryState != nil && recoveryState.attention && !stream.isInteractiveReady() {
-					row[10] = "stopped"
-				}
+				row[10] = monitoringSourceStatus(spec, stream, recoveryState)
 			} else {
 				row[10] = "stopped"
 			}
@@ -3064,11 +3233,7 @@ func runUI() {
 				button.Enable()
 				capturedSpec := spec
 				button.OnTapped = func() {
-					actionStatus.SetText(fmt.Sprintf("Starting %s...", capturedSpec.Name))
-					if err := toggleSingleSource(capturedSpec, true); err != nil {
-						dialog.ShowError(err, window)
-						actionStatus.SetText(fmt.Sprintf("Start failed: %v", err))
-					}
+					startSourceFromUI(capturedSpec)
 				}
 				return
 			}
@@ -3408,9 +3573,13 @@ func runUI() {
 		unicastRow,
 	)
 	encoderSection := container.NewVBox(
-		newSectionTitle("Encoder"),
+		newSectionTitle("Detected Encoder"),
 		newVerticalGap(6),
 		encoderStatusLabel,
+	)
+	topConfigSections := container.NewGridWithColumns(2,
+		broadcastSection,
+		encoderSection,
 	)
 	usbSection := container.NewVBox(
 		newSectionTitle("Detected Sources"),
@@ -3450,9 +3619,7 @@ func runUI() {
 			newVerticalGap(4),
 			container.NewHBox(saveAllBtn, rescanBtn, restartFromConfigBtn),
 			newVerticalGap(8),
-			encoderSection,
-			newVerticalGap(12),
-			broadcastSection,
+			topConfigSections,
 			newVerticalGap(12),
 			usbSection,
 			newVerticalGap(12),

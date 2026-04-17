@@ -352,7 +352,7 @@ func TestPreviewArgsForSize(t *testing.T) {
 	}
 }
 
-func TestFaultedRTSPStatusUsesStoppedLabel(t *testing.T) {
+func TestUnreadyRTSPStatusUsesStartingLabel(t *testing.T) {
 	stream := &cameraStream{
 		sourceType: "rtsp",
 		cmd:        &exec.Cmd{},
@@ -360,6 +360,7 @@ func TestFaultedRTSPStatusUsesStoppedLabel(t *testing.T) {
 		status:     "running",
 		startTime:  time.Now().Add(-1 * time.Second),
 	}
+	spec := sourceSpec{SourceType: "rtsp"}
 	recovery := &rtspRecoveryState{attention: true, reason: "no stream progress after 2s"}
 
 	status := stream.snapshotRow()[8]
@@ -367,12 +368,28 @@ func TestFaultedRTSPStatusUsesStoppedLabel(t *testing.T) {
 		t.Fatalf("snapshot status = %q, want running before UI override", status)
 	}
 
-	uiStatus := status
-	if recovery.attention && !stream.isInteractiveReady() {
-		uiStatus = "stopped"
+	uiStatus := monitoringSourceStatus(spec, stream, recovery)
+	if uiStatus != "starting (1/3)" {
+		t.Fatalf("faulted UI status = %q, want starting (1/3)", uiStatus)
 	}
-	if uiStatus != "stopped" {
-		t.Fatalf("faulted UI status = %q, want stopped", uiStatus)
+}
+
+func TestExitedRTSPStatusUsesStartingLabelWhileRetryPending(t *testing.T) {
+	stream := &cameraStream{sourceType: "rtsp", status: "stopped: exit status 1", startTime: time.Now().Add(-5 * time.Second)}
+	spec := sourceSpec{SourceType: "rtsp"}
+	recovery := &rtspRecoveryState{attention: true, reason: "ffmpeg exited"}
+
+	if got := monitoringSourceStatus(spec, stream, recovery); got != "starting (1/3)" {
+		t.Fatalf("monitoringSourceStatus() = %q, want starting (1/3)", got)
+	}
+}
+
+func TestRetryBackoffRTSPStatusUsesStartingLabel(t *testing.T) {
+	spec := sourceSpec{SourceType: "rtsp"}
+	recovery := &rtspRecoveryState{attempts: 1, attention: true, nextRetry: time.Now().Add(4 * time.Second)}
+
+	if got := monitoringSourceStatus(spec, nil, recovery); got != "starting (2/3)" {
+		t.Fatalf("monitoringSourceStatus() = %q, want starting (2/3)", got)
 	}
 }
 
