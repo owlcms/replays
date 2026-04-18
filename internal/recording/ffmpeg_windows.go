@@ -33,11 +33,13 @@ func InitializeFFmpeg() error {
 		path = findFFmpeg()
 	}
 
-	// Verify the ffmpeg executable exists at the expected location
+	return applyFFmpegPath(path)
+}
+
+func applyFFmpegPath(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		logging.ErrorLogger.Printf("FFmpeg not found at %s: %v", path, err)
 		logging.ErrorLogger.Printf("Please ensure FFmpeg is properly downloaded to the installation directory")
-		// Still set the path - the application will handle the error when trying to use it
 		config.SetFFmpegPath(path)
 		return fmt.Errorf("ffmpeg not found at expected location: %s", path)
 	}

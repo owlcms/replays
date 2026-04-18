@@ -145,7 +145,7 @@ func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recordin
 
 	switch {
 	case enabledCount > 0 && len(inv.Active) == 0:
-		inv.Status = "No sources are on. Use Monitoring to start an enabled source."
+		inv.Status = "No sources are streaming. Use the Start buttons below to begin streaming."
 	case len(inv.Active) == 0 && len(inv.RTSP) > 0:
 		inv.Status = "No active sources. Enable an RTSP source or connect a camera."
 	case len(inv.Active) == 0:
@@ -196,6 +196,11 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 	sources := make([]sourceSpec, 0, len(filtered))
 	for _, cam := range filtered {
 		assignment := matchingDeviceAssignment(cam, assignmentsByAttachment, assignmentsByMatchKey)
+		if assignment != nil {
+			logging.InfoLogger.Printf("USB source %q matched assignment (disabled=%v, attachmentPath=%s)", cam.Name, assignment.Disabled, assignment.AttachmentPath)
+		} else {
+			logging.InfoLogger.Printf("USB source %q has no matching assignment (attachmentPath=%s, matchKey=%s) — defaults to enabled", cam.Name, cam.AttachmentPath, cam.MatchKey)
+		}
 
 		// Apply preferred pixel format before selecting mode
 		if assignment != nil && assignment.PreferredPixelFormat != "" {
@@ -245,6 +250,9 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 			dirtyReasons = normalizeSourceDirtyReasons(assignment.DirtyReasons)
 			preferredFormat = assignment.PreferredPixelFormat
 			enabled = !assignment.Disabled
+			if !enabled {
+				dirtyReasons = removeDirtyReason(dirtyReasons, "restart")
+			}
 		}
 		monitoringOn := true
 		if assignment != nil && assignment.On != nil {

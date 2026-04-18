@@ -47,6 +47,16 @@ func runTaskkill(args ...string) error {
 	return nil
 }
 
+// KillAllFFmpeg kills any remaining ffmpeg/ffplay processes that may have been
+// orphaned or missed by per-stream stopProcess calls.
+func KillAllFFmpeg() {
+	for _, name := range []string{"ffmpeg.exe", "ffplay.exe"} {
+		cmd := exec.Command("taskkill", "/F", "/IM", name)
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+		_ = cmd.Run()
+	}
+}
+
 func windowsProcessName(pid int) string {
 	if pid <= 0 {
 		return ""

@@ -56,6 +56,16 @@ func signalProcessGroup(pid int, signal syscall.Signal) error {
 	return nil
 }
 
+// KillAllFFmpeg kills any remaining ffmpeg/ffplay processes that may have been
+// orphaned or missed by per-stream stopProcess calls.
+func KillAllFFmpeg() {
+	for _, name := range []string{"ffmpeg", "ffplay"} {
+		if pkill, err := exec.LookPath("pkill"); err == nil {
+			_ = exec.Command(pkill, "-f", name).Run()
+		}
+	}
+}
+
 func canBindUDPPort(port int) bool {
 	conn, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
 	if err != nil {

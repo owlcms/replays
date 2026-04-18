@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -160,6 +161,37 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 	if path == "" {
 		path = "ffmpeg"
 	}
+
+	found := detectEncodersWithPath(path, cfg, progress)
+	if len(found) > 0 || runtime.GOOS != "linux" {
+		return found
+	}
+
+	fallbackPath := findLinuxSystemFFmpegPath(path)
+	if fallbackPath == "" {
+		return found
+	}
+
+	logging.InfoLogger.Printf("No working hardware encoders detected with %s; retrying with system ffmpeg %s", path, fallbackPath)
+	if progress != nil {
+		progress("Retrying hardware encoders with system ffmpeg...")
+	}
+
+	fallbackFound := detectEncodersWithPath(fallbackPath, cfg, progress)
+	if len(fallbackFound) == 0 {
+		return found
+	}
+
+	if err := applyFFmpegPath(fallbackPath); err != nil {
+		logging.ErrorLogger.Printf("Failed to switch to system ffmpeg after successful hardware-encoder probe: %v", err)
+		return found
+	}
+
+	logging.InfoLogger.Printf("Using system ffmpeg for hardware encoding after bundled ffmpeg probe failure: %s", fallbackPath)
+	return fallbackFound
+}
+
+func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgressFunc) []HwEncoder {
 	if progress != nil {
 		progress("Checking available hardware encoders...")
 	}
@@ -240,6 +272,48 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 		}
 	}
 	return found
+}
+
+func findLinuxSystemFFmpegPath(currentPath string) string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+
+	currentPath = canonicalExecutablePath(currentPath)
+	candidates := []string{"/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg"}
+	if lookPath, err := exec.LookPath("ffmpeg"); err == nil {
+		candidates = append(candidates, lookPath)
+	}
+
+	seen := make(map[string]struct{})
+	for _, candidate := range candidates {
+		canonical := canonicalExecutablePath(candidate)
+		if canonical == "" || canonical == currentPath {
+			continue
+		}
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		if _, err := os.Stat(canonical); err == nil {
+			return canonical
+		}
+	}
+
+	return ""
+}
+
+func canonicalExecutablePath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	if absPath, err := filepath.Abs(path); err == nil {
+		path = absPath
+	}
+	if resolvedPath, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolvedPath
+	}
+	return filepath.Clean(path)
 }
 
 // legacyEncoderCandidates returns the hardcoded encoder definitions used

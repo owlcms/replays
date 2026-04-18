@@ -52,7 +52,7 @@
 
 [cameras]
     # Include integrated/raw webcam modes for this instance.
-    includeAll = false
+    includeAll = true
 
 # =========================================================================
 # Autodetected USB Camera Assignments

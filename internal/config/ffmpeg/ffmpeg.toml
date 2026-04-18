@@ -69,7 +69,7 @@
     description = "NVIDIA GPU (NVENC)"
     gpuVendors = ["nvidia"]
     inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
-    videoFilter = ""
+    videoFilter = "format=yuv420p"
     outputParameters = "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M"
     testInit = ""
 
@@ -78,7 +78,7 @@
     description = "AMD GPU (AMF)"
     gpuVendors = ["amd"]
     inputParameters = "-rtbufsize 512M -thread_queue_size 4096"
-    videoFilter = ""
+    videoFilter = "format=yuv420p"
     outputParameters = "-c:v h264_amf -rc cbr -b:v 8M"
     testInit = ""
 
