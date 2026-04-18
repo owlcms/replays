@@ -667,6 +667,9 @@ func main() {
 		logging.WarningLogger.Printf("Warning: %v", err)
 		// Continue execution even if FFmpeg initialization fails
 	}
+	if err := recording.EnsureCompatibleFFmpegForRecording(cfg.Cameras); err != nil {
+		logging.WarningLogger.Printf("Warning: failed to switch to compatible ffmpeg for recording: %v", err)
+	}
 
 	// Set recording package configuration
 	recording.SetNoVideo(config.NoVideo)

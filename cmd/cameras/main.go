@@ -342,6 +342,13 @@ func main() {
 		fmt.Println("Using built-in defaults.")
 		cfg = &camerascfg.Config{}
 	}
+	if cfg.ClearRestartDirtyReasons() {
+		if saveErr := camerascfg.SaveConfig(cfg); saveErr != nil {
+			logging.WarningLogger.Printf("Failed to clear persisted restart dirty flags: %v", saveErr)
+		} else {
+			logging.InfoLogger.Printf("Cleared persisted restart dirty flags from cameras config on startup")
+		}
+	}
 	camerasConfig = cfg
 
 	// Apply CLI overrides
@@ -887,16 +894,32 @@ func monitorFFmpegErrors(stream *cameraStream, stderr io.Reader) {
 		stream.setLastStderr(line)
 
 		lower := strings.ToLower(line)
-		if strings.Contains(lower, "decode_slice_header") ||
-			strings.Contains(lower, "non-existing pps") ||
-			strings.Contains(lower, "no frame") ||
-			strings.Contains(lower, "corrupted") {
+		if shouldIgnoreFFmpegStderrLine(lower) {
 			continue
 		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "unable") || strings.Contains(lower, "invalid") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "device or resource busy") {
 			logging.ErrorLogger.Printf("ffmpeg stderr [%s]: %s", stream.camera.Name, line)
 		}
 	}
+}
+
+func shouldIgnoreFFmpegStderrLine(lower string) bool {
+	if strings.Contains(lower, "decode_slice_header") ||
+		strings.Contains(lower, "non-existing pps") ||
+		strings.Contains(lower, "no frame") ||
+		strings.Contains(lower, "corrupted") {
+		return true
+	}
+
+	if strings.Contains(lower, "unable to decode app fields") {
+		return true
+	}
+
+	if strings.Contains(lower, "invalid dts:") && strings.Contains(lower, "replacing by guess") {
+		return true
+	}
+
+	return false
 }
 
 func (s *cameraStream) setRunning() {

@@ -342,7 +342,7 @@ func isExpectedFFmpegStop(err error) bool {
 		}
 		if status.Exited() {
 			code := status.ExitStatus()
-			return code == 130 || code == 254 || code == 255
+			return code == 128 || code == 130 || code == 254 || code == 255
 		}
 	}
 

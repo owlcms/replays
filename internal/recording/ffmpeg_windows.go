@@ -147,12 +147,26 @@ func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) 
 }
 
 func forceKillCmd(cmd *exec.Cmd) error {
-	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
 	if cmd.Process == nil {
 		return nil
 	}
+	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
 	kill := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid))
-	return kill.Run()
+	kill.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+	out, err := kill.CombinedOutput()
+	if err != nil {
+		message := strings.ToLower(strings.TrimSpace(string(out)))
+		if strings.Contains(message, "no running instance") ||
+			strings.Contains(message, "not found") ||
+			strings.Contains(message, "no tasks are running") {
+			return nil
+		}
+		if message != "" {
+			return fmt.Errorf("taskkill /F /T /PID %d: %s: %w", cmd.Process.Pid, strings.TrimSpace(string(out)), err)
+		}
+		return fmt.Errorf("taskkill /F /T /PID %d: %w", cmd.Process.Pid, err)
+	}
+	return nil
 }
 
 // CreateHiddenCmd creates a command that runs without a visible console window on Windows.

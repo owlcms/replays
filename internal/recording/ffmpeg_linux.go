@@ -201,20 +201,25 @@ func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) 
 }
 
 func forceKillCmd(cmd *exec.Cmd) error {
-	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
 	if cmd.Process == nil {
 		return nil
 	}
+	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
 
 	// Kill the entire process group on Linux (equivalent to Windows /T flag)
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err == nil {
 		// Kill the process group
-		syscall.Kill(-pgid, syscall.SIGKILL)
+		if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil && killErr != syscall.ESRCH {
+			return killErr
+		}
 	}
 
 	// Also kill the main process as fallback
-	return cmd.Process.Kill()
+	if err := cmd.Process.Kill(); err != nil && !strings.Contains(strings.ToLower(err.Error()), "process already finished") {
+		return err
+	}
+	return nil
 }
 
 // CreateHiddenCmd creates a command. On Linux, no special handling is needed

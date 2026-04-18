@@ -351,6 +351,47 @@ func appendDirtyReason(reasons []string, reason string) []string {
 	return normalizeDirtyReasons(append(reasons, reason))
 }
 
+func removeDirtyReason(reasons []string, target string) []string {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		return normalizeDirtyReasons(reasons)
+	}
+	filtered := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if strings.ToLower(strings.TrimSpace(reason)) == target {
+			continue
+		}
+		filtered = append(filtered, reason)
+	}
+	return normalizeDirtyReasons(filtered)
+}
+
+// ClearRestartDirtyReasons removes persisted restart markers from all sources.
+// Returns true when any entry was changed.
+func (c *Config) ClearRestartDirtyReasons() bool {
+	if c == nil {
+		return false
+	}
+
+	changed := false
+	for i := range c.DeviceAssignments {
+		updated := removeDirtyReason(c.DeviceAssignments[i].DirtyReasons, "restart")
+		if strings.Join(updated, "\x00") != strings.Join(c.DeviceAssignments[i].DirtyReasons, "\x00") {
+			c.DeviceAssignments[i].DirtyReasons = updated
+			changed = true
+		}
+	}
+	for i := range c.RTSPSources {
+		updated := removeDirtyReason(c.RTSPSources[i].DirtyReasons, "restart")
+		if strings.Join(updated, "\x00") != strings.Join(c.RTSPSources[i].DirtyReasons, "\x00") {
+			c.RTSPSources[i].DirtyReasons = updated
+			changed = true
+		}
+	}
+
+	return changed
+}
+
 func (c *Config) ensureSourceIDs() {
 	used := make(map[string]struct{}, len(c.RTSPSources))
 	for i := range c.RTSPSources {

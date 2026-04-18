@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -161,18 +160,19 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 	if path == "" {
 		path = "ffmpeg"
 	}
+	logging.InfoLogger.Printf("Probing hardware encoders with ffmpeg: %s", path)
 
 	found := detectEncodersWithPath(path, cfg, progress)
-	if len(found) > 0 || runtime.GOOS != "linux" {
+	if !shouldRetrySystemFFmpegProbe(found) {
 		return found
 	}
 
-	fallbackPath := findLinuxSystemFFmpegPath(path)
+	fallbackPath := findSystemFFmpegPath(path)
 	if fallbackPath == "" {
 		return found
 	}
 
-	logging.InfoLogger.Printf("No working hardware encoders detected with %s; retrying with system ffmpeg %s", path, fallbackPath)
+	logging.InfoLogger.Printf("Retrying hardware encoder probe with system ffmpeg %s after bundled probe with %s", fallbackPath, path)
 	if progress != nil {
 		progress("Retrying hardware encoders with system ffmpeg...")
 	}
@@ -191,6 +191,29 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 	return fallbackFound
 }
 
+func shouldRetrySystemFFmpegProbe(found []HwEncoder) bool {
+	if len(found) == 0 {
+		return true
+	}
+
+	vendors := detectGPUVendors()
+	if vendors["nvidia"] && !containsHwEncoder(found, "h264_nvenc") {
+		logging.InfoLogger.Printf("NVIDIA GPU detected but h264_nvenc was not verified with the current ffmpeg; checking for system ffmpeg 6 fallback")
+		return true
+	}
+
+	return false
+}
+
+func containsHwEncoder(encoders []HwEncoder, name string) bool {
+	for _, enc := range encoders {
+		if enc.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgressFunc) []HwEncoder {
 	if progress != nil {
 		progress("Checking available hardware encoders...")
@@ -201,7 +224,9 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 		logging.InfoLogger.Printf("Detected GPU vendors: %s", strings.Join(sortedVendorKeys(detectedGPUVendors), ", "))
 	}
 
-	cmd := CreateHiddenCmd(path, "-hide_banner", "-encoders")
+	encoderQueryArgs := []string{"-hide_banner", "-encoders"}
+	logging.InfoLogger.Printf("Querying ffmpeg encoders: %s", formatCommandLine(path, encoderQueryArgs))
+	cmd := CreateHiddenCmd(path, encoderQueryArgs...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -239,11 +264,7 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 				logging.InfoLogger.Printf("Skipping encoder %s: platform=%s, current_os=%s", enc.Name, enc.Platform, runtime.GOOS)
 				continue
 			}
-			if !encoderMatchesDetectedGPU(enc, detectedGPUVendors) {
-				logging.InfoLogger.Printf("Skipping encoder %s: configured for gpuVendors=%v, detected=%v", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
-				continue
-			}
-			logging.InfoLogger.Printf("Encoder %s is a candidate (gpuVendors=%v match detected=%v)", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
+			logging.InfoLogger.Printf("Encoder %s is a candidate (gpuVendors=%v, detected=%v)", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
 			candidates = append(candidates, HwEncoder{
 				Name:             enc.Name,
 				Description:      enc.Description,
@@ -272,48 +293,6 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 		}
 	}
 	return found
-}
-
-func findLinuxSystemFFmpegPath(currentPath string) string {
-	if runtime.GOOS != "linux" {
-		return ""
-	}
-
-	currentPath = canonicalExecutablePath(currentPath)
-	candidates := []string{"/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg"}
-	if lookPath, err := exec.LookPath("ffmpeg"); err == nil {
-		candidates = append(candidates, lookPath)
-	}
-
-	seen := make(map[string]struct{})
-	for _, candidate := range candidates {
-		canonical := canonicalExecutablePath(candidate)
-		if canonical == "" || canonical == currentPath {
-			continue
-		}
-		if _, exists := seen[canonical]; exists {
-			continue
-		}
-		seen[canonical] = struct{}{}
-		if _, err := os.Stat(canonical); err == nil {
-			return canonical
-		}
-	}
-
-	return ""
-}
-
-func canonicalExecutablePath(path string) string {
-	if strings.TrimSpace(path) == "" {
-		return ""
-	}
-	if absPath, err := filepath.Abs(path); err == nil {
-		path = absPath
-	}
-	if resolvedPath, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolvedPath
-	}
-	return filepath.Clean(path)
 }
 
 // legacyEncoderCandidates returns the hardcoded encoder definitions used
@@ -355,42 +334,6 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 		})
 	}
 	return candidates
-}
-
-func encoderMatchesDetectedGPU(enc ffmpeg.EncoderConfig, detected map[string]bool) bool {
-	vendors := enc.GpuVendors
-	if len(vendors) == 0 {
-		vendors = inferredVendorsForEncoder(enc.Name)
-	}
-
-	if len(vendors) == 0 || len(detected) == 0 {
-		return true
-	}
-	for _, vendor := range vendors {
-		vendor = strings.ToLower(strings.TrimSpace(vendor))
-		if vendor == "" {
-			continue
-		}
-		if detected[vendor] {
-			return true
-		}
-	}
-	return false
-}
-
-func inferredVendorsForEncoder(name string) []string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "h264_nvenc":
-		return []string{"nvidia"}
-	case "h264_amf":
-		return []string{"amd"}
-	case "h264_vaapi":
-		return []string{"amd", "intel"}
-	case "h264_qsv":
-		return []string{"intel"}
-	default:
-		return nil
-	}
 }
 
 func encoderPlatformMatchesRuntime(platform string) bool {
@@ -566,6 +509,44 @@ func summarizeEncoderProbeError(stderr string) string {
 	return "no ffmpeg error details"
 }
 
+func formatCommandLine(name string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, strconv.Quote(name))
+	for _, arg := range args {
+		parts = append(parts, strconv.Quote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+var ffmpegVersion6Pattern = regexp.MustCompile(`(?i)^ffmpeg version (?:n)?6(?:[.\s-]|$)`)
+
+func isFFmpegVersion6(path string) bool {
+	cmd := CreateHiddenCmd(path, "-version")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		logging.InfoLogger.Printf("Skipping system ffmpeg candidate %s: failed to query version: %v", path, err)
+		return false
+	}
+
+	versionLine := strings.TrimSpace(out.String())
+	if idx := strings.Index(versionLine, "\n"); idx >= 0 {
+		versionLine = strings.TrimSpace(versionLine[:idx])
+	}
+	if versionLine == "" {
+		logging.InfoLogger.Printf("Skipping system ffmpeg candidate %s: empty version output", path)
+		return false
+	}
+	if !ffmpegVersion6Pattern.MatchString(versionLine) {
+		logging.InfoLogger.Printf("Skipping system ffmpeg candidate %s: expected ffmpeg 6.x, got %s", path, versionLine)
+		return false
+	}
+
+	logging.InfoLogger.Printf("System ffmpeg candidate %s matches required version: %s", path, versionLine)
+	return true
+}
+
 // testEncoderWithInit tests whether an encoder actually works on this hardware,
 // using the TestInit field for any required hardware init flags.
 func testEncoderWithInit(ffmpegPath string, enc HwEncoder) bool {
@@ -585,6 +566,8 @@ func testEncoderWithInit(ffmpegPath string, enc HwEncoder) bool {
 			"-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.1",
 			"-c:v", enc.Name, "-f", "null", "-"}
 	}
+
+	logging.InfoLogger.Printf("Testing encoder %s with command: %s", enc.Name, formatCommandLine(ffmpegPath, args))
 
 	cmd := CreateHiddenCmd(ffmpegPath, args...)
 	var stderr bytes.Buffer
