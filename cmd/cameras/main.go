@@ -1031,15 +1031,6 @@ func (s *cameraStream) hasRecentProgressLocked(now time.Time, maxIdle time.Durat
 	return now.Sub(s.progressSeenAt) <= maxIdle
 }
 
-func (s *cameraStream) updateDisplayMetadata(name, shortID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if strings.TrimSpace(name) != "" {
-		s.camera.Name = name
-	}
-	s.shortID = shortID
-}
-
 func (s *cameraStream) clearProcessHandles(cmd *exec.Cmd) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
