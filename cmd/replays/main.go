@@ -432,22 +432,22 @@ func openConfigFile() {
 // Multicast camera helpers
 // ---------------------------------------------------------------------------
 
-// toggleMulticast flips the MPEG-TS enabled flag, saves, and prompts for restart.
+// toggleMulticast flips the Camera Module Streams flag, saves, and prompts for restart.
 func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	cfg.Multicast.Enabled = !cfg.Multicast.Enabled
 
 	configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
 	if err := replays.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
-		dialog.ShowError(fmt.Errorf("failed to save mpeg-ts setting: %w", err), window)
+		dialog.ShowError(fmt.Errorf("failed to save Camera Module Stream setting: %w", err), window)
 		cfg.Multicast.Enabled = !cfg.Multicast.Enabled // revert
 		return
 	}
 
 	var msg string
 	if cfg.Multicast.Enabled {
-		msg = "MPEG-TS camera streams enabled."
+		msg = "Camera Module Streams enabled."
 	} else {
-		msg = "MPEG-TS camera streams disabled. Local cameras will be used."
+		msg = "Camera Module Streams disabled. Local cameras will be used."
 	}
 	successDialog := dialog.NewInformation("Success", msg+" The application will now exit. Please restart it.", window)
 	successDialog.SetOnClosed(func() {
@@ -457,7 +457,7 @@ func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	successDialog.Show()
 }
 
-// showMulticastConfig shows a dialog to configure the MPEG-TS IP and port mapping.
+// showMulticastConfig shows a dialog to configure the Camera Module Stream IP and port mapping.
 func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	m := cfg.Multicast
 	portToText := func(port int) string {
@@ -504,7 +504,7 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	hint.Wrapping = fyne.TextWrapWord
 	content := container.NewVBox(form, hint)
 
-	dlg := dialog.NewCustomConfirm("MPEG-TS Stream Configuration", "Save", "Cancel", content,
+	dlg := dialog.NewCustomConfirm("Camera Module Stream Configuration", "Save", "Cancel", content,
 		func(save bool) {
 			if !save {
 				return
@@ -545,7 +545,7 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 
 			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
 			if err := replays.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to save mpeg-ts config: %w", err), window)
+				dialog.ShowError(fmt.Errorf("failed to save Camera Module Stream config: %w", err), window)
 				return
 			}
 
@@ -567,9 +567,9 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 // multicastToggleLabel returns the menu label text based on current state.
 func multicastToggleLabel(enabled bool) string {
 	if enabled {
-		return "Stop using MPEG-TS streams"
+		return "Stop using Camera Module Streams"
 	}
-	return "Use MPEG-TS Camera Streams"
+	return "Use Camera Module Streams"
 }
 
 // isUnicastIP reports whether ip is a unicast listen address (0.0.0.0 or a
@@ -737,7 +737,7 @@ func main() {
 	multicastToggle.Action = func() {
 		toggleMulticast(cfg, window)
 	}
-	multicastConfigItem := fyne.NewMenuItem("MPEG-TS Configuration", func() {
+	multicastConfigItem := fyne.NewMenuItem("Camera Module Stream Configuration", func() {
 		showMulticastConfig(cfg, window)
 	})
 

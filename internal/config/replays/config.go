@@ -163,6 +163,26 @@ func LoadConfig(configFile string) (*Config, error) {
 		return result
 	}
 
+	loadAutoCamerasFromRaw := func(rawMap map[string]interface{}, sourceName string) []config.CameraConfiguration {
+		var result []config.CameraConfiguration
+		for i := 1; ; i++ {
+			key := "camera" + strconv.Itoa(i)
+			confRaw, exists := rawMap[key]
+			if !exists {
+				break
+			}
+			pc, err := decodePlatformConfig(key, confRaw)
+			if err != nil {
+				continue
+			}
+			result = append(result, pc)
+		}
+		if len(result) > 0 {
+			logging.InfoLogger.Printf("Loaded %d camera configurations from %s", len(result), sourceName)
+		}
+		return result
+	}
+
 	if cfg.Multicast.Enabled {
 		cfg.Multicast.ApplyDefaults()
 		multicastCameras := cfg.Multicast.BuildCameraConfigs()
@@ -172,28 +192,25 @@ func LoadConfig(configFile string) (*Config, error) {
 		cameras = multicastCameras
 		logging.InfoLogger.Printf("MPEG-TS mode enabled: loaded %d camera stream(s) from %s", len(multicastCameras), configFile)
 	} else {
+		manualCameras := loadPlatformCamerasFromRaw(raw, configFile)
 		autoTomlPath := filepath.Join(config.GetInstallDir(), "auto.toml")
 		if _, err := os.Stat(autoTomlPath); err == nil {
 			logging.InfoLogger.Printf("Found auto.toml, loading camera configurations from it")
 			var autoRaw map[string]interface{}
 			if _, err := toml.DecodeFile(autoTomlPath, &autoRaw); err == nil {
-				for i := 1; ; i++ {
-					key := "camera" + strconv.Itoa(i)
-					confRaw, exists := autoRaw[key]
-					if !exists {
-						break
-					}
-					pc, err := decodePlatformConfig(key, confRaw)
-					if err != nil {
-						continue
-					}
-					cameras = append(cameras, pc)
-				}
-				if len(cameras) > 0 {
-					logging.InfoLogger.Printf("Loaded %d camera configurations from auto.toml", len(cameras))
+				autoCameras := loadAutoCamerasFromRaw(autoRaw, "auto.toml")
+				cameras = mergeCameraConfigurations(autoCameras, manualCameras)
+				if len(autoCameras) > 0 && len(manualCameras) > 0 {
+					logging.InfoLogger.Printf("Merged %d auto.toml camera configuration(s) with %d manual configuration(s) from %s", len(autoCameras), len(manualCameras), configFile)
 				}
 			} else {
 				logging.ErrorLogger.Printf("Failed to parse auto.toml: %v", err)
+			}
+		}
+
+		if len(cameras) == 0 {
+			if len(manualCameras) > 0 {
+				cameras = manualCameras
 			}
 		}
 
@@ -210,9 +227,6 @@ func LoadConfig(configFile string) (*Config, error) {
 			}
 		}
 
-		if len(cameras) == 0 {
-			cameras = loadPlatformCamerasFromRaw(raw, configFile)
-		}
 	}
 
 	cfg.Cameras = cameras
@@ -248,6 +262,46 @@ func LoadConfig(configFile string) (*Config, error) {
 	currentConfig = &cfg
 	config.LogFfmpeg = cfg.LogFfmpeg
 	return &cfg, nil
+}
+
+func mergeCameraConfigurations(autoCameras, manualCameras []config.CameraConfiguration) []config.CameraConfiguration {
+	if len(autoCameras) == 0 {
+		return append([]config.CameraConfiguration(nil), manualCameras...)
+	}
+	if len(manualCameras) == 0 {
+		return append([]config.CameraConfiguration(nil), autoCameras...)
+	}
+
+	merged := append([]config.CameraConfiguration(nil), autoCameras...)
+	indexBySource := make(map[string]int, len(merged))
+	for i, camera := range merged {
+		if key := cameraSourceKey(camera); key != "" {
+			indexBySource[key] = i
+		}
+	}
+
+	for _, camera := range manualCameras {
+		key := cameraSourceKey(camera)
+		if idx, ok := indexBySource[key]; ok && key != "" {
+			merged[idx] = camera
+			continue
+		}
+		merged = append(merged, camera)
+		if key != "" {
+			indexBySource[key] = len(merged) - 1
+		}
+	}
+
+	return merged
+}
+
+func cameraSourceKey(camera config.CameraConfiguration) string {
+	format := strings.ToLower(strings.TrimSpace(camera.Format))
+	source := strings.ToLower(strings.TrimSpace(camera.FfmpegCamera))
+	if format == "" || source == "" {
+		return ""
+	}
+	return format + "|" + source
 }
 
 // GetCurrentConfig returns the current configuration.
