@@ -32,11 +32,18 @@ logFfmpeg = false
     camera3Port = 0
     camera4Port = 0
 
-# Camera source precedence in replays (first match used):
+# Camera source loading in replays:
 # 1) [mpeg-ts] section above (when enabled = true)
-# 2) auto.toml camera sections (when mpeg-ts is disabled and auto.toml exists)
-# 3) default_cameras.toml platform sections
-# 4) legacy camera sections in config.toml ([windows*], [linux*], etc.)
+# 2) when mpeg-ts is disabled, auto.toml and config.toml camera sections are merged
+#    - auto.toml [cameraN] sections load first
+#    - config.toml [windows*]/[linux*] sections append additional sources
+#    - matching manual sources override the same source from auto.toml
+# 3) default_cameras.toml platform sections are used only when no direct-input sources are configured
+#
+# Recommended workflow:
+# - leave auto.toml as the generated baseline
+# - keep config.toml camera sections only for manual additions or explicit overrides
+# - do not copy the full auto.toml into config.toml unless you want to take over everything manually
 #
 # Note: this precedence applies only to camera source definitions.
 # Other application settings (port, videoDir, owlcms, etc.) are still read from config.toml.

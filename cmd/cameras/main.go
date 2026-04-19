@@ -342,6 +342,13 @@ func main() {
 		fmt.Println("Using built-in defaults.")
 		cfg = &camerascfg.Config{}
 	}
+	if cfg.ClearRestartDirtyReasons() {
+		if saveErr := camerascfg.SaveConfig(cfg); saveErr != nil {
+			logging.WarningLogger.Printf("Failed to clear persisted restart dirty flags: %v", saveErr)
+		} else {
+			logging.InfoLogger.Printf("Cleared persisted restart dirty flags from cameras config on startup")
+		}
+	}
 	camerasConfig = cfg
 
 	// Apply CLI overrides
@@ -887,16 +894,32 @@ func monitorFFmpegErrors(stream *cameraStream, stderr io.Reader) {
 		stream.setLastStderr(line)
 
 		lower := strings.ToLower(line)
-		if strings.Contains(lower, "decode_slice_header") ||
-			strings.Contains(lower, "non-existing pps") ||
-			strings.Contains(lower, "no frame") ||
-			strings.Contains(lower, "corrupted") {
+		if shouldIgnoreFFmpegStderrLine(lower) {
 			continue
 		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "unable") || strings.Contains(lower, "invalid") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "device or resource busy") {
 			logging.ErrorLogger.Printf("ffmpeg stderr [%s]: %s", stream.camera.Name, line)
 		}
 	}
+}
+
+func shouldIgnoreFFmpegStderrLine(lower string) bool {
+	if strings.Contains(lower, "decode_slice_header") ||
+		strings.Contains(lower, "non-existing pps") ||
+		strings.Contains(lower, "no frame") ||
+		strings.Contains(lower, "corrupted") {
+		return true
+	}
+
+	if strings.Contains(lower, "unable to decode app fields") {
+		return true
+	}
+
+	if strings.Contains(lower, "invalid dts:") && strings.Contains(lower, "replacing by guess") {
+		return true
+	}
+
+	return false
 }
 
 func (s *cameraStream) setRunning() {
@@ -1006,15 +1029,6 @@ func (s *cameraStream) hasRecentProgressLocked(now time.Time, maxIdle time.Durat
 		return true
 	}
 	return now.Sub(s.progressSeenAt) <= maxIdle
-}
-
-func (s *cameraStream) updateDisplayMetadata(name, shortID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if strings.TrimSpace(name) != "" {
-		s.camera.Name = name
-	}
-	s.shortID = shortID
 }
 
 func (s *cameraStream) clearProcessHandles(cmd *exec.Cmd) {
@@ -1828,6 +1842,8 @@ func runUI() {
 	}
 	restartBtn := widget.NewButton("Restart Streams", nil)
 	restartBtn.Importance = widget.HighImportance
+	stopAllBtn := widget.NewButton("Stop All Streams", nil)
+	stopAllBtn.Importance = widget.HighImportance
 	broadcastRestartBtn := widget.NewButton("Restart", nil)
 	broadcastRestartBtn.Importance = widget.MediumImportance
 	rescanBtn := widget.NewButton("Rescan Sources", nil)
@@ -1862,6 +1878,7 @@ func runUI() {
 	var validateSourceStart func(*sourceSpec) error
 	var promptToFreeBusyPort func(*sourceSpec, func())
 	var startSourceFromUI func(sourceSpec)
+	var stopSingleSource func(string, string) error
 	normalizeRTSPRows := func() {
 		var normalized []*rtspSourceRow
 		for _, row := range rtspRows {
@@ -1975,6 +1992,53 @@ func runUI() {
 					}
 				}, window)
 			}))
+			// Override enabledCheck.OnChanged after object() to avoid loop variable capture issues.
+			// index := i is per-iteration, so closures here correctly capture the right row.
+			usbRows[index].enabledCheck.OnChanged = func(checked bool) {
+				row := usbRows[index]
+				name := strings.TrimSpace(row.nameEntry.Text)
+				if name == "" {
+					name = row.identity
+				}
+				isRunning := false
+				for _, stream := range *currentStreams {
+					if stream != nil && stream.camera.MatchKey == row.matchKey {
+						isRunning = true
+						break
+					}
+				}
+				if !checked && isRunning {
+					dialog.ShowConfirm("Stop Stream?",
+						fmt.Sprintf("This will stop the camera stream for %s.", name),
+						func(ok bool) {
+							if !ok {
+								changed := row.enabledCheck.OnChanged
+								row.enabledCheck.OnChanged = nil
+								row.enabledCheck.SetChecked(true)
+								row.enabledCheck.OnChanged = changed
+								return
+							}
+							row.markDirty()
+							if err := saveUSBRow(row); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
+								return
+							}
+							if err := stopSingleSource(row.matchKey, "disabled by user"); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
+								return
+							}
+							actionStatus.SetText(fmt.Sprintf("Stopped %s.", name))
+						}, window)
+				} else {
+					row.markDirty()
+					if err := saveUSBRow(row); err != nil {
+						dialog.ShowError(err, window)
+						actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
+					}
+				}
+			}
 		}
 		usbRowsContainer.Objects = objects
 		usbRowsContainer.Refresh()
@@ -2112,6 +2176,52 @@ func runUI() {
 					actionStatus.SetText(fmt.Sprintf("Remove failed: %v", err))
 				}
 			}))
+			// Override enabledCheck.OnChanged after object() to avoid loop variable capture issues.
+			rtspRows[index].enabledCheck.OnChanged = func(checked bool) {
+				row := rtspRows[index]
+				name := strings.TrimSpace(row.nameEntry.Text)
+				if name == "" {
+					name = summarizeRTSPURL(row.urlEntry.Text)
+				}
+				isRunning := false
+				for _, stream := range *currentStreams {
+					if stream != nil && stream.camera.MatchKey == row.sourceID {
+						isRunning = true
+						break
+					}
+				}
+				if !checked && isRunning {
+					dialog.ShowConfirm("Stop Stream?",
+						fmt.Sprintf("This will stop the camera stream for %s.", name),
+						func(ok bool) {
+							if !ok {
+								changed := row.enabledCheck.OnChanged
+								row.enabledCheck.OnChanged = nil
+								row.enabledCheck.SetChecked(true)
+								row.enabledCheck.OnChanged = changed
+								return
+							}
+							row.markDirty()
+							if err := saveRTSPRow(row); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
+								return
+							}
+							if err := stopSingleSource(row.sourceID, "disabled by user"); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
+								return
+							}
+							actionStatus.SetText(fmt.Sprintf("Stopped %s.", name))
+						}, window)
+				} else {
+					row.markDirty()
+					if err := saveRTSPRow(row); err != nil {
+						dialog.ShowError(err, window)
+						actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
+					}
+				}
+			}
 		}
 		rtspRowsContainer.Objects = objects
 		rtspRowsContainer.Refresh()
@@ -2260,7 +2370,7 @@ func runUI() {
 		return nil
 	}
 
-	stopSingleSource := func(key, reason string) error {
+	stopSingleSource = func(key, reason string) error {
 		idx := findStreamIndex(key)
 		if idx < 0 {
 			return nil
@@ -3365,6 +3475,7 @@ func runUI() {
 		for _, stream := range *currentStreams {
 			stopProcess(stream, "restart or shutdown all streams")
 		}
+		jobutil.KillAllFFmpeg()
 	}
 
 	restartWithInventory = func(inv sourceInventory, successMessage string) {
@@ -3404,6 +3515,21 @@ func runUI() {
 
 	restartBtn.OnTapped = func() {
 		restartStreams()
+	}
+	stopAllBtn.OnTapped = func() {
+		dialog.ShowConfirm("Stop All Streams?",
+			"This will stop all camera streams.",
+			func(ok bool) {
+				if !ok {
+					return
+				}
+				actionStatus.SetText("Stopping all streams...")
+				stopAll()
+				*currentStreams = nil
+				table.Refresh()
+				updateCameraStatusLabel("All streams stopped.")
+				actionStatus.SetText("All streams stopped.")
+			}, window)
 	}
 	broadcastRestartBtn.OnTapped = func() {
 		restartStreams()
@@ -3595,7 +3721,7 @@ func runUI() {
 	monitoringTab := container.NewBorder(
 		container.NewVBox(
 			cameraStatusLabel,
-			container.NewHBox(actionStatus, clipLink, restartBtn),
+			container.NewHBox(actionStatus, clipLink, restartBtn, stopAllBtn),
 		),
 		nil,
 		nil,

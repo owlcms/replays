@@ -41,10 +41,30 @@ func killProcess(pid int) error {
 func runTaskkill(args ...string) error {
 	cmd := exec.Command("taskkill", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
-	if err := cmd.Run(); err != nil {
-		return err
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.ToLower(strings.TrimSpace(string(out)))
+		if strings.Contains(message, "no running instance") ||
+			strings.Contains(message, "not found") ||
+			strings.Contains(message, "no tasks are running") {
+			return nil
+		}
+		if message != "" {
+			return fmt.Errorf("taskkill %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
+		}
+		return fmt.Errorf("taskkill %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+// KillAllFFmpeg kills any remaining ffmpeg/ffplay processes that may have been
+// orphaned or missed by per-stream stopProcess calls.
+func KillAllFFmpeg() {
+	for _, name := range []string{"ffmpeg.exe", "ffplay.exe"} {
+		cmd := exec.Command("taskkill", "/F", "/IM", name)
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+		_ = cmd.Run()
+	}
 }
 
 func windowsProcessName(pid int) string {

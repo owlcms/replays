@@ -122,3 +122,31 @@ func TestSerializeIncludesMonitoringOnFlag(t *testing.T) {
 		t.Fatalf("expected RTSP enabled/on semantics in serialized config, got:\n%s", serialized)
 	}
 }
+
+func TestClearRestartDirtyReasonsRemovesRestartOnly(t *testing.T) {
+	cfg := &Config{
+		DeviceAssignments: []DeviceAssignment{{
+			MatchKey:      "usb-1",
+			DirtyReasons:  []string{"probe", "restart"},
+		}},
+		RTSPSources: []RTSPSource{{
+			SourceID:     "rtsp-1",
+			DirtyReasons: []string{"restart"},
+		}},
+	}
+
+	changed := cfg.ClearRestartDirtyReasons()
+	if !changed {
+		t.Fatalf("expected restart dirty reasons to be cleared")
+	}
+	if got := cfg.DeviceAssignments[0].DirtyReasons; len(got) != 1 || got[0] != "probe" {
+		t.Fatalf("expected usb dirty reasons to preserve probe only, got %v", got)
+	}
+	if got := cfg.RTSPSources[0].DirtyReasons; len(got) != 0 {
+		t.Fatalf("expected rtsp dirty reasons to be empty, got %v", got)
+	}
+
+	if cfg.ClearRestartDirtyReasons() {
+		t.Fatalf("expected second clear to report no changes")
+	}
+}

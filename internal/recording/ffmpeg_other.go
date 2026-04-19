@@ -27,11 +27,13 @@ func InitializeFFmpeg() error {
 		path = findFFmpeg()
 	}
 
-	// Verify the ffmpeg executable exists at the expected location
+	return applyFFmpegPath(path)
+}
+
+func applyFFmpegPath(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		logging.ErrorLogger.Printf("FFmpeg not found at %s: %v", path, err)
 		logging.ErrorLogger.Printf("Please install FFmpeg using your package manager or from https://ffmpeg.org/")
-		// Still set the path - the application will handle the error when trying to use it
 		config.SetFFmpegPath(path)
 		return fmt.Errorf("ffmpeg not found at expected location: %s", path)
 	}
@@ -119,11 +121,14 @@ func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) 
 }
 
 func forceKillCmd(cmd *exec.Cmd) error {
-	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
 	if cmd.Process == nil {
 		return nil
 	}
-	return cmd.Process.Kill()
+	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
+	if err := cmd.Process.Kill(); err != nil && !strings.Contains(strings.ToLower(err.Error()), "process already finished") {
+		return err
+	}
+	return nil
 }
 
 // CreateHiddenCmd creates a command. On non-Windows platforms, no special handling

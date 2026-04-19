@@ -17,6 +17,7 @@ import (
 )
 
 var ffmpegLogSeq uint64
+var activeFFmpegLibDir string
 
 // InitializeFFmpeg finds and stores the ffmpeg path in config for Linux
 func InitializeFFmpeg() error {
@@ -31,33 +32,76 @@ func InitializeFFmpeg() error {
 		path = findFFmpeg()
 	}
 
-	// Verify the ffmpeg executable exists at the expected location
+	return applyFFmpegPath(path)
+}
+
+func applyFFmpegPath(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		logging.ErrorLogger.Printf("FFmpeg not found at %s: %v", path, err)
 		logging.ErrorLogger.Printf("Please install FFmpeg using your package manager")
-		// Still set the path - the application will handle the error when trying to use it
 		config.SetFFmpegPath(path)
 		return fmt.Errorf("ffmpeg not found at expected location: %s", path)
 	}
 
 	config.SetFFmpegPath(path)
 	logging.InfoLogger.Printf("FFmpeg executable set to: %s", path)
+	applyLinuxFFmpegLibraryPath(path)
+	return nil
+}
 
-	// For shared builds, ensure LD_LIBRARY_PATH includes the sibling lib/ directory
-	// so that child ffmpeg processes can find libavdevice.so etc.
+func applyLinuxFFmpegLibraryPath(path string) {
 	binDir := filepath.Dir(path)
 	libDir := filepath.Join(filepath.Dir(binDir), "lib")
-	if st, err := os.Stat(libDir); err == nil && st.IsDir() {
-		existing := os.Getenv("LD_LIBRARY_PATH")
-		if existing == "" {
-			_ = os.Setenv("LD_LIBRARY_PATH", libDir)
-		} else if !strings.Contains(existing, libDir) {
-			_ = os.Setenv("LD_LIBRARY_PATH", libDir+":"+existing)
-		}
-		logging.InfoLogger.Printf("LD_LIBRARY_PATH set to: %s", os.Getenv("LD_LIBRARY_PATH"))
+	existingEntries := strings.FieldsFunc(os.Getenv("LD_LIBRARY_PATH"), func(r rune) bool {
+		return r == ':'
+	})
+
+	if activeFFmpegLibDir != "" && activeFFmpegLibDir != libDir {
+		existingEntries = removePathEntry(existingEntries, activeFFmpegLibDir)
+		activeFFmpegLibDir = ""
 	}
 
-	return nil
+	if st, err := os.Stat(libDir); err == nil && st.IsDir() {
+		if !containsPathEntry(existingEntries, libDir) {
+			existingEntries = append([]string{libDir}, existingEntries...)
+		}
+		activeFFmpegLibDir = libDir
+	} else if activeFFmpegLibDir != "" {
+		existingEntries = removePathEntry(existingEntries, activeFFmpegLibDir)
+		activeFFmpegLibDir = ""
+	}
+
+	newValue := strings.Join(existingEntries, ":")
+	_ = os.Setenv("LD_LIBRARY_PATH", newValue)
+	if newValue != "" {
+		logging.InfoLogger.Printf("LD_LIBRARY_PATH set to: %s", newValue)
+	} else {
+		logging.InfoLogger.Printf("LD_LIBRARY_PATH cleared for ffmpeg runtime")
+	}
+}
+
+func removePathEntry(entries []string, target string) []string {
+	if target == "" {
+		return entries
+	}
+
+	filtered := entries[:0]
+	for _, entry := range entries {
+		if entry == "" || entry == target {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func containsPathEntry(entries []string, target string) bool {
+	for _, entry := range entries {
+		if entry == target {
+			return true
+		}
+	}
+	return false
 }
 
 // on Linux, we use the system-installed ffmpeg
@@ -157,24 +201,33 @@ func CreateFfmpegCmd(args []string, operation string, forcedLogLevel ...string) 
 }
 
 func forceKillCmd(cmd *exec.Cmd) error {
-	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
 	if cmd.Process == nil {
 		return nil
 	}
+	logging.InfoLogger.Printf("Killing ffmpeg process %d", cmd.Process.Pid)
 
 	// Kill the entire process group on Linux (equivalent to Windows /T flag)
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err == nil {
 		// Kill the process group
-		syscall.Kill(-pgid, syscall.SIGKILL)
+		if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil && killErr != syscall.ESRCH {
+			return killErr
+		}
 	}
 
 	// Also kill the main process as fallback
-	return cmd.Process.Kill()
+	if err := cmd.Process.Kill(); err != nil && !strings.Contains(strings.ToLower(err.Error()), "process already finished") {
+		return err
+	}
+	return nil
 }
 
 // CreateHiddenCmd creates a command. On Linux, no special handling is needed
 // as there's no console window to hide.
 func CreateHiddenCmd(name string, args ...string) *exec.Cmd {
-	return exec.Command(name, args...)
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	return cmd
 }
