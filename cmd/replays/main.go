@@ -190,6 +190,63 @@ func openApplicationDirectory() {
 	}
 }
 
+func formatEnabledCameraList(cfg *replays.Config) string {
+	if cfg == nil {
+		return "No configuration loaded."
+	}
+
+	if len(cfg.Cameras) == 0 {
+		if cfg.Multicast.Enabled {
+			return "Camera Module Streams are enabled, but no stream ports are configured."
+		}
+		return "No enabled cameras are configured for direct input."
+	}
+
+	var builder strings.Builder
+	if cfg.Multicast.Enabled {
+		builder.WriteString("Source mode: Camera Module Streams\n\n")
+	} else {
+		builder.WriteString("Source mode: Direct input\n\n")
+	}
+
+	for i, camera := range cfg.Cameras {
+		builder.WriteString(fmt.Sprintf("%d. %s\n", i+1, camera.FfmpegCamera))
+		builder.WriteString(fmt.Sprintf("   Format: %s\n", camera.Format))
+		if strings.TrimSpace(camera.Size) != "" {
+			builder.WriteString(fmt.Sprintf("   Size: %s\n", camera.Size))
+		}
+		if camera.Fps > 0 {
+			builder.WriteString(fmt.Sprintf("   FPS: %d\n", camera.Fps))
+		}
+		if strings.TrimSpace(camera.InputParameters) != "" {
+			builder.WriteString(fmt.Sprintf("   Input: %s\n", camera.InputParameters))
+		}
+		if strings.TrimSpace(camera.OutputParameters) != "" {
+			builder.WriteString(fmt.Sprintf("   Output: %s\n", camera.OutputParameters))
+		}
+		builder.WriteString(fmt.Sprintf("   Recode on trim: %t\n", camera.Recode))
+		if i < len(cfg.Cameras)-1 {
+			builder.WriteString("\n")
+		}
+	}
+
+	return builder.String()
+}
+
+func showEnabledCameras(cfg *replays.Config, window fyne.Window) {
+	textArea := widget.NewMultiLineEntry()
+	textArea.SetMinRowsVisible(12)
+	textArea.SetText(formatEnabledCameraList(cfg))
+	textArea.Wrapping = fyne.TextWrapWord
+
+	dialog := dialog.NewCustom("Enabled Cameras", "Close", container.NewVBox(
+		widget.NewLabel("Currently active camera sources used by replays:"),
+		textArea,
+	), window)
+	dialog.Resize(fyne.NewSize(640, 420))
+	dialog.Show()
+}
+
 // showOwlCMSServerAddress shows a dialog with the OwlCMS server address
 func showOwlCMSServerAddress(cfg *replays.Config, window fyne.Window) {
 	var message string
@@ -764,7 +821,10 @@ func main() {
 			multicastConfigItem,
 			fyne.NewMenuItemSeparator(),
 			// Camera tooling
-			fyne.NewMenuItem("List Cameras", func() {
+			fyne.NewMenuItem("List Enabled Cameras", func() {
+				showEnabledCameras(cfg, window)
+			}),
+			fyne.NewMenuItem("List Detected Cameras", func() {
 				if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
 					recording.ListCameras(window)
 				}
