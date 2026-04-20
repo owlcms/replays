@@ -338,13 +338,13 @@ func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, use
 			}
 			progress(fmt.Sprintf("Examining RTSP source %d/%d: %s", i+1, len(camerasConfig.RTSPSources), name))
 		}
-		if strings.TrimSpace(src.ShortID) == "" {
-			src.ShortID = nextShortID("R", usedShortIDs)
+		shortID := strings.TrimSpace(src.ShortID)
+		if shortID == "" {
+			shortID = nextShortID("R", usedShortIDs)
 		}
 		port := src.OutputPort
 		if port <= 0 {
 			port = nextAvailablePort(startPort, usedPorts)
-			src.OutputPort = port
 		}
 		usedPorts[port] = struct{}{}
 
@@ -360,10 +360,10 @@ func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, use
 			Key:          src.SourceID,
 			SourceType:   "rtsp",
 			Name:         camera.Name,
-			ShortID:      src.ShortID,
+			ShortID:      shortID,
 			Summary:      summarizeRTSPURL(src.RTSPURL),
 			Enabled:      src.Enabled,
-				MonitoringOn: src.On == nil || *src.On,
+			MonitoringOn: src.On == nil || *src.On,
 			OutputPort:   port,
 			Transport:    src.Transport,
 			ProbeDirty:   hasDirtyReason(rtspDirtyReasons(*src), "probe"),

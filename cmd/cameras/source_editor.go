@@ -16,7 +16,7 @@ import (
 
 const (
 	usbEnabledWidth  = 100
-	usbIdentityWidth = 300
+	usbIdentityWidth = 600
 	usbNameWidth     = 180
 	usbShortIDWidth  = 80
 	usbPortWidth     = 80
@@ -81,6 +81,11 @@ type usbSourceRow struct {
 	matchKey        string
 	identity        string
 	dirty           bool
+	storedEnabled   bool
+	storedName      string
+	storedShortID   string
+	storedPort      string
+	storedFormat    string
 	dirtyReasons    []string
 	detectedPixFmt  string
 	detectedSize    string
@@ -133,69 +138,69 @@ func newUSBSourceRow(spec sourceSpec) *usbSourceRow {
 	nameEntry.OnChanged = markDirty
 	shortIDEntry.OnChanged = markDirty
 	portEntry.OnChanged = markDirty
+	r.markClean()
 	return r
 }
 
 func (r *usbSourceRow) markDirty() {
-	r.dirty = true
+	r.dirty = r.hasPendingChanges()
+	r.refreshRestartHighlight()
 }
 
 func (r *usbSourceRow) markClean() {
+	r.storedEnabled = r.enabledCheck.Checked
+	r.storedName = strings.TrimSpace(r.nameEntry.Text)
+	r.storedShortID = strings.TrimSpace(r.shortIDEntry.Text)
+	r.storedPort = strings.TrimSpace(r.portEntry.Text)
+	r.storedFormat = r.currentFormat()
 	r.dirty = false
+	r.refreshRestartHighlight()
 }
 
 func (r *usbSourceRow) refreshRestartHighlight() {
-	applyRestartButtonStyle(r.restartBtn, hasDirtyReason(r.dirtyReasons, "restart"))
+	applyRestartButtonStyle(r.restartBtn, r.hasPendingChanges() || hasDirtyReason(r.dirtyReasons, "restart"))
+	if r.restartBtn != nil {
+		r.restartBtn.Refresh()
+	}
+	if r.enabledCheck != nil {
+		r.enabledCheck.Refresh()
+	}
 }
 
-func (r *usbSourceRow) object(probe func(), save func() bool, restartNeeded, restart func()) fyne.CanvasObject {
-	r.nameEntry.onFocusLost = func(string) {
-		if save != nil {
-			save()
-		}
+func (r *usbSourceRow) currentFormat() string {
+	if r.formatSelect == nil {
+		return "Auto"
 	}
-	r.nameEntry.OnSubmitted = func(string) {
-		if save != nil {
-			save()
-		}
+	selected := strings.TrimSpace(r.formatSelect.Selected)
+	if selected == "" {
+		return "Auto"
 	}
-	r.shortIDEntry.onFocusLost = func(string) {
-		if save != nil {
-			save()
-		}
+	return selected
+}
+
+func (r *usbSourceRow) hasPendingChanges() bool {
+	if r == nil {
+		return false
 	}
-	r.shortIDEntry.OnSubmitted = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.portEntry.onFocusLost = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.portEntry.OnSubmitted = func(string) {
-		if save != nil {
-			save()
-		}
-	}
+	return r.enabledCheck.Checked != r.storedEnabled ||
+		strings.TrimSpace(r.nameEntry.Text) != r.storedName ||
+		strings.TrimSpace(r.shortIDEntry.Text) != r.storedShortID ||
+		strings.TrimSpace(r.portEntry.Text) != r.storedPort ||
+		r.currentFormat() != r.storedFormat
+}
+
+func (r *usbSourceRow) object(probe func(), _ func() bool, _, restart func()) fyne.CanvasObject {
+	r.nameEntry.onFocusLost = nil
+	r.nameEntry.OnSubmitted = nil
+	r.shortIDEntry.onFocusLost = nil
+	r.shortIDEntry.OnSubmitted = nil
+	r.portEntry.onFocusLost = nil
+	r.portEntry.OnSubmitted = nil
 	r.enabledCheck.OnChanged = func(_ bool) {
 		r.markDirty()
-		if save != nil && !save() {
-			return
-		}
-		if restartNeeded != nil {
-			restartNeeded()
-		}
 	}
 	r.formatSelect.OnChanged = func(_ string) {
 		r.markDirty()
-		if save != nil && !save() {
-			return
-		}
-		if restartNeeded != nil {
-			restartNeeded()
-		}
 	}
 	probeBtn := widget.NewButton("Probe", func() {
 		if probe != nil {
@@ -252,6 +257,12 @@ type rtspSourceRow struct {
 	sourceID         string
 	isAddRow         bool
 	dirty            bool
+	storedEnabled    bool
+	storedName       string
+	storedShortID    string
+	storedURL        string
+	storedPort       string
+	storedTransport  string
 	probeDirty       bool
 	dirtyReasons     []string
 	restartBtn       *widget.Button
@@ -311,6 +322,7 @@ func newRTSPSourceRow(spec sourceSpec) *rtspSourceRow {
 	row.installAutoEnable()
 	row.enabledChanged = row.enabledCheck.OnChanged
 	row.transportChanged = row.transportSelect.OnChanged
+	row.markClean()
 	return row
 }
 
@@ -321,7 +333,7 @@ func newBlankRTSPSourceRow() *rtspSourceRow {
 	return row
 }
 
-func (r *rtspSourceRow) object(add func(), save func() bool, restart func(), probe func(), remove func()) fyne.CanvasObject {
+func (r *rtspSourceRow) object(add func(), _ func() bool, restart func(), probe func(), remove func()) fyne.CanvasObject {
 	if r.isAddRow {
 		addButton := widget.NewButton("Add", func() {
 			if add != nil {
@@ -341,61 +353,25 @@ func (r *rtspSourceRow) object(add func(), save func() bool, restart func(), pro
 		)
 	}
 
-	r.nameEntry.onFocusLost = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.nameEntry.OnSubmitted = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.shortIDEntry.onFocusLost = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.shortIDEntry.OnSubmitted = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.urlEntry.onFocusLost = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.urlEntry.OnSubmitted = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.portEntry.onFocusLost = func(string) {
-		if save != nil {
-			save()
-		}
-	}
-	r.portEntry.OnSubmitted = func(string) {
-		if save != nil {
-			save()
-		}
-	}
+	r.nameEntry.onFocusLost = nil
+	r.nameEntry.OnSubmitted = nil
+	r.shortIDEntry.onFocusLost = nil
+	r.shortIDEntry.OnSubmitted = nil
+	r.urlEntry.onFocusLost = nil
+	r.urlEntry.OnSubmitted = nil
+	r.portEntry.onFocusLost = nil
+	r.portEntry.OnSubmitted = nil
 	r.enabledCheck.OnChanged = func(value bool) {
 		if r.enabledChanged != nil {
 			r.enabledChanged(value)
 		}
-		if save != nil {
-			save()
-		}
+		r.markDirty()
 	}
 	r.transportSelect.OnChanged = func(value string) {
 		if r.transportChanged != nil {
 			r.transportChanged(value)
 		}
-		if save != nil {
-			save()
-		}
+		r.markDirty()
 	}
 	probeButton := widget.NewButton("Probe", func() {
 		if probe != nil {
@@ -431,15 +407,52 @@ func (r *rtspSourceRow) markDirty() {
 	if r.isAddRow {
 		return
 	}
-	r.dirty = true
+	r.dirty = r.hasPendingChanges()
+	r.refreshRestartHighlight()
 }
 
 func (r *rtspSourceRow) markClean() {
+	r.storedEnabled = r.enabledCheck.Checked
+	r.storedName = strings.TrimSpace(r.nameEntry.Text)
+	r.storedShortID = strings.TrimSpace(r.shortIDEntry.Text)
+	r.storedURL = strings.TrimSpace(r.urlEntry.Text)
+	r.storedPort = strings.TrimSpace(r.portEntry.Text)
+	r.storedTransport = r.currentTransport()
 	r.dirty = false
+	r.refreshRestartHighlight()
 }
 
 func (r *rtspSourceRow) refreshRestartHighlight() {
-	applyRestartButtonStyle(r.restartBtn, hasDirtyReason(r.dirtyReasons, "restart"))
+	applyRestartButtonStyle(r.restartBtn, r.hasPendingChanges() || hasDirtyReason(r.dirtyReasons, "restart"))
+	if r.restartBtn != nil {
+		r.restartBtn.Refresh()
+	}
+	if r.enabledCheck != nil {
+		r.enabledCheck.Refresh()
+	}
+}
+
+func (r *rtspSourceRow) currentTransport() string {
+	if r.transportSelect == nil {
+		return "tcp"
+	}
+	transport := strings.ToLower(strings.TrimSpace(r.transportSelect.Selected))
+	if transport == "" {
+		return "tcp"
+	}
+	return transport
+}
+
+func (r *rtspSourceRow) hasPendingChanges() bool {
+	if r == nil || r.isAddRow {
+		return false
+	}
+	return r.enabledCheck.Checked != r.storedEnabled ||
+		strings.TrimSpace(r.nameEntry.Text) != r.storedName ||
+		strings.TrimSpace(r.shortIDEntry.Text) != r.storedShortID ||
+		strings.TrimSpace(r.urlEntry.Text) != r.storedURL ||
+		strings.TrimSpace(r.portEntry.Text) != r.storedPort ||
+		r.currentTransport() != r.storedTransport
 }
 
 func (r *rtspSourceRow) installAutoEnable() {

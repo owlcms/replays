@@ -451,10 +451,6 @@ func multicastOutputURL(multicast camerascfg.MulticastConfig, port int) string {
 	return url
 }
 
-func cloneUnicastDestinations(destinations []camerascfg.UnicastDestination) []camerascfg.UnicastDestination {
-	return append([]camerascfg.UnicastDestination(nil), destinations...)
-}
-
 func broadcastConfigSignature(unicastEnabled bool, multicast camerascfg.MulticastConfig, destinations []camerascfg.UnicastDestination) string {
 	if unicastEnabled {
 		enabledDestinations := make([]string, 0, len(destinations))
@@ -472,13 +468,6 @@ func broadcastConfigSignature(unicastEnabled bool, multicast camerascfg.Multicas
 		return "unicast|" + strings.Join(enabledDestinations, "|")
 	}
 	return fmt.Sprintf("multicast|%s|local=%t", strings.TrimSpace(multicast.IP), multicast.LocalOnly)
-}
-
-func currentBroadcastConfigSignature(cfg *camerascfg.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	return broadcastConfigSignature(cfg.Unicast.Enabled, cfg.Multicast, cfg.Unicast.Destinations)
 }
 
 // isIntegratedCamera checks if a camera is likely an integrated webcam.
@@ -980,10 +969,13 @@ func rtspRetryWindow(retriesStarted int) (time.Duration, bool) {
 }
 
 func (s *cameraStream) autoRestartReason(now time.Time, startupDelay time.Duration) (string, bool) {
+	if s == nil {
+		return "", false
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s == nil || !strings.EqualFold(strings.TrimSpace(s.sourceType), "rtsp") || s.stopping {
+	if !strings.EqualFold(strings.TrimSpace(s.sourceType), "rtsp") || s.stopping {
 		return "", false
 	}
 
@@ -1739,41 +1731,35 @@ func runUI() {
 	unicastContainer := container.NewVBox()
 
 	var applyBroadcastUIToConfig func() error
-	var saveBroadcastSettingsNow func(string)
+	var setBroadcastRestartDirty func()
 	var renderUnicastRows func()
 	renderUnicastRows = func() {
 		unicastContainer.Objects = nil
+		unicastContainer.Add(container.NewHBox(
+			container.NewGridWrap(fyne.NewSize(70, widget.NewLabel("Enabled").MinSize().Height), widget.NewLabel("Enabled")),
+			container.NewGridWrap(fyne.NewSize(320, widget.NewLabel("Destination").MinSize().Height), widget.NewLabel("Destination")),
+			container.NewGridWrap(fyne.NewSize(80, widget.NewLabel("").MinSize().Height), widget.NewLabel("")),
+		))
 		for i := range unicastDestinations {
 			idx := i
 			check := widget.NewCheck("", nil)
 			check.SetChecked(unicastDestinations[idx].Enabled)
 			check.OnChanged = func(v bool) {
 				unicastDestinations[idx].Enabled = v
-				if saveBroadcastSettingsNow != nil {
-					saveBroadcastSettingsNow("Destination settings saved.")
-				}
+				setBroadcastRestartDirty()
 			}
 			entry := newPortTableEntry()
 			entry.SetText(unicastDestinations[idx].Address)
 			entry.OnChanged = func(v string) {
 				unicastDestinations[idx].Address = v
+				setBroadcastRestartDirty()
 			}
-			entry.onFocusLost = func(string) {
-				if saveBroadcastSettingsNow != nil {
-					saveBroadcastSettingsNow("Destination settings saved.")
-				}
-			}
-			entry.OnSubmitted = func(string) {
-				if saveBroadcastSettingsNow != nil {
-					saveBroadcastSettingsNow("Destination settings saved.")
-				}
-			}
+			entry.onFocusLost = nil
+			entry.OnSubmitted = nil
 			removeBtn := widget.NewButton("Remove", func() {
 				unicastDestinations = append(unicastDestinations[:idx], unicastDestinations[idx+1:]...)
 				renderUnicastRows()
-				if saveBroadcastSettingsNow != nil {
-					saveBroadcastSettingsNow("Destination settings saved.")
-				}
+				setBroadcastRestartDirty()
 			})
 			unicastContainer.Add(container.NewHBox(
 				check,
@@ -1791,9 +1777,7 @@ func runUI() {
 			}
 			unicastDestinations = append(unicastDestinations, camerascfg.UnicastDestination{Address: val, Enabled: true})
 			renderUnicastRows()
-			if saveBroadcastSettingsNow != nil {
-				saveBroadcastSettingsNow("Destination settings saved.")
-			}
+			setBroadcastRestartDirty()
 		})
 		checkSpacer := widget.NewCheck("", nil)
 		checkSpacer.Disable()
@@ -1847,9 +1831,18 @@ func runUI() {
 	broadcastRestartBtn := widget.NewButton("Restart", nil)
 	broadcastRestartBtn.Importance = widget.MediumImportance
 	rescanBtn := widget.NewButton("Rescan Sources", nil)
-	broadcastRuntimeSignature := currentBroadcastConfigSignature(camerasConfig)
-	setBroadcastRestartDirty := func() {
-		applyRestartButtonStyle(broadcastRestartBtn, currentBroadcastConfigSignature(camerasConfig) != broadcastRuntimeSignature)
+	currentBroadcastUISignature := func() string {
+		if strings.TrimSpace(modeSelect.Selected) == "Unicast" {
+			return broadcastConfigSignature(true, camerascfg.MulticastConfig{}, unicastDestinations)
+		}
+		return broadcastConfigSignature(false, camerascfg.MulticastConfig{
+			IP:        strings.TrimSpace(ipEntry.Text),
+			LocalOnly: localOnlyCheck.Checked,
+		}, nil)
+	}
+	savedBroadcastSignature := currentBroadcastUISignature()
+	setBroadcastRestartDirty = func() {
+		applyRestartButtonStyle(broadcastRestartBtn, currentBroadcastUISignature() != savedBroadcastSignature)
 	}
 
 	usbRowsContainer := container.NewVBox()
@@ -1857,8 +1850,6 @@ func runUI() {
 	var usbRows []*usbSourceRow
 	var rtspRows []*rtspSourceRow
 	var table *widget.Table
-	var saveConfigNow func()
-	var saveConfigChanges func() error
 	var applyUIToConfig func() error
 	var restartStreams func()
 	var renderMonitoringSourceToggles func(sourceInventory)
@@ -1946,27 +1937,49 @@ func runUI() {
 				}
 				return true
 			}, nil, func() {
+				row := usbRows[index]
 				wasRunning := false
 				for _, stream := range *currentStreams {
-					if stream != nil && stream.camera.MatchKey == usbRows[index].matchKey {
+					if stream != nil && stream.camera.MatchKey == row.matchKey {
 						wasRunning = true
 						break
 					}
 				}
-				if err := saveUSBRow(usbRows[index]); err != nil {
+				name := strings.TrimSpace(row.nameEntry.Text)
+				if name == "" {
+					name = row.identity
+				}
+				if wasRunning && !row.enabledCheck.Checked {
+					dialog.ShowConfirm("Stop Stream?",
+						fmt.Sprintf("This will stop the camera stream for %s.", name),
+						func(ok bool) {
+							if !ok {
+								return
+							}
+							if err := saveUSBRow(row); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Apply failed: %v", err))
+								return
+							}
+							if err := stopSingleSource(row.matchKey, "disabled by user"); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
+								return
+							}
+							actionStatus.SetText(fmt.Sprintf("Stopped %s.", name))
+						}, window)
+					return
+				}
+				if err := saveUSBRow(row); err != nil {
 					dialog.ShowError(err, window)
 					actionStatus.SetText(fmt.Sprintf("Apply failed: %v", err))
 					return
-				}
-				name := strings.TrimSpace(usbRows[index].nameEntry.Text)
-				if name == "" {
-					name = usbRows[index].identity
 				}
 				if !wasRunning {
 					actionStatus.SetText(fmt.Sprintf("Applied %s.", name))
 					return
 				}
-				item, ok := findInventorySource(usbRows[index].matchKey)
+				item, ok := findInventorySource(row.matchKey)
 				if !ok {
 					dialog.ShowError(fmt.Errorf("source %s not found", name), window)
 					actionStatus.SetText(fmt.Sprintf("Apply failed: source %s not found", name))
@@ -1983,62 +1996,15 @@ func runUI() {
 						actionStatus.SetText(fmt.Sprintf("Restart failed: %v", err))
 						return
 					}
-					if updated, ok := findInventorySource(usbRows[index].matchKey); ok {
-						syncUSBRowFromSpec(usbRows[index], *updated)
+					if updated, ok := findInventorySource(row.matchKey); ok {
+						syncUSBRowFromSpec(row, *updated)
 					}
 					usbRowsContainer.Refresh()
-					if current := strings.TrimSpace(usbRows[index].nameEntry.Text); current != "" {
+					if current := strings.TrimSpace(row.nameEntry.Text); current != "" {
 						actionStatus.SetText(fmt.Sprintf("Restarted %s.", current))
 					}
 				}, window)
 			}))
-			// Override enabledCheck.OnChanged after object() to avoid loop variable capture issues.
-			// index := i is per-iteration, so closures here correctly capture the right row.
-			usbRows[index].enabledCheck.OnChanged = func(checked bool) {
-				row := usbRows[index]
-				name := strings.TrimSpace(row.nameEntry.Text)
-				if name == "" {
-					name = row.identity
-				}
-				isRunning := false
-				for _, stream := range *currentStreams {
-					if stream != nil && stream.camera.MatchKey == row.matchKey {
-						isRunning = true
-						break
-					}
-				}
-				if !checked && isRunning {
-					dialog.ShowConfirm("Stop Stream?",
-						fmt.Sprintf("This will stop the camera stream for %s.", name),
-						func(ok bool) {
-							if !ok {
-								changed := row.enabledCheck.OnChanged
-								row.enabledCheck.OnChanged = nil
-								row.enabledCheck.SetChecked(true)
-								row.enabledCheck.OnChanged = changed
-								return
-							}
-							row.markDirty()
-							if err := saveUSBRow(row); err != nil {
-								dialog.ShowError(err, window)
-								actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
-								return
-							}
-							if err := stopSingleSource(row.matchKey, "disabled by user"); err != nil {
-								dialog.ShowError(err, window)
-								actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
-								return
-							}
-							actionStatus.SetText(fmt.Sprintf("Stopped %s.", name))
-						}, window)
-				} else {
-					row.markDirty()
-					if err := saveUSBRow(row); err != nil {
-						dialog.ShowError(err, window)
-						actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
-					}
-				}
-			}
 		}
 		usbRowsContainer.Objects = objects
 		usbRowsContainer.Refresh()
@@ -2095,14 +2061,35 @@ func runUI() {
 						break
 					}
 				}
+				name := strings.TrimSpace(row.nameEntry.Text)
+				if name == "" {
+					name = summarizeRTSPURL(row.urlEntry.Text)
+				}
+				if wasRunning && !row.enabledCheck.Checked {
+					dialog.ShowConfirm("Stop Stream?",
+						fmt.Sprintf("This will stop the camera stream for %s.", name),
+						func(ok bool) {
+							if !ok {
+								return
+							}
+							if err := saveRTSPRow(row); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Apply failed: %v", err))
+								return
+							}
+							if err := stopSingleSource(row.sourceID, "disabled by user"); err != nil {
+								dialog.ShowError(err, window)
+								actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
+								return
+							}
+							actionStatus.SetText(fmt.Sprintf("Stopped %s.", name))
+						}, window)
+					return
+				}
 				if err := saveRTSPRow(row); err != nil {
 					dialog.ShowError(err, window)
 					actionStatus.SetText(fmt.Sprintf("Apply failed: %v", err))
 					return
-				}
-				name := strings.TrimSpace(row.nameEntry.Text)
-				if name == "" {
-					name = summarizeRTSPURL(row.urlEntry.Text)
 				}
 				if !wasRunning {
 					actionStatus.SetText(fmt.Sprintf("Applied %s.", name))
@@ -2176,52 +2163,6 @@ func runUI() {
 					actionStatus.SetText(fmt.Sprintf("Remove failed: %v", err))
 				}
 			}))
-			// Override enabledCheck.OnChanged after object() to avoid loop variable capture issues.
-			rtspRows[index].enabledCheck.OnChanged = func(checked bool) {
-				row := rtspRows[index]
-				name := strings.TrimSpace(row.nameEntry.Text)
-				if name == "" {
-					name = summarizeRTSPURL(row.urlEntry.Text)
-				}
-				isRunning := false
-				for _, stream := range *currentStreams {
-					if stream != nil && stream.camera.MatchKey == row.sourceID {
-						isRunning = true
-						break
-					}
-				}
-				if !checked && isRunning {
-					dialog.ShowConfirm("Stop Stream?",
-						fmt.Sprintf("This will stop the camera stream for %s.", name),
-						func(ok bool) {
-							if !ok {
-								changed := row.enabledCheck.OnChanged
-								row.enabledCheck.OnChanged = nil
-								row.enabledCheck.SetChecked(true)
-								row.enabledCheck.OnChanged = changed
-								return
-							}
-							row.markDirty()
-							if err := saveRTSPRow(row); err != nil {
-								dialog.ShowError(err, window)
-								actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
-								return
-							}
-							if err := stopSingleSource(row.sourceID, "disabled by user"); err != nil {
-								dialog.ShowError(err, window)
-								actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
-								return
-							}
-							actionStatus.SetText(fmt.Sprintf("Stopped %s.", name))
-						}, window)
-				} else {
-					row.markDirty()
-					if err := saveRTSPRow(row); err != nil {
-						dialog.ShowError(err, window)
-						actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
-					}
-				}
-			}
 		}
 		rtspRowsContainer.Objects = objects
 		rtspRowsContainer.Refresh()
@@ -2753,25 +2694,6 @@ func runUI() {
 		return fmt.Sprintf("%s Config review needed: %s", prefix, strings.Join(currentInventory.PendingVerification, ", "))
 	}
 
-	saveConfigChanges = func() error {
-		if err := applyUIToConfig(); err != nil {
-			return err
-		}
-		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
-			return err
-		}
-		refreshInventoryFromConfig(false)
-		return nil
-	}
-
-	saveConfigNow = func() {
-		if err := saveConfigChanges(); err != nil {
-			actionStatus.SetText(fmt.Sprintf("Auto-save failed: %v", err))
-			return
-		}
-		actionStatus.SetText(verificationMessage("Configuration saved."))
-	}
-
 	applyBroadcastUIToConfig = func() error {
 		selectedMode := strings.TrimSpace(modeSelect.Selected)
 		if selectedMode == "Unicast" {
@@ -2798,31 +2720,6 @@ func runUI() {
 		camerasConfig.Multicast.IP = newIP
 		camerasConfig.Multicast.LocalOnly = localOnlyCheck.Checked
 		return nil
-	}
-
-	saveBroadcastSettingsNow = func(successMessage string) {
-		previousUnicast := camerasConfig.Unicast
-		previousUnicast.Destinations = cloneUnicastDestinations(camerasConfig.Unicast.Destinations)
-		previousMulticast := camerasConfig.Multicast
-
-		if err := applyBroadcastUIToConfig(); err != nil {
-			actionStatus.SetText(fmt.Sprintf("Auto-save failed: %v", err))
-			return
-		}
-		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
-			camerasConfig.Unicast = previousUnicast
-			camerasConfig.Multicast = previousMulticast
-			actionStatus.SetText(fmt.Sprintf("Auto-save failed: %v", err))
-			return
-		}
-		setBroadcastRestartDirty()
-		message := successMessage
-		if currentBroadcastConfigSignature(camerasConfig) != broadcastRuntimeSignature {
-			message = strings.TrimSpace(successMessage + " Restart required.")
-		}
-		if message != "" {
-			actionStatus.SetText(message)
-		}
 	}
 
 	applyUIToConfig = func() error {
@@ -3118,7 +3015,7 @@ func runUI() {
 
 		transportChanged := row.transportSelect.OnChanged
 		row.transportSelect.OnChanged = nil
-		transport := strings.TrimSpace(spec.Transport)
+		transport := strings.TrimSpace(spec.RTSP.Transport)
 		if transport == "" {
 			transport = "tcp"
 		}
@@ -3271,7 +3168,7 @@ func runUI() {
 			label := widget.NewLabel("template")
 			button := widget.NewButton("Action", nil)
 			button.Hide()
-			return container.NewMax(label, button)
+			return container.NewStack(label, button)
 		},
 		func(id widget.TableCellID, obj fyne.CanvasObject) {
 			cell := obj.(*fyne.Container)
@@ -3508,8 +3405,12 @@ func runUI() {
 			actionStatus.SetText(err.Error())
 			return
 		}
+		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+			actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
+			return
+		}
+		savedBroadcastSignature = currentBroadcastUISignature()
 		restartWithInventory(buildCachedSourceInventory(currentInventory, currentEncoder), "Streams restarted")
-		broadcastRuntimeSignature = currentBroadcastConfigSignature(camerasConfig)
 		setBroadcastRestartDirty()
 	}
 
@@ -3532,7 +3433,17 @@ func runUI() {
 			}, window)
 	}
 	broadcastRestartBtn.OnTapped = func() {
-		restartStreams()
+		if err := applyBroadcastUIToConfig(); err != nil {
+			actionStatus.SetText(fmt.Sprintf("Broadcast save failed: %v", err))
+			return
+		}
+		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+			actionStatus.SetText(fmt.Sprintf("Broadcast save failed: %v", err))
+			return
+		}
+		savedBroadcastSignature = currentBroadcastUISignature()
+		restartWithInventory(buildCachedSourceInventory(currentInventory, currentEncoder), "Broadcast settings applied")
+		setBroadcastRestartDirty()
 	}
 	rescanBtn.OnTapped = func() {
 		if err := applyUIToConfig(); err != nil {
@@ -3663,24 +3574,15 @@ func runUI() {
 	}
 	modeSelect.OnChanged = func(selected string) {
 		updateModeUI()
-		if saveBroadcastSettingsNow != nil {
-			saveBroadcastSettingsNow("Broadcast mode saved.")
-		}
+		setBroadcastRestartDirty()
 	}
-	ipEntry.onFocusLost = func(string) {
-		if saveBroadcastSettingsNow != nil {
-			saveBroadcastSettingsNow("Destination settings saved.")
-		}
+	ipEntry.OnChanged = func(string) {
+		setBroadcastRestartDirty()
 	}
-	ipEntry.OnSubmitted = func(string) {
-		if saveBroadcastSettingsNow != nil {
-			saveBroadcastSettingsNow("Destination settings saved.")
-		}
-	}
+	ipEntry.onFocusLost = nil
+	ipEntry.OnSubmitted = nil
 	localOnlyCheck.OnChanged = func(bool) {
-		if saveBroadcastSettingsNow != nil {
-			saveBroadcastSettingsNow("Destination settings saved.")
-		}
+		setBroadcastRestartDirty()
 	}
 	updateModeUI()
 	setBroadcastRestartDirty()
@@ -3728,13 +3630,6 @@ func runUI() {
 		nil,
 		table,
 	)
-	saveAllBtn := widget.NewButton("Save All Settings", func() {
-		if saveConfigNow != nil {
-			saveConfigNow()
-			actionStatus.SetText("All settings saved")
-		}
-	})
-	saveAllBtn.Importance = widget.HighImportance
 	rescanBtn.Importance = widget.HighImportance
 	restartFromConfigBtn := widget.NewButton("Restart Streams", func() {
 		restartStreams()
@@ -3743,7 +3638,7 @@ func runUI() {
 	configurationTab := container.NewVScroll(
 		container.NewPadded(container.NewVBox(
 			newVerticalGap(4),
-			container.NewHBox(saveAllBtn, rescanBtn, restartFromConfigBtn),
+			container.NewHBox(rescanBtn, restartFromConfigBtn),
 			newVerticalGap(8),
 			topConfigSections,
 			newVerticalGap(12),
