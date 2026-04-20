@@ -1,5 +1,7 @@
 **Change log**
 
+- 2.2.1:  configuration page fixes: changes are applied on the apply button for more predictable behaviour
+
 - 2.2.0: Improved RTSP reconnect
 - 2.2.0: Fixed windows QSV support
 - 2.2.0: Fixed pixel format issues for MJPEG conversion
