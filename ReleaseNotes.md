@@ -1,5 +1,13 @@
 **Change log**
 
+- 2.2.0: Improved RTSP reconnect
+- 2.2.0: Fixed windows QSV support
+- 2.2.0: Fixed pixel format issues for MJPEG conversion
+- 2.2.0: For older laptops where ffmpeg 7 does not work due to now unsupported GPU, will back out to system ffmpeg
+  - the user is expected to have installed an ffmpeg 6 as the system version
+- 2.2.0: User interface cleanup
+- 2.2.0: when running without the Cameras Streams in autonomous mode, replays will now accept both the auto.toml autodetected items and manually added items in config.toml (e.g. for RTSP cameras)
+
 - 2.1.0: cameras: Added support for RTSP feeds
 - 2.1.0: cameras: Restructured the user interface
 
