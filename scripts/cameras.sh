@@ -7,6 +7,71 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCAL_FFMPEG_DIR="$REPO_ROOT/video_config/ffmpeg"
 LOCAL_CAMERAS_CONFIG_DIR="$REPO_ROOT/video_config/cameras"
 
+show_usage() {
+  cat <<'EOF'
+Usage: scripts/cameras.sh [--default-install|--installed] [--script-help] [-- <cameras args...>]
+
+Script options:
+  --default-install, --installed  Use the latest installed owlcms-cameras config directory
+  --script-help                   Show this script help
+
+All other arguments are passed through to the cameras binary.
+EOF
+}
+
+find_latest_installed_version_dir() {
+  local install_root="$1"
+  local child
+  local base
+  local latest
+  local versions=()
+
+  [[ -d "$install_root" ]] || return 1
+
+  for child in "$install_root"/*; do
+    [[ -d "$child" ]] || continue
+    base="$(basename "$child")"
+    if [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.+-]+)?$ ]]; then
+      versions+=("$base")
+    fi
+  done
+
+  [[ ${#versions[@]} -gt 0 ]] || return 1
+
+  latest="$(printf '%s\n' "${versions[@]}" | sort -V | tail -n 1)"
+  [[ -n "$latest" ]] || return 1
+
+  printf '%s\n' "$install_root/$latest"
+}
+
+USE_DEFAULT_INSTALL=false
+BINARY_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --default-install|--installed)
+      USE_DEFAULT_INSTALL=true
+      shift
+      ;;
+    --script-help)
+      show_usage
+      exit 0
+      ;;
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do
+        BINARY_ARGS+=("$1")
+        shift
+      done
+      break
+      ;;
+    *)
+      BINARY_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
 find_ffmpeg_executable() {
   local root="$1"
   local executable_name="$2"
@@ -47,7 +112,8 @@ find_ffmpeg_executable() {
 case "${OS:-}" in
   Windows_NT)
     BINARY="$REPO_ROOT/cameras.exe"
-    CONTROL_PANEL_DIR="${VIDEO_CONTROLPANEL_DIR:-$HOME/AppData/Roaming/owlcms-controlpanel}"
+    CONTROL_PANEL_DIR="${VIDEO_CONTROLPANEL_DIR:-${APPDATA:-$HOME/AppData/Roaming}/owlcms-controlpanel}"
+    CAMERAS_INSTALL_ROOT="${APPDATA:-$HOME/AppData/Roaming}/owlcms-cameras"
 
     if [[ -n "${VIDEO_CONFIGDIR:-}" ]]; then
       FFMPEG_CONFIG_DIR="$VIDEO_CONFIGDIR"
@@ -76,6 +142,7 @@ case "${OS:-}" in
     fi
 
     CONTROL_PANEL_DIR="${VIDEO_CONTROLPANEL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/owlcms-controlpanel}"
+    CAMERAS_INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/owlcms-cameras"
     if [[ -d "$CONTROL_PANEL_DIR/ffmpeg" ]]; then
       FFMPEG_RUNTIME_DIR="$CONTROL_PANEL_DIR/ffmpeg"
     else
@@ -99,6 +166,14 @@ if [[ ! -f "$BINARY" ]]; then
   exit 1
 fi
 
+CAMERAS_CONFIG_DIR="$LOCAL_CAMERAS_CONFIG_DIR"
+if [[ "$USE_DEFAULT_INSTALL" == true ]]; then
+  if ! CAMERAS_CONFIG_DIR="$(find_latest_installed_version_dir "$CAMERAS_INSTALL_ROOT")"; then
+    echo "Installed cameras config directory not found under: $CAMERAS_INSTALL_ROOT" >&2
+    exit 1
+  fi
+fi
+
 if [[ ! -d "$FFMPEG_CONFIG_DIR" ]]; then
   echo "FFmpeg config directory not found: $FFMPEG_CONFIG_DIR" >&2
   exit 1
@@ -115,4 +190,4 @@ if [[ "$EXPORT_FFMPEG_PATH" == true ]]; then
   export VIDEO_FFMPEG_PATH="$FFMPEG_PATH"
 fi
 
-exec "$BINARY" --configDir "$LOCAL_CAMERAS_CONFIG_DIR" "$@"
+exec "$BINARY" --configDir "$CAMERAS_CONFIG_DIR" "${BINARY_ARGS[@]}"
