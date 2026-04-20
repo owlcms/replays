@@ -570,7 +570,7 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 			ip := strings.TrimSpace(ipEntry.Text)
 			parsedIP := net.ParseIP(ip)
 			if parsedIP == nil {
-				dialog.ShowError(fmt.Errorf("Stream IP must be a valid IP address (multicast or unicast)"), window)
+				dialog.ShowError(fmt.Errorf("stream IP must be a valid IP address (multicast or unicast)"), window)
 				return
 			}
 			p1, err := parseOptionalPort("Camera 1 port", port1Entry.Text)
@@ -759,9 +759,9 @@ func main() {
 		statusLabel.TextStyle = fyne.TextStyle{Bold: true}
 	}
 	noteText := localMulticastMismatchNote(cfg)
-	noteColor := theme.ErrorColor()
+	noteColor := theme.Color(theme.ColorNameError)
 	if strings.HasPrefix(noteText, "Unicast mode") {
-		noteColor = theme.ForegroundColor()
+		noteColor = theme.Color(theme.ColorNameForeground)
 	}
 	mismatchNote := canvas.NewText(noteText, noteColor)
 	mismatchNote.TextStyle = fyne.TextStyle{Italic: true}
