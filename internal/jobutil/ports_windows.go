@@ -83,3 +83,7 @@ func windowsProcessName(pid int) string {
 	}
 	return name
 }
+
+func processStillRunning(pid int) bool {
+	return windowsProcessName(pid) != ""
+}

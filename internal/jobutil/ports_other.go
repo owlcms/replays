@@ -56,6 +56,14 @@ func signalProcessGroup(pid int, signal syscall.Signal) error {
 	return nil
 }
 
+func processStillRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
 // KillAllFFmpeg kills any remaining ffmpeg/ffplay processes that may have been
 // orphaned or missed by per-stream stopProcess calls.
 func KillAllFFmpeg() {

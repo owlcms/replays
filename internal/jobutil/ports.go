@@ -39,6 +39,9 @@ func StopProcessTree(pid int, timeout time.Duration) error {
 	if pid <= 0 {
 		return nil
 	}
+	if !processStillRunning(pid) {
+		return nil
+	}
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for _, step := range processStopSteps() {
@@ -59,6 +62,12 @@ func StopProcessTree(pid int, timeout time.Duration) error {
 		if wait > 0 {
 			time.Sleep(wait)
 		}
+		if !processStillRunning(pid) {
+			return nil
+		}
+	}
+	if !processStillRunning(pid) {
+		return nil
 	}
 	return lastErr
 }
