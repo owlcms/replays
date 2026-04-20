@@ -2,6 +2,7 @@ package httpServer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +58,83 @@ type VideoCountMessage struct {
 	Count int `json:"count"`
 }
 
+type ReplayCameraState struct {
+	Camera        int    `json:"camera"`
+	Available     bool   `json:"available"`
+	Session       string `json:"session,omitempty"`
+	Filename      string `json:"filename,omitempty"`
+	VideoPath     string `json:"videoPath,omitempty"`
+	AthleteName   string `json:"athleteName,omitempty"`
+	LiftType      string `json:"liftType,omitempty"`
+	AttemptNumber int    `json:"attemptNumber,omitempty"`
+	Timestamp     string `json:"timestamp,omitempty"`
+}
+
+type ReplayStateResponse struct {
+	ActiveSession      string              `json:"activeSession,omitempty"`
+	ResolvedSession    string              `json:"resolvedSession,omitempty"`
+	CurrentAthlete     string              `json:"currentAthlete,omitempty"`
+	CurrentLiftType    string              `json:"currentLiftType,omitempty"`
+	CurrentAttempt     int                 `json:"currentAttempt,omitempty"`
+	CurrentCamera      int                 `json:"currentCamera,omitempty"`
+	HasMultiplePlatform bool               `json:"hasMultiplePlatform"`
+	Cameras            []ReplayCameraState `json:"cameras"`
+}
+
+type ReplayFileEntry struct {
+	Camera   int    `json:"camera"`
+	Filename string `json:"filename"`
+	URL      string `json:"url"`
+}
+
+type ReplayLift struct {
+	Timestamp   string            `json:"timestamp"`
+	Athlete     string            `json:"athlete"`
+	LiftType    string            `json:"liftType"`
+	Attempt     int               `json:"attempt"`
+	ReplayCount int               `json:"replayCount"`
+	Replays     []ReplayFileEntry `json:"replays"`
+}
+
+type ReplaySessionSummary struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Active    bool   `json:"active"`
+	LiftCount int    `json:"liftCount"`
+}
+
+type ReplaySessionsResponse struct {
+	ActiveSession string                 `json:"activeSession,omitempty"`
+	Sessions      []ReplaySessionSummary `json:"sessions"`
+}
+
+type ReplaySessionInfo struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Active bool   `json:"active"`
+}
+
+type ReplaySessionLiftsResponse struct {
+	Session       ReplaySessionInfo `json:"session"`
+	Sort          string            `json:"sort"`
+	AthleteFilter *string           `json:"athleteFilter"`
+	LiftCount     int               `json:"liftCount"`
+	Lifts         []ReplayLift      `json:"lifts"`
+}
+
+type ParsedReplayFile struct {
+	Session       string
+	Filename      string
+	Timestamp     string
+	Athlete       string
+	LiftType      string
+	AttemptNumber int
+	Camera        int
+	URL           string
+}
+
+var replayFilenamePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_(.+)_(CLEANJERK|SNATCH)_attempt(\d+)_Camera(\d+)\.mp4$`)
+
 func init() {
 	// Load templates from embedded filesystem
 	var err error
@@ -79,6 +158,9 @@ func StartServer(port int, _ bool) {
 	router.PathPrefix("/videos/").Handler(http.StripPrefix("/videos/", http.FileServer(http.Dir(x))))
 
 	router.HandleFunc("/", listFilesHandler)
+	router.HandleFunc("/api/sessions", handleReplaySessions)
+	router.HandleFunc("/api/sessions/{session}/lifts", handleReplaySessionLifts)
+	router.HandleFunc("/api/replay-state", handleReplayState)
 	router.HandleFunc("/ws", handleWebSocket)
 	// Accept /replay/{camera:[0-9]+} and /replay/{camera:[0-9]+}.mp4
 	router.HandleFunc("/replay/{camera:[0-9]+}", handleReplay)
@@ -281,7 +363,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if VideoReadyReloading {
 			statusMsg = "Videos ready"
 			statusCode = Ready
-			if err := conn.WriteJSON(StatusMessage{Code: statusCode, Text: statusMsg}); err != nil {
+			if err := conn.WriteJSON(buildStatusMessage(statusCode, statusMsg)); err != nil {
 				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
 			}
 			VideoReadyReloading = false
@@ -289,7 +371,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(statusMsg, "Recording") {
 				statusCode = Recording
 			}
-			if err := conn.WriteJSON(StatusMessage{Code: statusCode, Text: statusMsg}); err != nil {
+			if err := conn.WriteJSON(buildStatusMessage(statusCode, statusMsg)); err != nil {
 				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
 			}
 		}
@@ -348,6 +430,452 @@ func StopServer() {
 	}
 }
 
+func currentReplaySessionName() string {
+	return strings.ReplaceAll(strings.TrimSpace(state.CurrentSession), " ", "_")
+}
+
+func setReplayAPIHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+}
+
+func parseReplayFilename(session string, filename string) (*ParsedReplayFile, bool) {
+	matches := replayFilenamePattern.FindStringSubmatch(filename)
+	if len(matches) != 7 {
+		return nil, false
+	}
+
+	attemptNumber, err := strconv.Atoi(matches[5])
+	if err != nil {
+		attemptNumber = 0
+	}
+
+	camera, err := strconv.Atoi(matches[6])
+	if err != nil || camera < 1 {
+		return nil, false
+	}
+
+	return &ParsedReplayFile{
+		Session:       session,
+		Filename:      filename,
+		Timestamp:     matches[1] + "_" + matches[2],
+		Athlete:       strings.ReplaceAll(matches[3], "_", " "),
+		LiftType:      matches[4],
+		AttemptNumber: attemptNumber,
+		Camera:        camera,
+		URL:           "/videos/" + session + "/" + filename,
+	}, true
+}
+
+func sanitizeReplaySessionID(session string) (string, error) {
+	trimmed := strings.TrimSpace(session)
+	if trimmed == "" || trimmed == "." || trimmed == ".." || strings.ContainsAny(trimmed, `/\\`) {
+		return "", os.ErrInvalid
+	}
+
+	return trimmed, nil
+}
+
+func scanReplayFilesForSession(session string) ([]ParsedReplayFile, error) {
+	sessionDir := filepath.Join(config.GetVideoDir(), session)
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+
+	parsed := make([]ParsedReplayFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		replayFile, ok := parseReplayFilename(session, entry.Name())
+		if !ok {
+			continue
+		}
+
+		parsed = append(parsed, *replayFile)
+	}
+
+	return parsed, nil
+}
+
+func buildGroupedReplayLifts(session string) ([]ReplayLift, error) {
+	replayFiles, err := scanReplayFilesForSession(session)
+	if err != nil {
+		return nil, err
+	}
+
+	grouped := make(map[string]*ReplayLift)
+	order := make([]string, 0, len(replayFiles))
+
+	for _, replayFile := range replayFiles {
+		groupKey := strings.Join([]string{
+			replayFile.Timestamp,
+			replayFile.Athlete,
+			replayFile.LiftType,
+			strconv.Itoa(replayFile.AttemptNumber),
+		}, "|")
+
+		lift := grouped[groupKey]
+		if lift == nil {
+			lift = &ReplayLift{
+				Timestamp: replayFile.Timestamp,
+				Athlete:   replayFile.Athlete,
+				LiftType:  replayFile.LiftType,
+				Attempt:   replayFile.AttemptNumber,
+				Replays:   make([]ReplayFileEntry, 0, 4),
+			}
+			grouped[groupKey] = lift
+			order = append(order, groupKey)
+		}
+
+		lift.Replays = append(lift.Replays, ReplayFileEntry{
+			Camera:   replayFile.Camera,
+			Filename: replayFile.Filename,
+			URL:      replayFile.URL,
+		})
+	}
+
+	lifts := make([]ReplayLift, 0, len(order))
+	for _, groupKey := range order {
+		lift := grouped[groupKey]
+		sort.Slice(lift.Replays, func(i, j int) bool {
+			return lift.Replays[i].Camera < lift.Replays[j].Camera
+		})
+		lift.ReplayCount = len(lift.Replays)
+		lifts = append(lifts, *lift)
+	}
+
+	return lifts, nil
+}
+
+func normalizeReplayAthleteSortKey(athlete string) string {
+	return strings.ToLower(strings.TrimSpace(athlete))
+}
+
+func sortReplayLifts(lifts []ReplayLift, sortMode string) string {
+	effectiveSort := strings.ToLower(strings.TrimSpace(sortMode))
+	if effectiveSort != "athlete" {
+		effectiveSort = "time"
+	}
+
+	sort.Slice(lifts, func(i, j int) bool {
+		left := lifts[i]
+		right := lifts[j]
+
+		if effectiveSort == "athlete" {
+			leftAthlete := normalizeReplayAthleteSortKey(left.Athlete)
+			rightAthlete := normalizeReplayAthleteSortKey(right.Athlete)
+			if leftAthlete != rightAthlete {
+				return leftAthlete < rightAthlete
+			}
+			if left.Timestamp != right.Timestamp {
+				return left.Timestamp > right.Timestamp
+			}
+		} else {
+			if left.Timestamp != right.Timestamp {
+				return left.Timestamp > right.Timestamp
+			}
+			leftAthlete := normalizeReplayAthleteSortKey(left.Athlete)
+			rightAthlete := normalizeReplayAthleteSortKey(right.Athlete)
+			if leftAthlete != rightAthlete {
+				return leftAthlete < rightAthlete
+			}
+		}
+
+		if left.LiftType != right.LiftType {
+			return left.LiftType < right.LiftType
+		}
+
+		return left.Attempt < right.Attempt
+	})
+
+	return effectiveSort
+}
+
+func listReplaySessions() ([]ReplaySessionSummary, error) {
+	entries, err := os.ReadDir(config.GetVideoDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make([]ReplaySessionSummary, 0), nil
+		}
+		return nil, err
+	}
+
+	activeSession := currentReplaySessionName()
+	type replaySessionItem struct {
+		summary ReplaySessionSummary
+		modTime time.Time
+	}
+
+	items := make([]replaySessionItem, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "unsorted" {
+			continue
+		}
+
+		groupedLifts, err := buildGroupedReplayLifts(entry.Name())
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			info = nil
+		}
+
+		item := replaySessionItem{
+			summary: ReplaySessionSummary{
+				ID:        entry.Name(),
+				Name:      entry.Name(),
+				Active:    entry.Name() == activeSession,
+				LiftCount: len(groupedLifts),
+			},
+		}
+		if info != nil {
+			item.modTime = info.ModTime()
+		}
+
+		items = append(items, item)
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].summary.Active != items[j].summary.Active {
+			return items[i].summary.Active
+		}
+		if !items[i].modTime.Equal(items[j].modTime) {
+			return items[i].modTime.After(items[j].modTime)
+		}
+		return items[i].summary.Name < items[j].summary.Name
+	})
+
+	sessions := make([]ReplaySessionSummary, 0, len(items))
+	for _, item := range items {
+		sessions = append(sessions, item.summary)
+	}
+
+	return sessions, nil
+}
+
+func handleReplaySessions(w http.ResponseWriter, r *http.Request) {
+	setReplayAPIHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	sessions, err := listReplaySessions()
+	if err != nil {
+		http.Error(w, "Failed to enumerate replay sessions", http.StatusInternalServerError)
+		return
+	}
+
+	response := ReplaySessionsResponse{
+		ActiveSession: currentReplaySessionName(),
+		Sessions:      sessions,
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logging.ErrorLogger.Printf("Failed to encode replay sessions response: %v", err)
+	}
+}
+
+func handleReplaySessionLifts(w http.ResponseWriter, r *http.Request) {
+	setReplayAPIHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	session, err := sanitizeReplaySessionID(mux.Vars(r)["session"])
+	if err != nil {
+		http.Error(w, "Invalid session identifier", http.StatusBadRequest)
+		return
+	}
+
+	sessionDir := filepath.Join(config.GetVideoDir(), session)
+	info, err := os.Stat(sessionDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Replay session not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to inspect replay session", http.StatusInternalServerError)
+		return
+	}
+	if !info.IsDir() {
+		http.Error(w, "Replay session not found", http.StatusNotFound)
+		return
+	}
+
+	lifts, err := buildGroupedReplayLifts(session)
+	if err != nil {
+		http.Error(w, "Failed to list session replays", http.StatusInternalServerError)
+		return
+	}
+
+	athleteFilterValue := strings.TrimSpace(r.URL.Query().Get("athlete"))
+	var athleteFilter *string
+	if athleteFilterValue != "" {
+		filteredLifts := make([]ReplayLift, 0, len(lifts))
+		for _, lift := range lifts {
+			if strings.EqualFold(strings.TrimSpace(lift.Athlete), athleteFilterValue) {
+				filteredLifts = append(filteredLifts, lift)
+			}
+		}
+		lifts = filteredLifts
+		athleteFilter = &athleteFilterValue
+	}
+
+	effectiveSort := sortReplayLifts(lifts, r.URL.Query().Get("sort"))
+	activeSession := currentReplaySessionName()
+	response := ReplaySessionLiftsResponse{
+		Session: ReplaySessionInfo{
+			ID:     session,
+			Name:   session,
+			Active: session == activeSession,
+		},
+		Sort:          effectiveSort,
+		AthleteFilter: athleteFilter,
+		LiftCount:     len(lifts),
+		Lifts:         lifts,
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logging.ErrorLogger.Printf("Failed to encode replay session lifts response: %v", err)
+	}
+}
+
+func resolveReplaySession() (string, error) {
+	session := currentReplaySessionName()
+	if session != "" {
+		return session, nil
+	}
+
+	entries, err := os.ReadDir(config.GetVideoDir())
+	if err != nil {
+		return "", err
+	}
+
+	var latestDir os.DirEntry
+	var latestModTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "unsorted" {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if latestDir == nil || info.ModTime().After(latestModTime) {
+			latestDir = entry
+			latestModTime = info.ModTime()
+		}
+	}
+
+	if latestDir == nil {
+		return "", os.ErrNotExist
+	}
+
+	return latestDir.Name(), nil
+}
+
+func findLatestReplayForCamera(session string, camera int) (*ReplayCameraState, error) {
+	if session == "" {
+		return nil, os.ErrNotExist
+	}
+
+	sessionDir := filepath.Join(config.GetVideoDir(), session)
+	files, err := os.ReadDir(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var latestReplay *ReplayCameraState
+	var latestTimestamp string
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		parsedReplay, ok := parseReplayFilename(session, file.Name())
+		if !ok {
+			continue
+		}
+		if parsedReplay.Camera != camera {
+			continue
+		}
+
+		timestamp := parsedReplay.Timestamp
+		if latestReplay != nil && timestamp <= latestTimestamp {
+			continue
+		}
+
+		latestTimestamp = timestamp
+		latestReplay = &ReplayCameraState{
+			Camera:        camera,
+			Available:     true,
+			Session:       session,
+			Filename:      parsedReplay.Filename,
+			VideoPath:     parsedReplay.URL,
+			AthleteName:   parsedReplay.Athlete,
+			LiftType:      parsedReplay.LiftType,
+			AttemptNumber: parsedReplay.AttemptNumber,
+			Timestamp:     timestamp,
+		}
+	}
+
+	if latestReplay == nil {
+		return nil, os.ErrNotExist
+	}
+
+	return latestReplay, nil
+}
+
+func handleReplayState(w http.ResponseWriter, _ *http.Request) {
+	setReplayAPIHeaders(w)
+	session, err := resolveReplaySession()
+	if err != nil && !os.IsNotExist(err) {
+		http.Error(w, "Failed to resolve replay state", http.StatusInternalServerError)
+		return
+	}
+
+	response := ReplayStateResponse{
+		ActiveSession:      state.CurrentSession,
+		ResolvedSession:    session,
+		CurrentAthlete:     state.CurrentAthlete,
+		CurrentLiftType:    state.CurrentLiftType,
+		CurrentAttempt:     state.CurrentAttempt,
+		CurrentCamera:      state.CurrentCameraNumber,
+		HasMultiplePlatform: len(state.AvailablePlatforms) > 1,
+		Cameras:            make([]ReplayCameraState, 0, 4),
+	}
+
+	for camera := 1; camera <= 4; camera++ {
+		replayState := ReplayCameraState{Camera: camera}
+		if session != "" {
+			latestReplay, replayErr := findLatestReplayForCamera(session, camera)
+			if replayErr == nil {
+				replayState = *latestReplay
+			}
+		}
+		response.Cameras = append(response.Cameras, replayState)
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logging.ErrorLogger.Printf("Failed to encode replay state response: %v", err)
+	}
+}
+
 // handleReplay serves the latest replay for the given camera number from the current session.
 // Example filename: 2025-03-29_03h34m34s_DARSIGNY_Shad_CLEANJERK_attempt3_Camera1.mp4
 func handleReplay(w http.ResponseWriter, r *http.Request) {
@@ -356,87 +884,30 @@ func handleReplay(w http.ResponseWriter, r *http.Request) {
 
 	// Accept and strip a .mp4 extension if present in the URL
 	cameraNum = strings.TrimSuffix(cameraNum, ".mp4")
-
-	// Get current session
-	session := strings.ReplaceAll(state.CurrentSession, " ", "_")
-	if session == "" {
-		// No active session, find most recent directory under videos
-		videoDir := config.GetVideoDir()
-		entries, err := os.ReadDir(videoDir)
-		if err != nil {
-			http.Error(w, "No active session and failed to read video directory", http.StatusNotFound)
-			return
-		}
-		var dirs []os.DirEntry
-		for _, entry := range entries {
-			if entry.IsDir() && entry.Name() != "unsorted" {
-				dirs = append(dirs, entry)
-			}
-		}
-		if len(dirs) == 0 {
-			http.Error(w, "No active session and no session directories found", http.StatusNotFound)
-			return
-		}
-		// Find the most recently modified directory
-		var latestDir os.DirEntry
-		var latestModTime time.Time
-		for _, dir := range dirs {
-			info, err := dir.Info()
-			if err != nil {
-				continue
-			}
-			modTime := info.ModTime()
-			if latestDir == nil || modTime.After(latestModTime) {
-				latestDir = dir
-				latestModTime = modTime
-			}
-		}
-		if latestDir == nil {
-			http.Error(w, "No active session and no session directories found", http.StatusNotFound)
-			return
-		}
-		session = latestDir.Name()
-	}
-
-	// Build session directory path
-	sessionDir := filepath.Join(config.GetVideoDir(), session)
-	logging.InfoLogger.Printf("handleReplay: sessionDir = %s", sessionDir) // Use logger instead of fmt.Println
-	files, err := os.ReadDir(sessionDir)
-	if err != nil {
-		http.Error(w, "Session directory not found", http.StatusNotFound)
+	camera, err := strconv.Atoi(cameraNum)
+	if err != nil || camera < 1 {
+		http.Error(w, "Invalid camera number", http.StatusBadRequest)
 		return
 	}
 
-	// Regex to match files for the current camera, e.g. 2025-03-29_03h34m34s_DARSIGNY_Shad_CLEANJERK_attempt3_Camera1.mp4
-	// Match: timestamp at start, anything in the middle, then attemptX_CameraY at the end
-	re := regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})_(\d{2}h\d{2}m\d{2}s)_.*_attempt\d+_Camera` + cameraNum + `\.mp4$`)
-
-	var latestFile string
-	var latestTimestamp string
-
-	for _, file := range files {
-		if file.IsDir() {
-			continue
+	session, err := resolveReplaySession()
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "No active session and no session directories found", http.StatusNotFound)
+			return
 		}
-		name := file.Name()
-		matches := re.FindStringSubmatch(name)
-		if len(matches) == 3 {
-			// Combine date and time for comparison
-			timestamp := matches[1] + "_" + matches[2]
-			if timestamp > latestTimestamp {
-				latestTimestamp = timestamp
-				latestFile = name
-			}
-		}
+		http.Error(w, "Failed to resolve replay session", http.StatusInternalServerError)
+		return
 	}
 
-	if latestFile == "" {
+	latestReplay, err := findLatestReplayForCamera(session, camera)
+	if err != nil {
 		http.Error(w, "No replay found for camera "+cameraNum, http.StatusNotFound)
 		return
 	}
 
 	// Serve the file with correct MIME type for .mp4 and no caching headers
-	videoPath := filepath.Join(sessionDir, latestFile)
+	videoPath := filepath.Join(config.GetVideoDir(), latestReplay.Session, latestReplay.Filename)
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
 	w.Header().Set("Pragma", "no-cache")

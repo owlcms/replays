@@ -17,9 +17,12 @@ const (
 )
 
 type StatusMessage struct {
-	Code    StatusCode `json:"code"`
-	Text    string     `json:"text"`
-	Session string     `json:"session"` // Add session field
+	Code          StatusCode `json:"code"`
+	Text          string     `json:"text"`
+	Session       string     `json:"session"`
+	AthleteName   string     `json:"athleteName,omitempty"`
+	LiftType      string     `json:"liftType,omitempty"`
+	AttemptNumber int        `json:"attemptNumber,omitempty"`
 }
 
 var (
@@ -28,6 +31,17 @@ var (
 	statusCode          StatusCode
 	VideoReadyReloading bool
 )
+
+func buildStatusMessage(code StatusCode, text string) StatusMessage {
+	return StatusMessage{
+		Code:          code,
+		Text:          text,
+		Session:       state.CurrentSession,
+		AthleteName:   state.CurrentAthlete,
+		LiftType:      state.CurrentLiftType,
+		AttemptNumber: state.CurrentAttempt,
+	}
+}
 
 // SendStatus sends a status update to all clients through the broadcast channel
 // and updates the Fyne UI through StatusChan
@@ -38,11 +52,7 @@ func SendStatus(code StatusCode, text string) {
 		text = "Reloading..."
 		VideoReadyReloading = true
 	}
-	msg := StatusMessage{
-		Code:    code,
-		Text:    text,
-		Session: state.CurrentSession, // Include current session in message
-	}
+	msg := buildStatusMessage(code, text)
 	mu.Lock()
 	statusMsg = text
 	for client := range clients {
