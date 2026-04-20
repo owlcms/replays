@@ -2,17 +2,17 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MEDIAMTX_EXE="$SCRIPT_DIR/mediamtx.exe"
 STREAM_NAME="${STREAM_NAME:-uvc}"
 RTSP_URL="${RTSP_URL:-rtsp://127.0.0.1:8554/${STREAM_NAME}}"
-CAMERA_NAME="${CAMERA_NAME:-UVC Camera}"
+CAMERA_DEVICE="${CAMERA_DEVICE:-/dev/video0}"
 VIDEO_SIZE="${VIDEO_SIZE:-1920x1080}"
 FRAME_RATE="${FRAME_RATE:-60}"
-PIXEL_FORMAT="${PIXEL_FORMAT:-nv12}"
+INPUT_FORMAT="${INPUT_FORMAT:-}"
 GOP_SIZE="${GOP_SIZE:-60}"
-NVENC_PRESET="${NVENC_PRESET:-p4}"
-RTBUF_SIZE="${RTBUF_SIZE:-256M}"
+NVENC_PRESET="${NVENC_PRESET:-p5}"
+BITRATE="${BITRATE:-8M}"
+THREAD_QUEUE_SIZE="${THREAD_QUEUE_SIZE:-4096}"
+RTBUF_SIZE="${RTBUF_SIZE:-512M}"
 STOP_EXISTING_MEDIAMTX="${STOP_EXISTING_MEDIAMTX:-1}"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
@@ -20,8 +20,13 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
     exit 1
 fi
 
-if [ ! -x "$MEDIAMTX_EXE" ]; then
-    echo "MediaMTX executable not found at $MEDIAMTX_EXE" >&2
+if ! command -v mediamtx >/dev/null 2>&1; then
+    echo "mediamtx is not on PATH" >&2
+    exit 1
+fi
+
+if [ ! -e "$CAMERA_DEVICE" ]; then
+    echo "Camera device not found at $CAMERA_DEVICE" >&2
     exit 1
 fi
 
@@ -48,34 +53,42 @@ paths:
 EOF
 
 if [ "$STOP_EXISTING_MEDIAMTX" = "1" ]; then
-        taskkill.exe //IM mediamtx.exe //F >/dev/null 2>&1 || true
+    pkill -x mediamtx >/dev/null 2>&1 || true
 fi
 
-echo "Starting MediaMTX from $MEDIAMTX_EXE"
-"$MEDIAMTX_EXE" "$mediamtx_config" &
+echo "Starting MediaMTX"
+mediamtx "$mediamtx_config" &
 mediamtx_pid=$!
 
 sleep 1
 
-echo "Publishing $CAMERA_NAME to $RTSP_URL"
+input_args=(
+    -f v4l2
+    -rtbufsize "$RTBUF_SIZE"
+    -thread_queue_size "$THREAD_QUEUE_SIZE"
+    -framerate "$FRAME_RATE"
+    -video_size "$VIDEO_SIZE"
+)
+
+if [ -n "$INPUT_FORMAT" ]; then
+    input_args+=( -input_format "$INPUT_FORMAT" )
+fi
+
+echo "Publishing $CAMERA_DEVICE to $RTSP_URL"
 exec ffmpeg \
     -hide_banner \
     -loglevel info \
-    -f dshow \
-    -rtbufsize "$RTBUF_SIZE" \
-    -use_video_device_timestamps false \
-    -use_wallclock_as_timestamps 1 \
-    -fflags +genpts \
-    -video_size "$VIDEO_SIZE" \
-    -framerate "$FRAME_RATE" \
-    -pixel_format "$PIXEL_FORMAT" \
-    -i video="$CAMERA_NAME" \
+    "${input_args[@]}" \
+    -i "$CAMERA_DEVICE" \
     -an \
     -c:v h264_nvenc \
     -preset "$NVENC_PRESET" \
-    -tune ll \
-    -pix_fmt yuv420p \
+    -rc cbr \
+    -b:v "$BITRATE" \
     -g "$GOP_SIZE" \
+    -keyint_min "$GOP_SIZE" \
+    -r "$FRAME_RATE" \
+    -vsync cfr \
     -f rtsp \
     -rtsp_transport tcp \
     "$RTSP_URL"
