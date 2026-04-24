@@ -335,7 +335,26 @@ func StopRecording() (bool, error) {
 			wg.Add(1)
 			go func(i int, cmd *exec.Cmd) {
 				defer wg.Done()
-				if err := cmd.Wait(); err != nil {
+				// Give ffmpeg a brief window to react to the graceful stop
+				// (q on stdin / EOF / SIGINT). If it does not exit — typical
+				// when ffmpeg is blocked in an input read with no packets
+				// arriving on the UDP source — escalate to a hard kill so
+				// the recorder always tears down promptly.
+				done := make(chan error, 1)
+				go func() { done <- cmd.Wait() }()
+
+				var err error
+				select {
+				case err = <-done:
+				case <-time.After(2 * time.Second):
+					logging.InfoLogger.Printf("ffmpeg did not stop gracefully for Camera %d; forcing kill", i+1)
+					if killErr := forceKillCmd(cmd); killErr != nil {
+						logging.ErrorLogger.Printf("Failed to force-kill ffmpeg for Camera %d: %v", i+1, killErr)
+					}
+					err = <-done
+				}
+
+				if err != nil {
 					if isExpectedFFmpegStop(err) {
 						logging.InfoLogger.Printf("ffmpeg stopped gracefully for Camera %d (signal exit): %v", i+1, err)
 					} else {

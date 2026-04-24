@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/owlcms/replays/internal/config"
@@ -131,8 +132,14 @@ func forceKillCmd(cmd *exec.Cmd) error {
 	return nil
 }
 
-// CreateHiddenCmd creates a command. On non-Windows platforms, no special handling
-// is needed as there's no console window to hide.
+// CreateHiddenCmd creates a command. On non-Windows platforms, no console
+// window needs to be hidden, but we still place the child in its own process
+// group so that signalling it (kill(-pgid, ...)) does not also signal the
+// parent application.
 func CreateHiddenCmd(name string, args ...string) *exec.Cmd {
-	return exec.Command(name, args...)
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	return cmd
 }

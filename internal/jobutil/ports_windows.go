@@ -35,7 +35,50 @@ func terminateProcess(pid int) error {
 }
 
 func killProcess(pid int) error {
+	// Try the Win32 API first (OpenProcess + TerminateProcess). This is what
+	// taskkill /F ultimately wraps, but going through it directly avoids the
+	// fragile parent-shell + console / CSRSS round-trips that can leave
+	// taskkill reporting "ERROR: The process ... could not be terminated"
+	// for orphaned ffmpeg children. We still fall back to taskkill /F /T as
+	// a backup so descendants are reaped on the rare occasion the API call
+	// fails.
+	if err := terminateProcessNative(pid); err == nil {
+		// taskkill /T also kills children; mirror that by following up with
+		// a tree-kill so any helpers ffmpeg may have spawned are reaped too.
+		_ = runTaskkill("/F", "/T", "/PID", strconv.Itoa(pid))
+		return nil
+	}
 	return runTaskkill("/F", "/T", "/PID", strconv.Itoa(pid))
+}
+
+// terminateProcessNative opens the process by PID and calls TerminateProcess.
+// Returns nil if the process is already gone or was successfully terminated.
+func terminateProcessNative(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE|windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		// ERROR_INVALID_PARAMETER (87) is what OpenProcess returns when the
+		// PID does not (or no longer) exists — treat as success.
+		if errno, ok := err.(syscall.Errno); ok && errno == 87 {
+			return nil
+		}
+		return fmt.Errorf("OpenProcess(%d): %w", pid, err)
+	}
+	defer windows.CloseHandle(h)
+	if err := windows.TerminateProcess(h, 1); err != nil {
+		// ERROR_ACCESS_DENIED (5) on a process that has already terminated
+		// surfaces here; verify and treat as success in that case.
+		if !processStillRunning(pid) {
+			return nil
+		}
+		return fmt.Errorf("TerminateProcess(%d): %w", pid, err)
+	}
+	// Wait briefly for the process to actually exit so callers that re-check
+	// port ownership immediately don't race.
+	_, _ = windows.WaitForSingleObject(h, 500)
+	return nil
 }
 
 func runTaskkill(args ...string) error {

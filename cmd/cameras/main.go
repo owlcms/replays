@@ -798,7 +798,6 @@ func stopProcess(stream *cameraStream, reason string) error {
 
 	stream.mu.Lock()
 	cmd := stream.cmd
-	stdin := stream.stdin
 	port := stream.port
 	stream.stdin = nil
 	stream.mu.Unlock()
@@ -813,14 +812,11 @@ func stopProcess(stream *cameraStream, reason string) error {
 		logging.InfoLogger.Printf("Stopping ffmpeg for %s (%s)", stream.camera.Name, stream.udpDest)
 	}
 
-	// Live preview streams produce no file that needs a clean trailer, so we
-	// skip the "q on stdin" graceful stop and just tear the process tree down.
-	// Close stdin so ffmpeg can't block on a write while we kill it.
-	if stdin != nil {
-		if err := recording.CloseFFmpegStdin(stdin); err != nil {
-			logging.InfoLogger.Printf("Could not close ffmpeg stdin for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
-		}
-	}
+	// Live preview / multicast streams produce no file that needs a clean
+	// trailer, so we skip any graceful-stop signalling (closing stdin would
+	// actually trigger ffmpeg's clean-shutdown path, the opposite of what we
+	// want here) and tear the process tree down directly. The stdin pipe is
+	// released as part of the process teardown.
 
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 		if port > 0 {
@@ -829,13 +825,30 @@ func stopProcess(stream *cameraStream, reason string) error {
 		return nil
 	}
 
-	stopErr := jobutil.StopProcessTree(cmd.Process.Pid, 2*time.Second)
+	pid := cmd.Process.Pid
+
+	// Kill the ffmpeg process directly via the OS handle Go already holds.
+	// This uses TerminateProcess() on Windows / SIGKILL on Unix and does not
+	// depend on PID lookups via taskkill/tasklist subprocesses, so it is both
+	// faster and more reliable than the polite taskkill escalation in
+	// StopProcessTree. We then still call StopProcessTree to reap any child
+	// processes ffmpeg may have spawned (e.g. helpers for some input/output
+	// filters), and to wait until the parent is observed gone.
+	if err := cmd.Process.Kill(); err != nil {
+		logging.InfoLogger.Printf("cmd.Process.Kill() returned for %s (pid=%d): %v", stream.camera.Name, pid, err)
+	} else {
+		logging.InfoLogger.Printf("cmd.Process.Kill() issued for %s (pid=%d)", stream.camera.Name, pid)
+	}
+
+	stopErr := jobutil.StopProcessTree(pid, 2*time.Second)
 	if port > 0 {
 		stopErr = combineStopError(stopErr, jobutil.StopUDPPortOwners(port, 2*time.Second))
 		stopErr = combineStopError(stopErr, jobutil.WaitForUDPPortFree(port, 500*time.Millisecond))
 	}
 	if stopErr != nil {
 		logging.ErrorLogger.Printf("Failed to fully stop %s (%s): %v", stream.camera.Name, stream.udpDest, stopErr)
+	} else {
+		logging.InfoLogger.Printf("Stopped ffmpeg for %s (%s) pid=%d", stream.camera.Name, stream.udpDest, pid)
 	}
 	return stopErr
 }
