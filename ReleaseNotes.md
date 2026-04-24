@@ -1,5 +1,8 @@
 **Change log**
 
+- 2.2.3: fixed epileptic reload of the replays browser page during recording
+- 2.2.3: fixed apparent regression of the end-of-recording signal to ffmpeg
+
 - 2.2.2: changes to support new improved Jury Replays user interface in owlcms-tracker 2.16.0
 
 - 2.2.1:  configuration page fixes: changes are applied on the apply button for more predictable behaviour
