@@ -84,16 +84,24 @@ func buildRecordingArgs(fileName string, camera config.CameraConfiguration) []st
 	return args
 }
 
-// buildTrimmingArgs builds the ffmpeg arguments for trimming
-func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
-	// replays trim/finalize behavior
-	// - MJPEG recode path currently uses built-in software libx264 settings
-	//   (not encoder blocks), since this runs during trimming and not on the real-time capture path
+// buildTrimmingArgs builds the ffmpeg arguments for trimming.
+//
+// keepFromEndMs is the number of milliseconds to keep, counted backwards from
+// the end of the input file. We seek from EOF (-sseof) instead of from the
+// start because the recorder's start timestamp is unreliable: ffmpeg takes a
+// variable amount of time (often several seconds) to write the first frame to
+// the mkv after StartRecording is called, especially when waiting for the next
+// IDR on the UDP stream. The end of the file, however, is always "now" — so
+// keeping the last N seconds is independent of recorder startup latency.
+func buildTrimmingArgs(keepFromEndMs int64, currentFileName, finalFileName string, camera config.CameraConfiguration) []string {
 	args := []string{"-y"}
 	// Note: InputParameters are NOT used during trimming as they are for camera capture only
 
-	if trimDuration > 0 {
-		args = append(args, "-ss", fmt.Sprintf("%d", trimDuration/1000))
+	if keepFromEndMs > 0 {
+		// -sseof takes a NEGATIVE value meaning "seek N seconds before end of file".
+		// Use fractional seconds for sub-second accuracy. With -c copy this still
+		// snaps to the previous keyframe, which is fine given the 1-second GOP.
+		args = append(args, "-sseof", fmt.Sprintf("-%.3f", float64(keepFromEndMs)/1000.0))
 	}
 	// Input file
 	args = append(args, "-i", currentFileName)
@@ -108,10 +116,15 @@ func buildTrimmingArgs(trimDuration int64, currentFileName, finalFileName string
 			"-preset", "ultrafast",
 			"-profile:v", "main",
 			"-pix_fmt", "yuv420p",
+			"-avoid_negative_ts", "make_zero",
 		)
 	} else {
 		// When not recoding, just copy the stream (already in H.264 format)
-		args = append(args, "-c", "copy", "-movflags", "faststart")
+		args = append(args,
+			"-c", "copy",
+			"-avoid_negative_ts", "make_zero",
+			"-movflags", "+faststart",
+		)
 	}
 
 	args = append(args, finalFileName)
@@ -180,8 +193,10 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	return nil
 }
 
-// trimVideo handles the trimming of a single video file
-func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, trimDuration int64, startTime int64, fullSessionDir string, timestamp string, finalFileNames *[]string) {
+// trimVideo handles the trimming of a single video file.
+// keepFromEndMs is the number of milliseconds to keep counted from end-of-file
+// (see buildTrimmingArgs for rationale).
+func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs int64, startTime int64, fullSessionDir string, timestamp string, finalFileNames *[]string) {
 	defer wg.Done()
 
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
@@ -207,7 +222,7 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, trimDuration i
 		}
 	} else {
 		for j := 0; j < 5; j++ {
-			args := buildTrimmingArgs(trimDuration, currentFileName, finalFileName, config.GetCameraConfigs()[i])
+			args := buildTrimmingArgs(keepFromEndMs, currentFileName, finalFileName, config.GetCameraConfigs()[i])
 			cmd := CreateFfmpegCmd(args, "trimming")
 
 			if j == 0 {
@@ -240,9 +255,20 @@ func StopRecordingAndTrim(decisionTime int64) error {
 		return err
 	}
 
+	// leadInMs is how much footage to keep BEFORE the moment the timer was stopped.
+	const leadInMs int64 = 5000
+
 	startTime := state.LastStartTime
-	trimDuration := state.LastTimerStopTime - startTime - 5000
-	logging.InfoLogger.Printf("Duration to be trimmed: %d milliseconds", trimDuration)
+	// Keep from EOF: everything after the timer stop (decision + a couple of
+	// seconds of post-decision tail captured between stop and ffmpeg shutdown)
+	// plus leadInMs of footage before the stop.
+	nowMs := time.Now().UnixNano() / int64(time.Millisecond)
+	keepFromEndMs := (nowMs - state.LastTimerStopTime) + leadInMs
+	if state.LastTimerStopTime == 0 {
+		// No stop message was received — fall back to keeping the whole file.
+		keepFromEndMs = 0
+	}
+	logging.InfoLogger.Printf("Trim: keeping last %d ms (lead-in %d ms before timer stop)", keepFromEndMs, leadInMs)
 
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
 	var finalFileNames []string
@@ -265,7 +291,7 @@ func StopRecordingAndTrim(decisionTime int64) error {
 	var wg sync.WaitGroup
 	for i, currentFileName := range currentFileNames {
 		wg.Add(1)
-		go trimVideo(&wg, i, currentFileName, trimDuration, startTime, fullSessionDir, timestamp, &finalFileNames)
+		go trimVideo(&wg, i, currentFileName, keepFromEndMs, startTime, fullSessionDir, timestamp, &finalFileNames)
 	}
 
 	wg.Wait()
