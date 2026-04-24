@@ -1,7 +1,9 @@
 **Change log**
 
+- 2.2.3: robustness. trimming time now computed from end of recording
+- 2.2.3: fixes for encoder settings to acheive more reliable trimming, esp. on Intel w/ QSV.
 - 2.2.3: fixed epileptic reload of the replays browser page during recording
-- 2.2.3: fixed apparent regression of the end-of-recording signal to ffmpeg
+- 2.2.3: robustness fix for the end-of-ffmpeg processing on windows
 
 - 2.2.2: changes to support new improved Jury Replays user interface in owlcms-tracker 2.16.0
 
