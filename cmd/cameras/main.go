@@ -813,14 +813,13 @@ func stopProcess(stream *cameraStream, reason string) error {
 		logging.InfoLogger.Printf("Stopping ffmpeg for %s (%s)", stream.camera.Name, stream.udpDest)
 	}
 
+	// Live preview streams produce no file that needs a clean trailer, so we
+	// skip the "q on stdin" graceful stop and just tear the process tree down.
+	// Close stdin so ffmpeg can't block on a write while we kill it.
 	if stdin != nil {
-		if err := recording.RequestFFmpegQuit(stdin); err != nil {
-			logging.InfoLogger.Printf("Could not write 'q' to ffmpeg for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
-		}
 		if err := recording.CloseFFmpegStdin(stdin); err != nil {
 			logging.InfoLogger.Printf("Could not close ffmpeg stdin for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
 
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {

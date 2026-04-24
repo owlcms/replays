@@ -1,21 +1,10 @@
 package recording
 
-import (
-	"io"
-	"os"
-	"os/exec"
-)
+import "io"
 
-func RequestFFmpegStop(cmd *exec.Cmd, stdin io.Writer) error {
-	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Signal(os.Interrupt); err == nil {
-			return nil
-		}
-	}
-
-	return RequestFFmpegQuit(stdin)
-}
-
+// RequestFFmpegQuit writes "q\n" to ffmpeg's stdin, which ffmpeg interprets
+// as a request to stop recording and finalize the output file. Requires
+// ffmpeg to have been started with stdin available (i.e., without -nostdin).
 func RequestFFmpegQuit(stdin io.Writer) error {
 	if stdin == nil {
 		return nil
@@ -24,6 +13,8 @@ func RequestFFmpegQuit(stdin io.Writer) error {
 	return err
 }
 
+// CloseFFmpegStdin closes ffmpeg's stdin pipe. ffmpeg treats EOF on stdin
+// the same as receiving "q": it stops cleanly and finalizes the output.
 func CloseFFmpegStdin(stdin io.Closer) error {
 	if stdin == nil {
 		return nil

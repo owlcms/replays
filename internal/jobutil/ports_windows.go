@@ -49,6 +49,25 @@ func runTaskkill(args ...string) error {
 			strings.Contains(message, "no tasks are running") {
 			return nil
 		}
+		// The polite (non-/F) taskkill step routinely fails when ffmpeg
+		// children refuse to exit on a WM_CLOSE message — Windows reports
+		// "could not be terminated ... can only be terminated forcefully
+		// (with /F option)" with exit code 128. StopProcessTree follows up
+		// with a forced /F /T kill, so swallow this expected outcome here
+		// instead of surfacing it to the user.
+		hasForceFlag := false
+		for _, a := range args {
+			if strings.EqualFold(a, "/F") {
+				hasForceFlag = true
+				break
+			}
+		}
+		if !hasForceFlag && (strings.Contains(message, "terminated forcefully") ||
+			strings.Contains(message, "with /f option") ||
+			strings.Contains(message, "child processes of this process were still running") ||
+			strings.Contains(message, "could not be terminated")) {
+			return nil
+		}
 		if message != "" {
 			return fmt.Errorf("taskkill %s: %s: %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 		}

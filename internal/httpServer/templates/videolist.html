@@ -5,7 +5,19 @@
     <link rel="stylesheet" type="text/css" href="/static/css/styles.css">
     <script type="text/javascript">
         let ws;
-        let currentSession = "{{.ActiveSession}}";
+        let currentSession = "{{.SelectedSession}}";
+        let reloadPending = false;
+
+        function navigateToSession(session) {
+            const url = new URL(window.location.href);
+
+            if (url.searchParams.get('session') === session) {
+                return;
+            }
+
+            url.searchParams.set('session', session);
+            window.location.href = url.toString();
+        }
         
         function updateStatusMessage(text, code) {
             const statusDiv = document.getElementById('status-message');
@@ -64,14 +76,18 @@
             
             // If this is a recording start message
             if (msg.code === 1 && msg.text.includes("Recording:") && msg.session) {
+                const sessionChanged = msg.session !== currentSession;
                 updateCurrentSession(msg.session);
-                // Always switch to the new session's directory
-                window.location.href = '/?session=' + encodeURIComponent(msg.session);
+                if (sessionChanged) {
+                    navigateToSession(msg.session);
+                }
             } else if (msg.code === 0 && msg.text === "No active session") {
                 updateCurrentSession('');
             } else if (msg.code === 0 && msg.text === "Reloading...") {
-                // Single reload when all videos are ready
-                location.reload();
+                if (!reloadPending) {
+                    reloadPending = true;
+                    location.reload();
+                }
             }
         }
 
