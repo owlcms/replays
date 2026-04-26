@@ -125,6 +125,48 @@ func decodeCameraConfig(data string) (Config, error) {
 	return cfg, err
 }
 
+func loadConfigFile(path string, rememberSource bool) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", path, err)
+	}
+
+	cfg, err := decodeCameraConfig(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+	}
+
+	logging.InfoLogger.Printf("Loading cameras instance config from %s", path)
+	cfg.applyDefaults()
+	if rememberSource {
+		configSourcePath = path
+	}
+
+	return &cfg, nil
+}
+
+// LoadConfigFromFile loads a cameras configuration from an explicit config.toml path.
+// Unlike LoadConfig, this does not change the remembered source path used by SaveConfig.
+func LoadConfigFromFile(path string) (*Config, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty cameras config path")
+	}
+	if absPath, err := filepath.Abs(trimmed); err == nil {
+		trimmed = absPath
+	}
+	return loadConfigFile(trimmed, false)
+}
+
+// LoadConfigFromDir loads a cameras configuration from configDir/config.toml.
+func LoadConfigFromDir(configDir string) (*Config, error) {
+	trimmed := strings.TrimSpace(configDir)
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty cameras config directory")
+	}
+	return LoadConfigFromFile(filepath.Join(trimmed, "config.toml"))
+}
+
 // LoadConfig loads the cameras instance configuration from config.toml.
 // Search order: exe dir → cwd → install dir → embedded default.
 func LoadConfig() (*Config, error) {
@@ -144,17 +186,11 @@ func LoadConfig() (*Config, error) {
 		path := filepath.Join(dir, "config.toml")
 		if _, err := os.Stat(path); err == nil {
 			fmt.Printf("Cameras instance config: %s\n", path)
-			logging.InfoLogger.Printf("Loading cameras instance config from %s", path)
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return nil, fmt.Errorf("failed to read %s: %w", path, readErr)
+			loaded, loadErr := loadConfigFile(path, true)
+			if loadErr != nil {
+				return nil, loadErr
 			}
-			var parseErr error
-			cfg, parseErr = decodeCameraConfig(string(data))
-			if parseErr != nil {
-				return nil, fmt.Errorf("failed to parse %s: %w", path, parseErr)
-			}
-			configSourcePath = path
+			cfg = *loaded
 			break
 		}
 	}

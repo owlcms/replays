@@ -335,8 +335,9 @@ func main() {
 	}
 	ffmpegConfig = fc
 
-	// Load per-instance cameras configuration (multicast, includeAll)
-	cfg, err := camerascfg.LoadConfig()
+	// Load the cameras config from the resolved per-instance config directory.
+	// This keeps direct dev startup aligned with Replays and with the helper scripts.
+	cfg, err := camerascfg.LoadConfigFromDir(config.GetInstallDir())
 	if err != nil {
 		fmt.Printf("Error loading cameras config: %v\n", err)
 		fmt.Println("Using built-in defaults.")

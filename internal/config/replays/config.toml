@@ -39,11 +39,25 @@ logFfmpeg = false
 #    - config.toml [windows*]/[linux*] sections append additional sources
 #    - matching manual sources override the same source from auto.toml
 # 3) default_cameras.toml platform sections are used only when no direct-input sources are configured
-#
+
+
 # Recommended workflow:
 # - leave auto.toml as the generated baseline
 # - keep config.toml camera sections only for manual additions or explicit overrides
-# - do not copy the full auto.toml into config.toml unless you want to take over everything manually
+# - if you want to take things over manually, copy the required camera definitions from auto.toml into
+#   config.toml [windows*]/[linux*] sections, then remove auto.toml.
 #
-# Note: this precedence applies only to camera source definitions.
-# Other application settings (port, videoDir, owlcms, etc.) are still read from config.toml.
+# Example manual RTSP source for standalone Replays:
+# - disable [mpeg-ts] above
+# - use [windows1] on Windows or rename the section to [linux1] on Linux
+#
+# [windows1]
+#     enabled = true
+#     camera = "rtsp://192.168.1.93:8554/uvc"
+#     format = "rtsp"
+#     inputParameters = "-rtsp_transport tcp"
+#     outputParameters = "-c:v copy -an"
+#     recode = false
+#
+# Note: the merge/precedence rules above apply only to camera source sections.
+# Non-camera settings in this file (port, videoDir, owlcms, etc.) are read only from config.toml.

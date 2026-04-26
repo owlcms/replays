@@ -16,10 +16,8 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
@@ -56,6 +54,10 @@ func setAppIcon(myApp fyne.App) {
 			return
 		}
 	}
+}
+
+func defaultWindowSize() fyne.Size {
+	return fyne.NewSize(1480, 880)
 }
 
 func getReplayListHost() string {
@@ -197,14 +199,14 @@ func formatEnabledCameraList(cfg *replays.Config) string {
 
 	if len(cfg.Cameras) == 0 {
 		if cfg.Multicast.Enabled {
-			return "Camera Module Streams are enabled, but no stream ports are configured."
+			return "Cameras Module Streams are enabled, but no stream ports are configured."
 		}
 		return "No enabled cameras are configured for direct input."
 	}
 
 	var builder strings.Builder
 	if cfg.Multicast.Enabled {
-		builder.WriteString("Source mode: Camera Module Streams\n\n")
+		builder.WriteString("Source mode: Cameras Module Streams\n\n")
 	} else {
 		builder.WriteString("Source mode: Direct input\n\n")
 	}
@@ -489,22 +491,22 @@ func openConfigFile() {
 // Multicast camera helpers
 // ---------------------------------------------------------------------------
 
-// toggleMulticast flips the Camera Module Streams flag, saves, and prompts for restart.
+// toggleMulticast flips the Cameras Module Streams flag, saves, and prompts for restart.
 func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	cfg.Multicast.Enabled = !cfg.Multicast.Enabled
 
 	configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
 	if err := replays.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
-		dialog.ShowError(fmt.Errorf("failed to save Camera Module Stream setting: %w", err), window)
+		dialog.ShowError(fmt.Errorf("failed to save Cameras Module Stream setting: %w", err), window)
 		cfg.Multicast.Enabled = !cfg.Multicast.Enabled // revert
 		return
 	}
 
 	var msg string
 	if cfg.Multicast.Enabled {
-		msg = "Camera Module Streams enabled."
+		msg = "Cameras Module Streams enabled."
 	} else {
-		msg = "Camera Module Streams disabled. Local cameras will be used."
+		msg = "Cameras Module Streams disabled. Local cameras will be used."
 	}
 	successDialog := dialog.NewInformation("Success", msg+" The application will now exit. Please restart it.", window)
 	successDialog.SetOnClosed(func() {
@@ -514,7 +516,7 @@ func toggleMulticast(cfg *replays.Config, window fyne.Window) {
 	successDialog.Show()
 }
 
-// showMulticastConfig shows a dialog to configure the Camera Module Stream IP and port mapping.
+// showMulticastConfig shows a dialog to configure the Cameras Module Stream IP and port mapping.
 func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	m := cfg.Multicast
 	portToText := func(port int) string {
@@ -561,7 +563,7 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	hint.Wrapping = fyne.TextWrapWord
 	content := container.NewVBox(form, hint)
 
-	dlg := dialog.NewCustomConfirm("Camera Module Stream Configuration", "Save", "Cancel", content,
+	dlg := dialog.NewCustomConfirm("Cameras Module Stream Configuration", "Save", "Cancel", content,
 		func(save bool) {
 			if !save {
 				return
@@ -602,7 +604,7 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 
 			configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
 			if err := replays.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to save Camera Module Stream config: %w", err), window)
+				dialog.ShowError(fmt.Errorf("failed to save Cameras Module Stream config: %w", err), window)
 				return
 			}
 
@@ -624,9 +626,9 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 // multicastToggleLabel returns the menu label text based on current state.
 func multicastToggleLabel(enabled bool) string {
 	if enabled {
-		return "Stop using Camera Module Streams"
+		return "Stop using Cameras Module Streams"
 	}
-	return "Use Camera Module Streams"
+	return "Use Cameras Module Streams"
 }
 
 // isUnicastIP reports whether ip is a unicast listen address (0.0.0.0 or a
@@ -649,16 +651,15 @@ func localMulticastMismatchNote(cfg *replays.Config) string {
 	// If replays is configured for unicast listening, show an informational note
 	if isUnicastIP(replaysIP) {
 		logging.InfoLogger.Printf("Replays is in unicast mode (listening on %s)", replaysIP)
-		return fmt.Sprintf("Unicast mode: listening on %s. The sending Cameras program must list this machine in its destinations.", replaysIP)
+		return fmt.Sprintf("Unicast mode: listening on %s. The sending Cameras Module must list this machine in its destinations.", replaysIP)
 	}
 
-	camerasCfg, err := cameras.LoadConfig()
+	camerasCfg, camerasConfigPath, err := loadStartupCamerasConfigForComparison()
 	if err != nil {
 		logging.WarningLogger.Printf("Skipping cameras/replays multicast check: %v", err)
 		return ""
 	}
 
-	camerasConfigPath := cameras.GetConfigSourcePath()
 	if camerasConfigPath == "" {
 		return ""
 	}
@@ -669,7 +670,37 @@ func localMulticastMismatchNote(cfg *replays.Config) string {
 	}
 
 	logging.WarningLogger.Printf("Replays multicast IP (%s) differs from Cameras multicast IP (%s)", replaysIP, camerasIP)
-	return fmt.Sprintf("Warning: local Cameras multicast IP is %s, Replays is %s. This is OK when Cameras runs on another machine.", camerasIP, replaysIP)
+	return fmt.Sprintf("Warning: local Cameras Module multicast IP is %s, Replays is %s. This is OK when the Cameras Module runs on another machine.", camerasIP, replaysIP)
+}
+
+func loadStartupCamerasConfigForComparison() (*cameras.Config, string, error) {
+	if config.IsLocalDevRuntime() {
+		devDir := filepath.Join(".", config.LocalVideoConfigDir, "cameras")
+		cfg, err := cameras.LoadConfigFromDir(devDir)
+		if err == nil {
+			configPath := filepath.Join(devDir, "config.toml")
+			if absPath, absErr := filepath.Abs(configPath); absErr == nil {
+				configPath = absPath
+			}
+			return cfg, configPath, nil
+		}
+		logging.WarningLogger.Printf("Failed to load local dev Cameras Module config from %s: %v", devDir, err)
+	}
+
+	options, err := discoverLocalCamerasVersions()
+	if err != nil {
+		return nil, "", err
+	}
+	if len(options) == 0 {
+		return nil, "", fmt.Errorf("no local Cameras Module config was found")
+	}
+
+	option := options[0]
+	cfg, err := cameras.LoadConfigFromDir(option.ConfigDir)
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg, option.ConfigPath, nil
 }
 
 func main() {
@@ -701,7 +732,7 @@ func main() {
 			widget.NewLabel("Loading configuration..."),
 		)
 		window.SetContent(content)
-		window.Resize(fyne.NewSize(900, 400))
+		window.Resize(defaultWindowSize())
 		window.CenterOnScreen()
 		window.Show()
 		window.ShowAndRun()
@@ -738,7 +769,7 @@ func main() {
 	if err := cfg.ValidateCamera(); err != nil {
 		initialStatus = "Error: " + err.Error()
 	} else {
-		initialStatus = "Scanning for owlcms server..."
+		initialStatus = ""
 	}
 
 	// Start HTTP server
@@ -757,14 +788,12 @@ func main() {
 	statusLabel.Wrapping = fyne.TextWrapWord
 	if strings.HasPrefix(initialStatus, "Error:") {
 		statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+	} else if initialStatus == "" {
+		statusLabel.Hide()
 	}
-	noteText := localMulticastMismatchNote(cfg)
-	noteColor := theme.Color(theme.ColorNameError)
-	if strings.HasPrefix(noteText, "Unicast mode") {
-		noteColor = theme.Color(theme.ColorNameForeground)
-	}
-	mismatchNote := canvas.NewText(noteText, noteColor)
-	mismatchNote.TextStyle = fyne.TextStyle{Italic: true}
+	startupMessages := widget.NewLabel("")
+	startupMessages.Wrapping = fyne.TextWrapWord
+	startupMessages.Hide()
 
 	host := getReplayListHost()
 	urlStr := fmt.Sprintf("http://%s:%d", host, cfg.Port)
@@ -776,17 +805,13 @@ func main() {
 		topContainer,
 		container.NewHBox(replaysListLabel, hyperlink),
 		widget.NewSeparator(),
+		startupMessages,
 		statusLabel,
 	)
-	content := container.NewPadded(container.NewBorder(
-		upperContent, // top
-		mismatchNote, // bottom
-		nil,          // left
-		nil,          // right
-	))
+	content := container.NewPadded(upperContent)
 
 	window.SetContent(content)
-	window.Resize(fyne.NewSize(600, 400))
+	window.Resize(defaultWindowSize())
 	window.CenterOnScreen()
 
 	// Create main menu
@@ -794,7 +819,7 @@ func main() {
 	multicastToggle.Action = func() {
 		toggleMulticast(cfg, window)
 	}
-	multicastConfigItem := fyne.NewMenuItem("Camera Module Stream Configuration", func() {
+	multicastConfigItem := fyne.NewMenuItem("Cameras Module Stream Configuration", func() {
 		showMulticastConfig(cfg, window)
 	})
 
@@ -817,8 +842,11 @@ func main() {
 			}),
 		),
 		fyne.NewMenu("Cameras",
-			multicastToggle,
+			fyne.NewMenuItem("Use Streams from Local Cameras Module", func() {
+				showLocalCamerasImportDialog(cfg, window)
+			}),
 			multicastConfigItem,
+			multicastToggle,
 			fyne.NewMenuItemSeparator(),
 			// Camera tooling
 			fyne.NewMenuItem("List Enabled Cameras", func() {
@@ -862,17 +890,11 @@ func main() {
 			}
 
 			// Update status text and style
-			statusLabel.SetText(msg.Text)
-			statusLabel.TextStyle = fyne.TextStyle{
-				Bold: strings.HasPrefix(msg.Text, "Error:"),
-			}
-			statusLabel.Refresh()
+			setStatusLabelText(statusLabel, msg.Text, strings.HasPrefix(msg.Text, "Error:"))
 
 			if msg.Code == httpServer.Ready {
 				hideTimer = time.AfterFunc(10*time.Second, func() {
-					statusLabel.SetText("Ready")
-					statusLabel.TextStyle = fyne.TextStyle{Bold: false}
-					statusLabel.Refresh()
+					setStatusLabelText(statusLabel, "Ready", false)
 				})
 			}
 		}
@@ -880,30 +902,7 @@ func main() {
 
 	// Show the window before running the application
 	window.Show()
-
-	// Discover or verify MQTT broker after window is shown
-	if config.NoMQTT {
-		logging.InfoLogger.Println("MQTT autodiscovery disabled via -noMQTT flag")
-		statusLabel.SetText("MQTT disabled")
-	} else {
-		go func() {
-			broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
-			if err != nil {
-				logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
-				statusLabel.SetText(fmt.Sprintf("Error: Could not find owlcms server - %v", err))
-				statusLabel.TextStyle = fyne.TextStyle{Bold: true}
-				statusLabel.Refresh()
-			} else {
-				cfg.OwlCMS = broker
-				statusLabel.SetText("Ready")
-				statusLabel.TextStyle = fyne.TextStyle{Bold: false}
-				statusLabel.Refresh()
-
-				// Start MQTT monitor which handles platform list retrieval
-				go monitor.Monitor(cfg)
-			}
-		}()
-	}
+	startStartupScans(cfg, statusLabel, startupMessages)
 
 	// Set up shutdown hook early in main
 	setupShutdownHook()
