@@ -9,14 +9,21 @@ LOCAL_CAMERAS_CONFIG_DIR="$REPO_ROOT/video_config/cameras"
 
 show_usage() {
   cat <<'EOF'
-Usage: scripts/cameras.sh [--default-install|--installed] [--script-help] [-- <cameras args...>]
+Usage: scripts/cameras.sh [--default-install|--installed] [--help] [-- <cameras args...>]
 
 Script options:
   --default-install, --installed  Use the latest installed owlcms-cameras config directory
-  --script-help                   Show this script help
+  -h, --help                      Show this script help
 
 All other arguments are passed through to the cameras binary.
 EOF
+}
+
+show_usage_error() {
+  local message="$1"
+  echo "$message" >&2
+  echo >&2
+  show_usage >&2
 }
 
 find_latest_installed_version_dir() {
@@ -53,7 +60,7 @@ while [[ $# -gt 0 ]]; do
       USE_DEFAULT_INSTALL=true
       shift
       ;;
-    --script-help)
+    -h|--help)
       show_usage
       exit 0
       ;;
@@ -161,21 +168,21 @@ case "${OS:-}" in
 esac
 
 if [[ ! -f "$BINARY" ]]; then
-  echo "Built cameras binary not found: $BINARY" >&2
-  echo "Build it first, for example: go build -o cameras.exe ./cmd/cameras" >&2
+  show_usage_error "Built cameras binary not found: $BINARY
+Build it first, for example: go build -o cameras.exe ./cmd/cameras"
   exit 1
 fi
 
 CAMERAS_CONFIG_DIR="$LOCAL_CAMERAS_CONFIG_DIR"
 if [[ "$USE_DEFAULT_INSTALL" == true ]]; then
   if ! CAMERAS_CONFIG_DIR="$(find_latest_installed_version_dir "$CAMERAS_INSTALL_ROOT")"; then
-    echo "Installed cameras config directory not found under: $CAMERAS_INSTALL_ROOT" >&2
+    show_usage_error "Installed cameras config directory not found under: $CAMERAS_INSTALL_ROOT"
     exit 1
   fi
 fi
 
 if [[ ! -d "$FFMPEG_CONFIG_DIR" ]]; then
-  echo "FFmpeg config directory not found: $FFMPEG_CONFIG_DIR" >&2
+  show_usage_error "FFmpeg config directory not found: $FFMPEG_CONFIG_DIR"
   exit 1
 fi
 
@@ -183,7 +190,7 @@ export VIDEO_CONFIGDIR="$FFMPEG_CONFIG_DIR"
 
 if [[ "$EXPORT_FFMPEG_PATH" == true ]]; then
   if ! FFMPEG_PATH="$(find_ffmpeg_executable "$FFMPEG_RUNTIME_DIR" "$FFMPEG_EXECUTABLE")"; then
-    echo "FFmpeg executable not found under: $FFMPEG_RUNTIME_DIR" >&2
+    show_usage_error "FFmpeg executable not found under: $FFMPEG_RUNTIME_DIR"
     exit 1
   fi
 
