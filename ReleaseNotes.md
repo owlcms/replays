@@ -1,5 +1,8 @@
 **Change log**
 
+- 2.3.0: replays now can read from a local camera module config
+- 2.3.0: replays will probe the camera streams to indicate that the camera module is not running or that streams are missing
+
 - 2.2.3: robustness. trimming time now computed from end of recording
 - 2.2.3: fixes for encoder settings to acheive more reliable trimming, esp. on Intel w/ QSV.
 - 2.2.3: fixed epileptic reload of the replays browser page during recording
