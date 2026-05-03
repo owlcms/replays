@@ -205,6 +205,7 @@ type cameraStream struct {
 	summary     string
 	sourceType  string
 	transport   string
+	commandLine string
 
 	mu                 sync.RWMutex
 	running            bool
@@ -231,6 +232,7 @@ type cameraStream struct {
 	lastUpdate         time.Time
 	stopping           bool
 	stopReason         string
+	diagnosticRetried  bool
 }
 
 type Progress struct {
@@ -547,8 +549,13 @@ func describeEncodingPlan(cam recording.DetectedCamera, encoder *recording.HwEnc
 	}
 }
 
-// startStream starts ffmpeg to stream a camera to multicast UDP
-func startStream(stream *cameraStream) (*exec.Cmd, error) {
+type streamCommandSpec struct {
+	ffmpegPath string
+	args       []string
+	udpDest    string
+}
+
+func buildStreamCommandSpec(stream *cameraStream) (streamCommandSpec, error) {
 	// cameras app behavior
 	// - input
 	//   - input format is obtained by probing cameras
@@ -561,6 +568,12 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	port := stream.port
 	camCfg := camerasConfig
 	fc := ffmpegConfig
+	if camCfg == nil {
+		return streamCommandSpec{}, fmt.Errorf("cameras config is not initialized")
+	}
+	if fc == nil {
+		return streamCommandSpec{}, fmt.Errorf("ffmpeg config is not initialized")
+	}
 
 	ffmpegPath := config.GetFFmpegPath()
 	if ffmpegPath == "" {
@@ -577,26 +590,17 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 
 	var args []string
 
-	// Some UVC cameras (especially in H.264 copy mode) produce duplicate DTS
-	// values which cause the mpegts muxer inside each tee slave to fail with
-	// "non monotonically increasing dts".  Using the system wall clock for
-	// timestamps guarantees strict monotonicity for live device capture.
 	args = append(args, "-use_wallclock_as_timestamps", "1")
 
-	// Determine if we need hardware encoding (not h264 copy mode)
 	needsEncoding := strings.ToLower(strings.TrimSpace(cam.PixFmt)) != "h264"
 
-	// Add encoder input parameters BEFORE the input specification
-	// This is required for hardware encoders like vaapi that need hwaccel init
 	if needsEncoding && encoder != nil && encoder.InputParameters != "" {
 		args = append(args, strings.Fields(encoder.InputParameters)...)
 	}
 
-	// Build input arguments based on platform and format
 	switch cam.Format {
 	case "dshow":
 		args = append(args, "-f", "dshow")
-		// For dshow on Windows: compressed camera modes use -vcodec, raw modes use -pixel_format
 		switch cam.PixFmt {
 		case "mjpeg":
 			args = append(args, "-vcodec", "mjpeg")
@@ -608,7 +612,6 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		}
 		args = append(args, "-video_size", cam.Size)
 		args = append(args, "-framerate", fmt.Sprintf("%d", cam.Fps))
-		// Only add rtbufsize if not already in encoder input params
 		if encoder == nil || !strings.Contains(encoder.InputParameters, "rtbufsize") {
 			args = append(args, "-rtbufsize", "512M")
 		}
@@ -639,7 +642,6 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		args = append(args, "-i", cam.Device)
 	}
 
-	// Build output arguments based on input format
 	gopFPS := cam.Fps
 	if gopFPS <= 0 {
 		gopFPS = 60
@@ -648,11 +650,7 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 
 	switch cam.PixFmt {
 	case "h264":
-		// Camera already outputs H.264 — just remux, no re-encode needed.
 		args = append(args, "-c:v", "copy")
-		// RTSP sources may deliver H.264 in AVCC (MP4-style) format; MPEG-TS
-		// requires Annex B. The bitstream filter converts transparently and is
-		// a no-op when the stream is already in Annex B format.
 		if cam.Format == "rtsp" {
 			args = append(args, "-bsf:v", "h264_mp4toannexb")
 		}
@@ -661,9 +659,7 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		if cam.Format == "rtsp" {
 			args = append(args, "-bsf:v", "hevc_mp4toannexb")
 		}
-
 	case "mjpeg":
-		// Need to decode MJPEG and encode to H.264
 		if encoder != nil {
 			if strings.TrimSpace(encoder.VideoFilter) != "" {
 				args = append(args, "-vf", strings.TrimSpace(encoder.VideoFilter))
@@ -674,9 +670,7 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		}
 		args = append(args, "-g", fmt.Sprintf("%d", gopSize))
 		args = append(args, "-keyint_min", fmt.Sprintf("%d", gopSize))
-
 	default:
-		// Raw format - need to encode
 		if encoder != nil {
 			if strings.TrimSpace(encoder.VideoFilter) != "" {
 				args = append(args, "-vf", strings.TrimSpace(encoder.VideoFilter))
@@ -690,28 +684,47 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 	}
 
 	if unicastMode {
-		// Unicast tee: strip "-f mpegts" from ExtraFlags (each tee leg carries its own f=mpegts)
 		extra := fc.Output.ExtraFlags
 		extra = strings.ReplaceAll(extra, "-f mpegts", "")
 		extra = strings.TrimSpace(extra)
 		if extra != "" {
 			args = append(args, strings.Fields(extra)...)
 		}
-		// Newer ffmpeg requires explicit stream mapping for the tee muxer
 		args = append(args, "-map", "0:v")
-		// Structured progress to stdout, suppress default stats on stderr
 		args = append(args, "-nostats", "-progress", "pipe:1")
 		args = append(args, "-f", "tee", udpDest)
 	} else {
-		// Output flags from config (e.g. "-an -f mpegts")
 		args = append(args, strings.Fields(fc.Output.ExtraFlags)...)
-		// Structured progress to stdout (key=value lines), suppress default stats on stderr
 		args = append(args, "-nostats", "-progress", "pipe:1")
 		args = append(args, udpDest)
 	}
 
-	// Create the command with hidden console on Windows
-	cmd := recording.CreateHiddenCmd(ffmpegPath, args...)
+	return streamCommandSpec{
+		ffmpegPath: ffmpegPath,
+		args:       args,
+		udpDest:    udpDest,
+	}, nil
+}
+
+func formatCommandLine(path string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, strconv.Quote(path))
+	for _, arg := range args {
+		parts = append(parts, strconv.Quote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+// startStream starts ffmpeg to stream a camera to multicast UDP
+func startStream(stream *cameraStream) (*exec.Cmd, error) {
+	spec, err := buildStreamCommandSpec(stream)
+	if err != nil {
+		return nil, err
+	}
+	stream.udpDest = spec.udpDest
+	stream.commandLine = formatCommandLine(spec.ffmpegPath, spec.args)
+
+	cmd := recording.CreateHiddenCmd(spec.ffmpegPath, spec.args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -736,12 +749,13 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 		stream.camera.Format,
 		stream.camera.Size,
 		stream.camera.Fps,
-		describeEncodingPlan(stream.camera, encoder, fc),
+		describeEncodingPlan(stream.camera, stream.encoder, ffmpegConfig),
 		stream.udpDest,
 	)
-	logging.InfoLogger.Printf("Starting ffmpeg: %s %v", ffmpegPath, args)
+	logging.InfoLogger.Printf("Starting ffmpeg: %s", stream.commandLine)
 
 	if err := cmd.Start(); err != nil {
+		logging.ErrorLogger.Printf("Failed to start ffmpeg for %s [%s]: %v | command=%s", stream.camera.Name, stream.shortID, err, stream.commandLine)
 		return nil, err
 	}
 	if cmd.Process != nil {
@@ -775,6 +789,9 @@ func startStream(stream *cameraStream) (*exec.Cmd, error) {
 					logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v | last stderr: %s", stream.camera.Name, stream.udpDest, err, lastErr)
 				} else {
 					logging.ErrorLogger.Printf("ffmpeg exited for %s (%s): %v", stream.camera.Name, stream.udpDest, err)
+				}
+				if stream.shouldRunActivationDiagnostic() {
+					go runActivationDiagnosticRetry(stream)
 				}
 			}
 			stream.setStopped(fmt.Sprintf("stopped: %v", err))
@@ -922,6 +939,78 @@ func shouldIgnoreFFmpegStderrLine(lower string) bool {
 	}
 
 	return false
+}
+
+func (s *cameraStream) shouldRunActivationDiagnostic() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping || s.diagnosticRetried || s.progressSeen {
+		return false
+	}
+	s.diagnosticRetried = true
+	return true
+}
+
+func runActivationDiagnosticRetry(stream *cameraStream) {
+	spec, err := buildStreamCommandSpec(stream)
+	if err != nil {
+		logging.ErrorLogger.Printf("Diagnostic retry setup failed for %s [%s]: %v", stream.camera.Name, stream.shortID, err)
+		return
+	}
+
+	diagnosticArgs := append([]string{"-hide_banner", "-loglevel", "debug"}, spec.args...)
+	commandLine := formatCommandLine(spec.ffmpegPath, diagnosticArgs)
+	logging.ErrorLogger.Printf("Activation diagnostic retry for %s [%s]: %s", stream.camera.Name, stream.shortID, commandLine)
+
+	cmd := recording.CreateHiddenCmd(spec.ffmpegPath, diagnosticArgs...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		logging.ErrorLogger.Printf("Diagnostic retry failed to start for %s [%s]: %v", stream.camera.Name, stream.shortID, err)
+		if text := strings.TrimSpace(stderr.String()); text != "" {
+			logging.ErrorLogger.Printf("Diagnostic retry stderr for %s [%s]: %s", stream.camera.Name, stream.shortID, text)
+		}
+		return
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+
+	var waitErr error
+	timedOut := false
+	select {
+	case waitErr = <-done:
+	case <-timer.C:
+		timedOut = true
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		waitErr = <-done
+	}
+
+	stdoutText := strings.TrimSpace(stdout.String())
+	stderrText := strings.TrimSpace(stderr.String())
+	if timedOut {
+		logging.ErrorLogger.Printf("Diagnostic retry for %s [%s] ran for 3s without reproducing an immediate startup failure", stream.camera.Name, stream.shortID)
+	} else if waitErr != nil {
+		logging.ErrorLogger.Printf("Diagnostic retry for %s [%s] exited: %v", stream.camera.Name, stream.shortID, waitErr)
+	} else {
+		logging.ErrorLogger.Printf("Diagnostic retry for %s [%s] exited cleanly", stream.camera.Name, stream.shortID)
+	}
+	if stdoutText != "" {
+		logging.ErrorLogger.Printf("Diagnostic retry stdout for %s [%s]: %s", stream.camera.Name, stream.shortID, stdoutText)
+	}
+	if stderrText != "" {
+		logging.ErrorLogger.Printf("Diagnostic retry stderr for %s [%s]: %s", stream.camera.Name, stream.shortID, stderrText)
+	}
 }
 
 func (s *cameraStream) setRunning() {
