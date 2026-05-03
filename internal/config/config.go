@@ -323,7 +323,7 @@ func GetMjpeg720pOnly() bool {
 // ApplyDefaults fills in zero-value fields of MulticastSettings.
 func (m *MulticastSettings) ApplyDefaults() {
 	if m.IP == "" {
-		m.IP = "239.255.0.1"
+		m.IP = "0.0.0.0"
 	}
 }
 

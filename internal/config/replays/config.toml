@@ -26,7 +26,7 @@ logFfmpeg = false
 
 [mpeg-ts]
     enabled = true
-    ip = "239.255.0.1"
+    ip = "0.0.0.0"
     camera1Port = 9001
     camera2Port = 0
     camera3Port = 0
