@@ -175,7 +175,7 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 
 	logging.InfoLogger.Printf("Retrying hardware encoder probe with system ffmpeg %s after bundled probe with %s", fallbackPath, path)
 	if progress != nil {
-		progress("Retrying hardware encoders with system ffmpeg...")
+		progress(ProgressMsg(ProgHwMsg, "Retrying hardware encoders with system ffmpeg..."))
 	}
 
 	fallbackFound := detectEncodersWithPath(fallbackPath, cfg, progress)
@@ -268,7 +268,7 @@ func encoderPreferenceOrder(cfg *ffmpeg.Config) []string {
 
 func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgressFunc) []HwEncoder {
 	if progress != nil {
-		progress("Checking available hardware encoders...")
+		progress(ProgressMsg(ProgHwMsg, "Checking available hardware encoders..."))
 	}
 
 	detectedGPUVendors := detectGPUVendors()
@@ -319,9 +319,9 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 
 	// Verify each candidate encoder actually works on this hardware
 	var found []HwEncoder
-	for i, enc := range candidates {
+	for _, enc := range candidates {
 		if progress != nil {
-			progress(fmt.Sprintf("Examining encoder %d/%d: %s", i+1, len(candidates), enc.Name))
+			progress(ProgressMsg(ProgEncoder, enc.Name))
 		}
 		if testEncoderWithInit(path, enc) {
 			enc.FFmpegPath = path
@@ -695,7 +695,7 @@ func DetectCamerasWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgre
 // detectCamerasLinux uses v4l2-ctl to detect cameras and their formats
 func detectCamerasLinux(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
 	if progress != nil {
-		progress("Listing V4L2 devices...")
+		progress(ProgressMsg(ProgListing, "V4L2 devices"))
 	}
 	// First get the device list
 	cmd := CreateHiddenCmd("v4l2-ctl", "--list-devices")
@@ -742,9 +742,9 @@ func detectCamerasLinux(cfg *ffmpeg.Config, progress ProbeProgressFunc) []Detect
 	}
 
 	var cameras []DetectedCamera
-	for i, dev := range devices {
+	for _, dev := range devices {
 		if progress != nil {
-			progress(fmt.Sprintf("Examining USB source %d/%d: %s", i+1, len(devices), dev.name))
+			progress(ProgressMsg(ProgLocalSource, dev.name))
 		}
 		cam := probeV4L2Device(dev.name, dev.device, dev.location, cfg)
 		if cam != nil {
@@ -884,7 +884,7 @@ func detectCamerasWindows(cfg *ffmpeg.Config, progress ProbeProgressFunc) []Dete
 		path = "ffmpeg"
 	}
 	if progress != nil {
-		progress("Listing DirectShow devices...")
+		progress(ProgressMsg(ProgListing, "DirectShow devices"))
 	}
 
 	// List devices
@@ -923,9 +923,9 @@ func detectCamerasWindows(cfg *ffmpeg.Config, progress ProbeProgressFunc) []Dete
 	}
 
 	var cameras []DetectedCamera
-	for i, device := range devices {
+	for _, device := range devices {
 		if progress != nil {
-			progress(fmt.Sprintf("Examining USB source %d/%d: %s", i+1, len(devices), device.name))
+			progress(ProgressMsg(ProgLocalSource, device.name))
 		}
 		cam := probeDshowDevice(path, device.name, device.alternativeName, cfg)
 		if cam != nil {

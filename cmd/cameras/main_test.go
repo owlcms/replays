@@ -397,7 +397,7 @@ func TestParseResolutionFromFFmpegLine(t *testing.T) {
 }
 
 func TestSimplifyDetectionProgressUsesSourceNameInActivity(t *testing.T) {
-	update, ok := simplifyDetectionProgress("Examining USB source 2/3: Laptop Camera")
+	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgLocalSource, "Laptop Camera"))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}
@@ -410,7 +410,7 @@ func TestSimplifyDetectionProgressUsesSourceNameInActivity(t *testing.T) {
 }
 
 func TestSimplifyDetectionProgressShowsStreamGrabActivity(t *testing.T) {
-	update, ok := simplifyDetectionProgress("Testing stream grab for CamON...")
+	update, ok := simplifyDetectionProgress(progMsg(progStreamTest, "CamON"))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}
@@ -423,7 +423,7 @@ func TestSimplifyDetectionProgressShowsStreamGrabActivity(t *testing.T) {
 }
 
 func TestSimplifyDetectionProgressMarksSourceFailureAsError(t *testing.T) {
-	update, ok := simplifyDetectionProgress("Validation failed for CamON; collecting diagnostics...")
+	update, ok := simplifyDetectionProgress(progMsg(progValidateFailed, "CamON"))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}

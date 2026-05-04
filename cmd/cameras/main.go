@@ -211,158 +211,12 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 }
 
 func simplifyDetectionProgress(message string) (detectionProgressUpdate, bool) {
-	trimmed := strings.TrimSpace(message)
-	if trimmed == "" {
+	tag, payload, ok := recording.ProgressParse(strings.TrimSpace(message))
+	if !ok {
 		return detectionProgressUpdate{}, false
 	}
 
-	update := detectionProgressUpdate{}
-
-	extractName := func(prefix string) (string, bool) {
-		if !strings.HasPrefix(trimmed, prefix) {
-			return "", false
-		}
-		name := strings.TrimSpace(trimmed[len(prefix):])
-		if idx := strings.Index(name, ":"); idx >= 0 {
-			name = strings.TrimSpace(name[idx+1:])
-		}
-		if name == "" {
-			return "", false
-		}
-		return name, true
-	}
-
-	if name, ok := extractName("Examining RTSP source "); ok {
-		update.stage = "Scanning sources"
-		update.detail = fmt.Sprintf("Checking source: %s", name)
-		update.statusKey = name
-		update.statusMessage = "... " + name
-		return update, true
-	}
-	if name, ok := extractName("Examining USB source "); ok {
-		update.stage = "Scanning sources"
-		update.detail = fmt.Sprintf("Checking source: %s", name)
-		update.statusKey = name
-		update.statusMessage = "... " + name
-		return update, true
-	}
-	if name, ok := extractName("Detected source "); ok {
-		update.stage = "Scanning sources"
-		update.detail = fmt.Sprintf("Detected source: %s", name)
-		update.statusKey = name
-		update.statusMessage = "\u2713 " + name
-		return update, true
-	}
-	if name, ok := extractName("Skipped source "); ok {
-		update.stage = "Scanning sources"
-		update.detail = fmt.Sprintf("Skipped source: %s", name)
-		update.statusKey = name
-		update.statusMessage = "- " + name
-		return update, true
-	}
-	if name, ok := extractName("Examining encoder "); ok {
-		update.stage = "Scanning sources"
-		update.detail = fmt.Sprintf("Checking encoder: %s", name)
-		return update, true
-	}
-	if name, ok := extractName("Preparing source "); ok {
-		update.stage = "Verifying stream settings"
-		update.detail = fmt.Sprintf("Preparing stream command for %s", name)
-		update.statusKey = name
-		if existing := strings.TrimSpace(name); existing != "" {
-			update.statusMessage = "... " + existing
-		}
-		return update, true
-	}
-	if name, ok := extractName("Testing stream grab for "); ok {
-		name = strings.TrimSuffix(name, "...")
-		name = strings.TrimSpace(name)
-		update.stage = "Verifying stream settings"
-		update.detail = fmt.Sprintf("Testing stream grab for %s", name)
-		update.statusKey = name
-		update.statusMessage = "... " + name
-		return update, true
-	}
-	if name, ok := extractName("Validating encoder settings for "); ok {
-		name = strings.TrimSuffix(name, "...")
-		name = strings.TrimSpace(name)
-		update.stage = "Verifying stream settings"
-		update.detail = fmt.Sprintf("Verifying hardware encoder settings for %s", name)
-		update.statusKey = name
-		update.statusMessage = "... " + name
-		return update, true
-	}
-	if name, ok := extractName("Validation failed for "); ok {
-		if idx := strings.Index(name, ";"); idx >= 0 {
-			name = strings.TrimSpace(name[:idx])
-		}
-		update.stage = "Verifying stream settings"
-		update.detail = fmt.Sprintf("Collecting diagnostics for %s", name)
-		update.statusKey = name
-		update.statusMessage = "X " + name
-		update.hasError = true
-		return update, true
-	}
-	if name, ok := extractName("Start failed for "); ok {
-		if idx := strings.Index(name, ":"); idx >= 0 {
-			name = strings.TrimSpace(name[:idx])
-		}
-		update.stage = "Starting streams"
-		update.detail = fmt.Sprintf("Startup failed for %s", name)
-		update.statusKey = name
-		update.statusMessage = "X " + name
-		update.hasError = true
-		return update, true
-	}
-	if name, ok := extractName("Starting stream for "); ok {
-		name = strings.TrimSuffix(name, "...")
-		name = strings.TrimSpace(name)
-		update.stage = "Starting streams"
-		update.detail = fmt.Sprintf("Starting stream for %s", name)
-		update.statusKey = name
-		update.statusMessage = "✓ " + name
-		return update, true
-	}
-
-	switch {
-	case strings.HasPrefix(trimmed, "Error:"):
-		message := strings.TrimSpace(strings.TrimPrefix(trimmed, "Error:"))
-		if message == "" {
-			message = trimmed
-		}
-		update.stage = "Scanning sources"
-		update.detail = message
-		update.statusKey = "error:" + message
-		update.statusMessage = "X " + message
-		update.hasError = true
-		return update, true
-	case strings.HasPrefix(trimmed, "Preparing"):
-		update.stage = "Scanning sources"
-		update.detail = "Preparing source detection..."
-		return update, true
-	case strings.HasPrefix(trimmed, "Inventory ready"):
-		update.stage = "Scanning sources"
-		update.detail = "Source scan complete."
-		return update, true
-	case strings.HasPrefix(trimmed, "Starting ") && strings.Contains(trimmed, "stream(s)"):
-		update.stage = "Verifying stream settings"
-		update.detail = trimmed
-		return update, true
-	case strings.Contains(trimmed, "encoder"):
-		update.stage = "Scanning sources"
-		update.detail = "Checking video hardware..."
-		return update, true
-	case strings.Contains(trimmed, "RTSP sources"):
-		update.stage = "Scanning sources"
-		update.detail = "Checking RTSP sources..."
-		return update, true
-	case strings.Contains(trimmed, "USB capture devices") || strings.Contains(trimmed, "DirectShow devices") || strings.Contains(trimmed, "V4L2 devices"):
-		update.stage = "Scanning sources"
-		update.detail = "Checking USB sources..."
-		return update, true
-	default:
-		return detectionProgressUpdate{}, false
-	}
+	return detectionProgressUpdateForTag(tag, payload)
 }
 
 func newVerticalGap(height float32) fyne.CanvasObject {
@@ -562,9 +416,9 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 		fmt.Println("\nStarting camera streams (multicast):")
 		fmt.Println("=====================================")
 	}
-	callbacks.report(fmt.Sprintf("Starting %d stream(s)...", len(sources)))
+	callbacks.report(progMsg(progStreamsAll, fmt.Sprintf("%d", len(sources))))
 
-	for i, source := range sources {
+	for _, source := range sources {
 		cam := source.Camera
 		port := source.OutputPort
 		var udpDest string
@@ -600,12 +454,12 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 			fmt.Printf("  -> %s\n", udpDest)
 		}
 
-		callbacks.report(fmt.Sprintf("Preparing source %d/%d: %s", i+1, len(sources), cam.Name))
+		callbacks.report(progMsg(progStreamPrep, cam.Name))
 		cmd, err := startStream(stream, callbacks)
 		if err != nil {
 			fmt.Printf("  ERROR: Failed to start stream: %v\n", err)
 			stream.setStopped(fmt.Sprintf("failed: %v", err))
-			callbacks.report(fmt.Sprintf("Start failed for %s: %v", cam.Name, err))
+			callbacks.report(progMsg(progStreamFailed, cam.Name))
 		} else {
 			stream.cmd = cmd
 			stream.setRunning()
@@ -1044,18 +898,18 @@ func runStartupProbe(stream *cameraStream, callbacks *streamStartupCallbacks) er
 
 	quickArgs := append([]string{"-hide_banner", "-loglevel", "error"}, spec.args...)
 	logging.InfoLogger.Printf("Startup stream preflight for %s [%s]: %s", stream.camera.Name, stream.shortID, formatCommandLine(spec.ffmpegPath, quickArgs))
-	callbacks.report(fmt.Sprintf("Testing stream grab for %s...", stream.camera.Name))
+	callbacks.report(progMsg(progStreamTest, stream.camera.Name))
 
 	output, err := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "error", streamStartupProbeTimeout)
 	if err == nil {
 		logging.InfoLogger.Printf("Startup stream preflight passed for %s [%s]: %s", stream.camera.Name, stream.shortID, describeEncodingPlan(stream.camera, stream.encoder, ffmpegConfig))
-		callbacks.report(fmt.Sprintf("Validation passed for %s", stream.camera.Name))
+		callbacks.report(progMsg(progValidatePassed, stream.camera.Name))
 		return nil
 	}
 
 	reason := summarizeStartupProbeOutput(output, err)
 	logging.ErrorLogger.Printf("Startup stream preflight failed for %s [%s]: %s", stream.camera.Name, stream.shortID, reason)
-	callbacks.report(fmt.Sprintf("Validation failed for %s; collecting diagnostics...", stream.camera.Name))
+	callbacks.report(progMsg(progValidateFailed, stream.camera.Name))
 
 	debugOutput, debugErr := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "debug", streamStartupProbeTimeout)
 	if debugErr != nil {
@@ -1071,7 +925,7 @@ func startStream(stream *cameraStream, callbacks *streamStartupCallbacks) (*exec
 	if err := runStartupProbe(stream, callbacks); err != nil {
 		return nil, err
 	}
-	callbacks.report(fmt.Sprintf("Starting stream for %s...", stream.camera.Name))
+	callbacks.report(progMsg(progStreamStart, stream.camera.Name))
 
 	spec, err := buildStreamCommandSpec(stream, streamOutputLive)
 	if err != nil {
@@ -3953,12 +3807,12 @@ func runUI() {
 		logging.InfoLogger.Printf("Configuration rescan requested")
 		progressDialog, reportProgress, progressHasErrors := newDetectionProgressDialog(window, "Rescanning Sources")
 		progressDialog.Show()
-		reportProgress("Preparing rescan...")
+		reportProgress(progMsg(progPreparing, "Rescan"))
 		go func() {
 			startTime := time.Now()
 			inv := buildSourceInventoryWithProgress(reportProgress)
 			for _, item := range inv.Errors {
-				reportProgress("Error: " + item)
+				reportProgress(progMsg(progError, item))
 			}
 			currentInventory = inv
 			if inv.Encoder != nil {
@@ -3983,7 +3837,7 @@ func runUI() {
 	// Detection and streaming happen in background after window is shown.
 	startupProgressDialog, reportStartupProgress, startupHasErrors := newDetectionProgressDialog(window, "Detecting Sources")
 	startupProgressDialog.Show()
-	reportStartupProgress("Preparing initial source detection...")
+	reportStartupProgress(progMsg(progPreparing, "Initial detection"))
 	go func() {
 		startTime := time.Now()
 		logging.InfoLogger.Printf("Initial source detection started")
@@ -3996,7 +3850,7 @@ func runUI() {
 		if len(inv.Errors) > 0 {
 			for _, item := range inv.Errors {
 				logging.ErrorLogger.Println(item)
-				reportStartupProgress("Error: " + item)
+				reportStartupProgress(progMsg(progError, item))
 			}
 		}
 
@@ -4009,7 +3863,7 @@ func runUI() {
 		renderMonitoringSourceToggles(inv)
 
 		if len(inv.Active) > 0 && len(inv.Errors) == 0 {
-			reportStartupProgress(fmt.Sprintf("Inventory ready. Validating %d stream(s)...", len(inv.Active)))
+			reportStartupProgress(progMsg(progInventoryReady, fmt.Sprintf("Validating %d stream(s)...", len(inv.Active))))
 			newStreams := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
 			*currentStreams = newStreams
 			if len(newStreams) > 0 {

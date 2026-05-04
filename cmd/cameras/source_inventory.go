@@ -18,6 +18,31 @@ import (
 	"github.com/owlcms/replays/internal/recording"
 )
 
+// Progress tags for messages emitted within the cameras command.
+// See recording.ProgressSep and recording.ProgressMsg for the tag/payload format.
+const (
+	progRTSPSource    = "rtspSrc"      // examining an RTSP source; payload: source name
+	progDetectedSource = "detected"    // source accepted into inventory; payload: source name
+	progSkippedSource  = "skipped"     // source filtered out; payload: source name
+	progInventoryReady = "inventory"   // inventory build finished; payload: human summary
+	progCheckingRTSP   = "chkRTSP"    // starting RTSP scan; payload: empty
+	progCheckingLocal  = "chkLocal"    // starting local device scan; payload: empty
+	progCheckingEncoders = "chkEnc"   // starting encoder scan; payload: empty
+	progPreparing      = "preparing"   // general prepare step; payload: human description
+	progError          = "error"       // error; payload: error message
+	progStreamsAll     = "streamsAll"  // about to start N streams; payload: count as string
+	progStreamPrep     = "streamPrep"  // building command for one stream; payload: source name
+	progStreamTest     = "streamTest"  // running startup probe; payload: source name
+	progValidatePassed = "valPass"    // startup probe passed; payload: source name
+	progValidateFailed = "valFail"    // startup probe failed; payload: source name
+	progStreamStart    = "streamStart" // stream process launched; payload: source name
+	progStreamFailed   = "streamFail"  // stream start failed; payload: source name
+)
+
+func progMsg(tag, payload string) string {
+	return recording.ProgressMsg(tag, payload)
+}
+
 type sourceSpec struct {
 	Key              string
 	AttachmentPath   string
@@ -65,19 +90,19 @@ func buildSourceInventoryWithProgress(progress func(string)) sourceInventory {
 	usedShortIDs := make(map[string]struct{})
 
 	if progress != nil {
-		progress("Examining configured RTSP sources...")
+		progress(progMsg(progCheckingRTSP, ""))
 	}
 	rtspSpecs := buildRTSPSourcesWithProgress(startPort, usedPorts, usedShortIDs, progress)
 	logging.InfoLogger.Printf("Source inventory RTSP phase completed in %s with %d source(s)", time.Since(start), len(rtspSpecs))
 	usbStart := time.Now()
 	if progress != nil {
-		progress("Examining USB capture devices...")
+		progress(progMsg(progCheckingLocal, ""))
 	}
 	usbSpecs := buildUSBSourcesWithProgress(startPort, usedPorts, usedShortIDs, progress)
 	logging.InfoLogger.Printf("Source inventory USB phase completed in %s with %d source(s)", time.Since(usbStart), len(usbSpecs))
 	encoderStart := time.Now()
 	if progress != nil {
-		progress("Examining available encoders...")
+		progress(progMsg(progCheckingEncoders, ""))
 	}
 	encoders := recording.DetectEncodersWithConfigAndProgress(ffmpegConfig, progress)
 	logging.InfoLogger.Printf("Source inventory encoder phase completed in %s with %d candidate(s)", time.Since(encoderStart), len(encoders))
@@ -85,7 +110,7 @@ func buildSourceInventoryWithProgress(progress func(string)) sourceInventory {
 	logging.InfoLogger.Printf("Source inventory build completed in %s: usb=%d rtsp=%d active=%d errors=%d pending=%d",
 		time.Since(start), len(inv.USB), len(inv.RTSP), len(inv.Active), len(inv.Errors), len(inv.PendingVerification))
 	if progress != nil {
-		progress(fmt.Sprintf("Inventory ready: %d USB, %d RTSP, %d active", len(inv.USB), len(inv.RTSP), len(inv.Active)))
+		progress(progMsg(progInventoryReady, fmt.Sprintf("local=%d rtsp=%d active=%d", len(inv.USB), len(inv.RTSP), len(inv.Active))))
 	}
 	return inv
 }
@@ -185,7 +210,7 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 	for _, cam := range cameras {
 		if !camerasConfig.Cameras.IncludeAll && isIntegratedCamera(cam) {
 			if progress != nil {
-				progress(fmt.Sprintf("Skipped source: %s", cam.Name))
+				progress(progMsg(progSkippedSource, cam.Name))
 			}
 			continue
 		}
@@ -280,7 +305,7 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 			Camera:           cam,
 		})
 		if progress != nil {
-			progress(fmt.Sprintf("Detected source: %s", name))
+			progress(progMsg(progDetectedSource, name))
 		}
 	}
 
@@ -342,7 +367,7 @@ func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, use
 			if name == "" {
 				name = fmt.Sprintf("RTSP %d", i+1)
 			}
-			progress(fmt.Sprintf("Examining RTSP source %d/%d: %s", i+1, len(camerasConfig.RTSPSources), name))
+			progress(progMsg(progRTSPSource, name))
 		}
 		shortID := strings.TrimSpace(src.ShortID)
 		if shortID == "" {
@@ -378,7 +403,7 @@ func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, use
 			RTSP:         *src,
 		})
 		if progress != nil {
-			progress(fmt.Sprintf("Detected source: %s", camera.Name))
+			progress(progMsg(progDetectedSource, camera.Name))
 		}
 	}
 
