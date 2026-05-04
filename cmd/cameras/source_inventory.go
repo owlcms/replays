@@ -96,7 +96,7 @@ func buildCachedSourceInventory(previous sourceInventory, encoder *recording.HwE
 	usedShortIDs := make(map[string]struct{})
 
 	rtspSpecs := buildRTSPSources(startPort, usedPorts, usedShortIDs)
-	usbSpecs := buildUSBSourcesFromDetected(cachedDetectedCameras(previous.USB), startPort, usedPorts, usedShortIDs)
+	usbSpecs := buildUSBSourcesFromDetected(cachedDetectedCameras(previous.USB), startPort, usedPorts, usedShortIDs, nil)
 	return assembleSourceInventory(usbSpecs, rtspSpecs, encoder)
 }
 
@@ -159,10 +159,10 @@ func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recordin
 
 func buildUSBSourcesWithProgress(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
 	cameras := recording.DetectCamerasWithConfigAndProgress(ffmpegConfig, progress)
-	return buildUSBSourcesFromDetected(cameras, startPort, usedPorts, usedShortIDs)
+	return buildUSBSourcesFromDetected(cameras, startPort, usedPorts, usedShortIDs, progress)
 }
 
-func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}) []sourceSpec {
+func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
 	assignmentsByAttachment := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
 	assignmentsByMatchKey := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
 	for i := range camerasConfig.DeviceAssignments {
@@ -184,6 +184,9 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 	var filtered []recording.DetectedCamera
 	for _, cam := range cameras {
 		if !camerasConfig.Cameras.IncludeAll && isIntegratedCamera(cam) {
+			if progress != nil {
+				progress(fmt.Sprintf("Skipped source: %s", cam.Name))
+			}
 			continue
 		}
 		filtered = append(filtered, cam)
@@ -276,6 +279,9 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 			PreferredFormat:  preferredFormat,
 			Camera:           cam,
 		})
+		if progress != nil {
+			progress(fmt.Sprintf("Detected source: %s", name))
+		}
 	}
 
 	return sources
@@ -371,6 +377,9 @@ func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, use
 			Camera:       camera,
 			RTSP:         *src,
 		})
+		if progress != nil {
+			progress(fmt.Sprintf("Detected source: %s", camera.Name))
+		}
 	}
 
 	return sources

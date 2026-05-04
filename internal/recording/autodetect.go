@@ -79,6 +79,7 @@ type HwEncoder struct {
 	OutputParameters string
 	VideoFilter      string
 	TestInit         string // extra flags needed for encoder test (e.g. VAAPI/QSV init)
+	FFmpegPath       string // optional per-encoder ffmpeg path override
 }
 
 type cameraMode struct {
@@ -182,20 +183,14 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 		return found
 	}
 
-	if err := applyFFmpegPath(fallbackPath); err != nil {
-		logging.ErrorLogger.Printf("Failed to switch to system ffmpeg after successful hardware-encoder probe: %v", err)
-		return found
+	merged := mergeFallbackNVENCEncoder(found, fallbackFound, cfg)
+	if containsHwEncoder(merged, "h264_nvenc") {
+		logging.InfoLogger.Printf("Using system ffmpeg for h264_nvenc only after bundled probe failure: %s", fallbackPath)
 	}
-
-	logging.InfoLogger.Printf("Using system ffmpeg for hardware encoding after bundled ffmpeg probe failure: %s", fallbackPath)
-	return fallbackFound
+	return merged
 }
 
 func shouldRetrySystemFFmpegProbe(found []HwEncoder) bool {
-	if len(found) == 0 {
-		return true
-	}
-
 	vendors := detectGPUVendors()
 	if vendors["nvidia"] && !containsHwEncoder(found, "h264_nvenc") {
 		logging.InfoLogger.Printf("NVIDIA GPU detected but h264_nvenc was not verified with the current ffmpeg; checking for system ffmpeg 6 fallback")
@@ -212,6 +207,63 @@ func containsHwEncoder(encoders []HwEncoder, name string) bool {
 		}
 	}
 	return false
+}
+
+func mergeFallbackNVENCEncoder(primary, fallback []HwEncoder, cfg *ffmpeg.Config) []HwEncoder {
+	if containsHwEncoder(primary, "h264_nvenc") {
+		return primary
+	}
+
+	var nvenc *HwEncoder
+	for i := range fallback {
+		if fallback[i].Name == "h264_nvenc" {
+			nvenc = &fallback[i]
+			break
+		}
+	}
+	if nvenc == nil {
+		return primary
+	}
+
+	ordered := make([]HwEncoder, 0, len(primary)+1)
+	inserted := false
+	for _, name := range encoderPreferenceOrder(cfg) {
+		if name != "h264_nvenc" {
+			continue
+		}
+		ordered = append(ordered, *nvenc)
+		inserted = true
+		break
+	}
+	if !inserted {
+		ordered = append(ordered, *nvenc)
+	}
+
+	for _, enc := range primary {
+		if enc.Name == "h264_nvenc" {
+			continue
+		}
+		ordered = append(ordered, enc)
+	}
+
+	return ordered
+}
+
+func encoderPreferenceOrder(cfg *ffmpeg.Config) []string {
+	if cfg != nil && len(cfg.Encoders) > 0 {
+		order := make([]string, 0, len(cfg.Encoders))
+		seen := make(map[string]struct{}, len(cfg.Encoders))
+		for _, enc := range cfg.Encoders {
+			if _, ok := seen[enc.Name]; ok {
+				continue
+			}
+			seen[enc.Name] = struct{}{}
+			order = append(order, enc.Name)
+		}
+		return order
+	}
+
+	return []string{"h264_nvenc", "h264_amf", "h264_vaapi", "h264_qsv"}
 }
 
 func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgressFunc) []HwEncoder {
@@ -236,27 +288,13 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 		return nil
 	}
 
-	// Collect all h264_* encoder names that ffmpeg reports
-	availableEncoders := make(map[string]bool)
-	scanner := bufio.NewScanner(&out)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.Contains(line, "h264_") {
-			continue
-		}
-		line = strings.TrimSpace(line)
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		availableEncoders[fields[1]] = true
-	}
+	availableEncoders := parseAvailableH264Encoders(out.Bytes())
 
 	// Build candidate list from config definitions (order = preference)
 	var candidates []HwEncoder
 	if cfg != nil && len(cfg.Encoders) > 0 {
 		for _, enc := range cfg.Encoders {
-			if !availableEncoders[enc.Name] {
+			if !encoderIsProbeCandidate(enc.Name, enc.GpuVendors, availableEncoders, detectedGPUVendors) {
 				continue
 			}
 			// Check platform restriction (supports dshow/v4l2 and linux/windows)
@@ -276,7 +314,7 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 		}
 	} else {
 		// Legacy hardcoded fallback (used when cfg is nil, e.g. from replays)
-		candidates = legacyEncoderCandidates(availableEncoders)
+		candidates = legacyEncoderCandidates(availableEncoders, detectedGPUVendors)
 	}
 
 	// Verify each candidate encoder actually works on this hardware
@@ -286,6 +324,7 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 			progress(fmt.Sprintf("Examining encoder %d/%d: %s", i+1, len(candidates), enc.Name))
 		}
 		if testEncoderWithInit(path, enc) {
+			enc.FFmpegPath = path
 			logging.InfoLogger.Printf("Encoder %s verified working", enc.Name)
 			found = append(found, enc)
 		} else {
@@ -295,11 +334,60 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 	return found
 }
 
+func parseAvailableH264Encoders(output []byte) map[string]bool {
+	available := make(map[string]bool)
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		fields := strings.Fields(strings.TrimSpace(scanner.Text()))
+		if len(fields) < 2 {
+			continue
+		}
+		flags := fields[0]
+		name := fields[1]
+		if len(flags) != 6 || !strings.HasPrefix(flags, "V") || !strings.HasPrefix(name, "h264_") {
+			continue
+		}
+		available[name] = true
+	}
+	return available
+}
+
+func encoderIsProbeCandidate(name string, gpuVendors []string, available map[string]bool, detectedGPUVendors map[string]bool) bool {
+	if !available[name] {
+		logging.InfoLogger.Printf("Skipping encoder %s: not reported by ffmpeg -encoders", name)
+		return false
+	}
+	if !encoderGPUVendorMatches(gpuVendors, detectedGPUVendors) {
+		logging.InfoLogger.Printf("Skipping encoder %s: required GPU vendors=%v, detected=%v", name, gpuVendors, sortedVendorKeys(detectedGPUVendors))
+		return false
+	}
+	return true
+}
+
+func encoderGPUVendorMatches(required []string, detected map[string]bool) bool {
+	if len(required) == 0 || len(detected) == 0 {
+		return true
+	}
+
+	hasRequirement := false
+	for _, vendor := range required {
+		vendor = strings.ToLower(strings.TrimSpace(vendor))
+		if vendor == "" {
+			continue
+		}
+		hasRequirement = true
+		if detected[vendor] {
+			return true
+		}
+	}
+	return !hasRequirement
+}
+
 // legacyEncoderCandidates returns the hardcoded encoder definitions used
 // when no CamerasConfig is available (backward-compatible with replays).
-func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
+func legacyEncoderCandidates(available map[string]bool, detectedGPUVendors map[string]bool) []HwEncoder {
 	var candidates []HwEncoder
-	if available["h264_nvenc"] {
+	if encoderIsProbeCandidate("h264_nvenc", []string{"nvidia"}, available, detectedGPUVendors) {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_nvenc", Description: "NVIDIA GPU",
 			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
@@ -307,7 +395,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 			OutputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M",
 		})
 	}
-	if available["h264_amf"] {
+	if encoderIsProbeCandidate("h264_amf", []string{"amd"}, available, detectedGPUVendors) {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_amf", Description: "AMD GPU (AMF)",
 			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
@@ -315,7 +403,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 			OutputParameters: "-c:v h264_amf -rc cbr -b:v 8M",
 		})
 	}
-	if available["h264_vaapi"] && runtime.GOOS == "linux" {
+	if encoderIsProbeCandidate("h264_vaapi", []string{"amd", "intel"}, available, detectedGPUVendors) && runtime.GOOS == "linux" {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_vaapi", Description: "VAAPI (AMD/Intel on Linux)",
 			InputParameters:  "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096",
@@ -324,7 +412,7 @@ func legacyEncoderCandidates(available map[string]bool) []HwEncoder {
 			TestInit:         "-init_hw_device vaapi=va:/dev/dri/renderD128",
 		})
 	}
-	if available["h264_qsv"] {
+	if encoderIsProbeCandidate("h264_qsv", []string{"intel"}, available, detectedGPUVendors) {
 		candidates = append(candidates, HwEncoder{
 			Name: "h264_qsv", Description: "Intel GPU (QSV)",
 			InputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",

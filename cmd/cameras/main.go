@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -57,6 +58,8 @@ const (
 	previewMaxShortSide = 540
 )
 
+var ffmpegVideoResolutionPattern = regexp.MustCompile(`\b(\d{2,5})x(\d{2,5})\b`)
+
 func setAppIcon(myApp fyne.App) {
 	if assets.IconResource != nil && len(assets.IconResource.Content()) > 0 {
 		myApp.SetIcon(assets.IconResource)
@@ -88,67 +91,132 @@ func newSectionTitle(text string) fyne.CanvasObject {
 	return title
 }
 
-func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog, func(string)) {
-	currentLabel := widget.NewLabel("Preparing scan...")
-	currentLabel.Wrapping = fyne.TextWrapWord
-	history := widget.NewLabel("")
-	history.Wrapping = fyne.TextWrapWord
-	historyScroll := container.NewVScroll(history)
+func newProgressDetailRow(label string, value fyne.CanvasObject) fyne.CanvasObject {
+	return container.NewBorder(nil, nil, widget.NewLabel(label), nil, value)
+}
+
+type detectionProgressUpdate struct {
+	stage         string
+	detail        string
+	statusKey     string
+	statusMessage string
+	replaceStatus bool
+	hasError      bool
+}
+
+func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog, func(string), func() bool) {
+	stageLabel := widget.NewLabel("Preparing scan...")
+	stageLabel.Wrapping = fyne.TextWrapWord
+	detailLabel := widget.NewLabel("")
+	detailLabel.Wrapping = fyne.TextWrapWord
+	statusList := widget.NewLabel("")
+	statusList.Wrapping = fyne.TextWrapWord
+	historyScroll := container.NewVScroll(statusList)
 	historyScroll.SetMinSize(fyne.NewSize(520, 280))
+	var progressDialog dialog.Dialog
+	closeButton := widget.NewButton("Close", func() {
+		if progressDialog != nil {
+			progressDialog.Hide()
+		}
+	})
+	closeButton.Hide()
 
 	var mu sync.Mutex
-	lines := make([]string, 0, 32)
-	seen := make(map[string]struct{})
-	lastCurrent := ""
+	statusOrder := make([]string, 0, 32)
+	statusByKey := make(map[string]string)
+	lastStage := ""
+	lastDetail := ""
+	hasError := false
 	report := func(message string) {
 		trimmed := strings.TrimSpace(message)
 		if trimmed == "" {
 			return
 		}
 
-		currentText, listItem, ok := simplifyDetectionProgress(trimmed)
+		update, ok := simplifyDetectionProgress(trimmed)
 		if !ok {
 			return
 		}
 
 		mu.Lock()
-		if listItem != "" {
-			if _, exists := seen[listItem]; !exists {
-				seen[listItem] = struct{}{}
-				lines = append(lines, listItem)
+		if update.hasError {
+			hasError = true
+		}
+		if update.statusKey != "" {
+			if _, exists := statusByKey[update.statusKey]; !exists {
+				statusOrder = append(statusOrder, update.statusKey)
+			}
+			statusByKey[update.statusKey] = update.statusMessage
+		}
+		if len(statusOrder) > 25 {
+			trimmedOrder := statusOrder[len(statusOrder)-25:]
+			keep := make(map[string]struct{}, len(trimmedOrder))
+			for _, key := range trimmedOrder {
+				keep[key] = struct{}{}
+			}
+			for key := range statusByKey {
+				if _, ok := keep[key]; !ok {
+					delete(statusByKey, key)
+				}
+			}
+			statusOrder = trimmedOrder
+		}
+		lines := make([]string, 0, len(statusOrder))
+		for _, key := range statusOrder {
+			if text := strings.TrimSpace(statusByKey[key]); text != "" {
+				lines = append(lines, text)
 			}
 		}
-		if len(lines) > 25 {
-			lines = lines[len(lines)-25:]
-		}
 		content := strings.Join(lines, "\n")
-		if currentText != "" {
-			lastCurrent = currentText
+		if update.stage != "" {
+			lastStage = update.stage
 		}
-		currentValue := lastCurrent
+		if update.detail != "" || update.replaceStatus {
+			lastDetail = update.detail
+		}
+		stageValue := lastStage
+		detailValue := lastDetail
+		showClose := hasError
 		mu.Unlock()
 
-		if currentValue != "" {
-			currentLabel.SetText(currentValue)
+		if stageValue != "" {
+			stageLabel.SetText(stageValue)
 		}
-		history.SetText(content)
+		if detailValue != "" {
+			detailLabel.SetText(detailValue)
+		}
+		statusList.SetText(content)
+		statusList.Refresh()
+		historyScroll.Refresh()
+		if showClose {
+			closeButton.Show()
+			closeButton.Refresh()
+		}
 	}
 
 	body := container.NewVBox(
-		widget.NewLabel("Current source:"),
-		currentLabel,
+		newProgressDetailRow("Current stage:", stageLabel),
+		newProgressDetailRow("Current activity:", detailLabel),
 		widget.NewSeparator(),
-		widget.NewLabel("Scanned sources:"),
+		widget.NewLabel("Source status:"),
 		historyScroll,
+		closeButton,
 	)
-	return dialog.NewCustomWithoutButtons(title, body, window), report
+	progressDialog = dialog.NewCustomWithoutButtons(title, body, window)
+	return progressDialog, report, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return hasError
+	}
 }
 
-func simplifyDetectionProgress(message string) (string, string, bool) {
+func simplifyDetectionProgress(message string) (detectionProgressUpdate, bool) {
 	trimmed := strings.TrimSpace(message)
 	if trimmed == "" {
-		return "", "", false
+		return detectionProgressUpdate{}, false
 	}
+
+	update := detectionProgressUpdate{}
 
 	extractName := func(prefix string) (string, bool) {
 		if !strings.HasPrefix(trimmed, prefix) {
@@ -165,25 +233,135 @@ func simplifyDetectionProgress(message string) (string, string, bool) {
 	}
 
 	if name, ok := extractName("Examining RTSP source "); ok {
-		return name, name, true
+		update.stage = "Scanning sources"
+		update.detail = fmt.Sprintf("Checking source: %s", name)
+		update.statusKey = name
+		update.statusMessage = "... " + name
+		return update, true
 	}
 	if name, ok := extractName("Examining USB source "); ok {
-		return name, name, true
+		update.stage = "Scanning sources"
+		update.detail = fmt.Sprintf("Checking source: %s", name)
+		update.statusKey = name
+		update.statusMessage = "... " + name
+		return update, true
+	}
+	if name, ok := extractName("Detected source "); ok {
+		update.stage = "Scanning sources"
+		update.detail = fmt.Sprintf("Detected source: %s", name)
+		update.statusKey = name
+		update.statusMessage = "\u2713 " + name
+		return update, true
+	}
+	if name, ok := extractName("Skipped source "); ok {
+		update.stage = "Scanning sources"
+		update.detail = fmt.Sprintf("Skipped source: %s", name)
+		update.statusKey = name
+		update.statusMessage = "- " + name
+		return update, true
+	}
+	if name, ok := extractName("Examining encoder "); ok {
+		update.stage = "Scanning sources"
+		update.detail = fmt.Sprintf("Checking encoder: %s", name)
+		return update, true
+	}
+	if name, ok := extractName("Preparing source "); ok {
+		update.stage = "Verifying stream settings"
+		update.detail = fmt.Sprintf("Preparing stream command for %s", name)
+		update.statusKey = name
+		if existing := strings.TrimSpace(name); existing != "" {
+			update.statusMessage = "... " + existing
+		}
+		return update, true
+	}
+	if name, ok := extractName("Testing stream grab for "); ok {
+		name = strings.TrimSuffix(name, "...")
+		name = strings.TrimSpace(name)
+		update.stage = "Verifying stream settings"
+		update.detail = fmt.Sprintf("Testing stream grab for %s", name)
+		update.statusKey = name
+		update.statusMessage = "... " + name
+		return update, true
+	}
+	if name, ok := extractName("Validating encoder settings for "); ok {
+		name = strings.TrimSuffix(name, "...")
+		name = strings.TrimSpace(name)
+		update.stage = "Verifying stream settings"
+		update.detail = fmt.Sprintf("Verifying hardware encoder settings for %s", name)
+		update.statusKey = name
+		update.statusMessage = "... " + name
+		return update, true
+	}
+	if name, ok := extractName("Validation failed for "); ok {
+		if idx := strings.Index(name, ";"); idx >= 0 {
+			name = strings.TrimSpace(name[:idx])
+		}
+		update.stage = "Verifying stream settings"
+		update.detail = fmt.Sprintf("Collecting diagnostics for %s", name)
+		update.statusKey = name
+		update.statusMessage = "X " + name
+		update.hasError = true
+		return update, true
+	}
+	if name, ok := extractName("Start failed for "); ok {
+		if idx := strings.Index(name, ":"); idx >= 0 {
+			name = strings.TrimSpace(name[:idx])
+		}
+		update.stage = "Starting streams"
+		update.detail = fmt.Sprintf("Startup failed for %s", name)
+		update.statusKey = name
+		update.statusMessage = "X " + name
+		update.hasError = true
+		return update, true
+	}
+	if name, ok := extractName("Starting stream for "); ok {
+		name = strings.TrimSuffix(name, "...")
+		name = strings.TrimSpace(name)
+		update.stage = "Starting streams"
+		update.detail = fmt.Sprintf("Starting stream for %s", name)
+		update.statusKey = name
+		update.statusMessage = "✓ " + name
+		return update, true
 	}
 
 	switch {
+	case strings.HasPrefix(trimmed, "Error:"):
+		message := strings.TrimSpace(strings.TrimPrefix(trimmed, "Error:"))
+		if message == "" {
+			message = trimmed
+		}
+		update.stage = "Scanning sources"
+		update.detail = message
+		update.statusKey = "error:" + message
+		update.statusMessage = "X " + message
+		update.hasError = true
+		return update, true
 	case strings.HasPrefix(trimmed, "Preparing"):
-		return "Preparing scan...", "", true
+		update.stage = "Scanning sources"
+		update.detail = "Preparing source detection..."
+		return update, true
 	case strings.HasPrefix(trimmed, "Inventory ready"):
-		return "Scan complete.", "", true
+		update.stage = "Scanning sources"
+		update.detail = "Source scan complete."
+		return update, true
+	case strings.HasPrefix(trimmed, "Starting ") && strings.Contains(trimmed, "stream(s)"):
+		update.stage = "Verifying stream settings"
+		update.detail = trimmed
+		return update, true
 	case strings.Contains(trimmed, "encoder"):
-		return "Checking video hardware...", "", true
+		update.stage = "Scanning sources"
+		update.detail = "Checking video hardware..."
+		return update, true
 	case strings.Contains(trimmed, "RTSP sources"):
-		return "Checking RTSP sources...", "", true
+		update.stage = "Scanning sources"
+		update.detail = "Checking RTSP sources..."
+		return update, true
 	case strings.Contains(trimmed, "USB capture devices") || strings.Contains(trimmed, "DirectShow devices") || strings.Contains(trimmed, "V4L2 devices"):
-		return "Checking USB sources...", "", true
+		update.stage = "Scanning sources"
+		update.detail = "Checking USB sources..."
+		return update, true
 	default:
-		return "", "", false
+		return detectionProgressUpdate{}, false
 	}
 }
 
@@ -373,7 +551,7 @@ func main() {
 
 // startAllStreams starts streams for all configured or autodetected sources.
 // Returns only the streams that started successfully.
-func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder) []*cameraStream {
+func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbacks *streamStartupCallbacks) []*cameraStream {
 	unicastMode := camerasConfig.Unicast.Enabled
 	var streams []*cameraStream
 
@@ -384,8 +562,9 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder) []*came
 		fmt.Println("\nStarting camera streams (multicast):")
 		fmt.Println("=====================================")
 	}
+	callbacks.report(fmt.Sprintf("Starting %d stream(s)...", len(sources)))
 
-	for _, source := range sources {
+	for i, source := range sources {
 		cam := source.Camera
 		port := source.OutputPort
 		var udpDest string
@@ -421,10 +600,12 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder) []*came
 			fmt.Printf("  -> %s\n", udpDest)
 		}
 
-		cmd, err := startStream(stream)
+		callbacks.report(fmt.Sprintf("Preparing source %d/%d: %s", i+1, len(sources), cam.Name))
+		cmd, err := startStream(stream, callbacks)
 		if err != nil {
 			fmt.Printf("  ERROR: Failed to start stream: %v\n", err)
 			stream.setStopped(fmt.Sprintf("failed: %v", err))
+			callbacks.report(fmt.Sprintf("Start failed for %s: %v", cam.Name, err))
 		} else {
 			stream.cmd = cmd
 			stream.setRunning()
@@ -555,7 +736,48 @@ type streamCommandSpec struct {
 	udpDest    string
 }
 
-func buildStreamCommandSpec(stream *cameraStream) (streamCommandSpec, error) {
+type streamOutputMode int
+
+const (
+	streamOutputLive streamOutputMode = iota
+	streamOutputProbeNull
+)
+
+const streamStartupProbeTimeout = 5 * time.Second
+
+type streamStartupCallbacks struct {
+	progress func(string)
+	action   func(string)
+}
+
+func (c *streamStartupCallbacks) report(message string) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" || c == nil {
+		return
+	}
+	if c.progress != nil {
+		c.progress(trimmed)
+	}
+	if c.action != nil {
+		c.action(trimmed)
+	}
+}
+
+func resolveStreamFFmpegPath(defaultPath string, encoder *recording.HwEncoder, needsEncoding bool) string {
+	defaultPath = strings.TrimSpace(defaultPath)
+	if defaultPath == "" {
+		defaultPath = "ffmpeg"
+	}
+	if !needsEncoding || encoder == nil {
+		return defaultPath
+	}
+	if encoderPath := strings.TrimSpace(encoder.FFmpegPath); encoderPath != "" {
+		return encoderPath
+	}
+	return defaultPath
+}
+
+func buildStreamCommandSpec(stream *cameraStream, mode streamOutputMode) (streamCommandSpec, error) {
 	// cameras app behavior
 	// - input
 	//   - input format is obtained by probing cameras
@@ -576,9 +798,6 @@ func buildStreamCommandSpec(stream *cameraStream) (streamCommandSpec, error) {
 	}
 
 	ffmpegPath := config.GetFFmpegPath()
-	if ffmpegPath == "" {
-		ffmpegPath = "ffmpeg"
-	}
 
 	var udpDest string
 	unicastMode := camCfg.Unicast.Enabled
@@ -593,6 +812,7 @@ func buildStreamCommandSpec(stream *cameraStream) (streamCommandSpec, error) {
 	args = append(args, "-use_wallclock_as_timestamps", "1")
 
 	needsEncoding := strings.ToLower(strings.TrimSpace(cam.PixFmt)) != "h264"
+	ffmpegPath = resolveStreamFFmpegPath(ffmpegPath, encoder, needsEncoding)
 
 	if needsEncoding && encoder != nil && encoder.InputParameters != "" {
 		args = append(args, strings.Fields(encoder.InputParameters)...)
@@ -683,20 +903,31 @@ func buildStreamCommandSpec(stream *cameraStream) (streamCommandSpec, error) {
 		args = append(args, "-keyint_min", fmt.Sprintf("%d", gopSize))
 	}
 
-	if unicastMode {
-		extra := fc.Output.ExtraFlags
-		extra = strings.ReplaceAll(extra, "-f mpegts", "")
-		extra = strings.TrimSpace(extra)
+	switch mode {
+	case streamOutputProbeNull:
+		extra := strings.TrimSpace(strings.ReplaceAll(fc.Output.ExtraFlags, "-f mpegts", ""))
 		if extra != "" {
 			args = append(args, strings.Fields(extra)...)
 		}
-		args = append(args, "-map", "0:v")
-		args = append(args, "-nostats", "-progress", "pipe:1")
-		args = append(args, "-f", "tee", udpDest)
-	} else {
-		args = append(args, strings.Fields(fc.Output.ExtraFlags)...)
-		args = append(args, "-nostats", "-progress", "pipe:1")
-		args = append(args, udpDest)
+		args = append(args, "-frames:v", "1", "-nostats", "-f", "null", "-")
+	case streamOutputLive:
+		if unicastMode {
+			extra := fc.Output.ExtraFlags
+			extra = strings.ReplaceAll(extra, "-f mpegts", "")
+			extra = strings.TrimSpace(extra)
+			if extra != "" {
+				args = append(args, strings.Fields(extra)...)
+			}
+			args = append(args, "-map", "0:v")
+			args = append(args, "-nostats", "-progress", "pipe:1")
+			args = append(args, "-f", "tee", udpDest)
+		} else {
+			args = append(args, strings.Fields(fc.Output.ExtraFlags)...)
+			args = append(args, "-nostats", "-progress", "pipe:1")
+			args = append(args, udpDest)
+		}
+	default:
+		return streamCommandSpec{}, fmt.Errorf("unsupported stream output mode %d", mode)
 	}
 
 	return streamCommandSpec{
@@ -715,9 +946,134 @@ func formatCommandLine(path string, args []string) string {
 	return strings.Join(parts, " ")
 }
 
+func streamNeedsStartupProbe(stream *cameraStream) bool {
+	return stream != nil
+}
+
+func summarizeStartupProbeOutput(output string, runErr error) string {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "deprecated pixel format") {
+			continue
+		}
+		const maxLen = 180
+		if len(trimmed) > maxLen {
+			return trimmed[:maxLen] + "..."
+		}
+		return trimmed
+	}
+	if runErr != nil {
+		return runErr.Error()
+	}
+	return "no ffmpeg error details"
+}
+
+func formatProbeDiagnostics(output string) string {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return "(no debug output)"
+	}
+	const maxLen = 6000
+	if len(trimmed) > maxLen {
+		trimmed = trimmed[:maxLen] + "\n..."
+	}
+	return strings.ReplaceAll(trimmed, "\n", "\n    ")
+}
+
+func runStartupProbeCommand(ffmpegPath string, args []string, logLevel string, timeout time.Duration) (string, error) {
+	probeArgs := append([]string{"-hide_banner", "-loglevel", logLevel}, args...)
+	cmd := recording.CreateHiddenCmd(ffmpegPath, probeArgs...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return strings.TrimSpace(stderr.String()), err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var waitErr error
+	timedOut := false
+	select {
+	case waitErr = <-done:
+	case <-timer.C:
+		timedOut = true
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		waitErr = <-done
+	}
+
+	parts := make([]string, 0, 2)
+	if text := strings.TrimSpace(stdout.String()); text != "" {
+		parts = append(parts, text)
+	}
+	if text := strings.TrimSpace(stderr.String()); text != "" {
+		parts = append(parts, text)
+	}
+	output := strings.Join(parts, "\n")
+	if timedOut {
+		return output, fmt.Errorf("timed out after %s", timeout.Round(time.Second))
+	}
+	return output, waitErr
+}
+
+var runStartupProbeCommandFunc = runStartupProbeCommand
+
+func runStartupProbe(stream *cameraStream, callbacks *streamStartupCallbacks) error {
+	if !streamNeedsStartupProbe(stream) {
+		return nil
+	}
+
+	spec, err := buildStreamCommandSpec(stream, streamOutputProbeNull)
+	if err != nil {
+		return err
+	}
+
+	quickArgs := append([]string{"-hide_banner", "-loglevel", "error"}, spec.args...)
+	logging.InfoLogger.Printf("Startup stream preflight for %s [%s]: %s", stream.camera.Name, stream.shortID, formatCommandLine(spec.ffmpegPath, quickArgs))
+	callbacks.report(fmt.Sprintf("Testing stream grab for %s...", stream.camera.Name))
+
+	output, err := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "error", streamStartupProbeTimeout)
+	if err == nil {
+		logging.InfoLogger.Printf("Startup stream preflight passed for %s [%s]: %s", stream.camera.Name, stream.shortID, describeEncodingPlan(stream.camera, stream.encoder, ffmpegConfig))
+		callbacks.report(fmt.Sprintf("Validation passed for %s", stream.camera.Name))
+		return nil
+	}
+
+	reason := summarizeStartupProbeOutput(output, err)
+	logging.ErrorLogger.Printf("Startup stream preflight failed for %s [%s]: %s", stream.camera.Name, stream.shortID, reason)
+	callbacks.report(fmt.Sprintf("Validation failed for %s; collecting diagnostics...", stream.camera.Name))
+
+	debugOutput, debugErr := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "debug", streamStartupProbeTimeout)
+	if debugErr != nil {
+		logging.ErrorLogger.Printf("Startup encoder diagnostics exited for %s [%s]: %v", stream.camera.Name, stream.shortID, debugErr)
+	}
+	logging.ErrorLogger.Printf("Startup encoder diagnostics for %s [%s]:\n    %s", stream.camera.Name, stream.shortID, formatProbeDiagnostics(debugOutput))
+
+	return fmt.Errorf("stream validation failed: %s", reason)
+}
+
 // startStream starts ffmpeg to stream a camera to multicast UDP
-func startStream(stream *cameraStream) (*exec.Cmd, error) {
-	spec, err := buildStreamCommandSpec(stream)
+func startStream(stream *cameraStream, callbacks *streamStartupCallbacks) (*exec.Cmd, error) {
+	if err := runStartupProbe(stream, callbacks); err != nil {
+		return nil, err
+	}
+	callbacks.report(fmt.Sprintf("Starting stream for %s...", stream.camera.Name))
+
+	spec, err := buildStreamCommandSpec(stream, streamOutputLive)
 	if err != nil {
 		return nil, err
 	}
@@ -911,6 +1267,11 @@ func monitorFFmpegErrors(stream *cameraStream, stderr io.Reader) {
 		}
 
 		stream.setLastStderr(line)
+		if size, ok := parseResolutionFromFFmpegLine(line); ok {
+			if stream.updateDetectedResolution(size) {
+				logging.InfoLogger.Printf("Observed input resolution for %s [%s]: %s", stream.camera.Name, stream.shortID, size)
+			}
+		}
 
 		lower := strings.ToLower(line)
 		if shouldIgnoreFFmpegStderrLine(lower) {
@@ -952,7 +1313,7 @@ func (s *cameraStream) shouldRunActivationDiagnostic() bool {
 }
 
 func runActivationDiagnosticRetry(stream *cameraStream) {
-	spec, err := buildStreamCommandSpec(stream)
+	spec, err := buildStreamCommandSpec(stream, streamOutputLive)
 	if err != nil {
 		logging.ErrorLogger.Printf("Diagnostic retry setup failed for %s [%s]: %v", stream.camera.Name, stream.shortID, err)
 		return
@@ -1144,6 +1505,39 @@ func (s *cameraStream) getLastStderr() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lastStderr
+}
+
+func (s *cameraStream) updateDetectedResolution(size string) bool {
+	size = strings.TrimSpace(size)
+	if _, _, ok := parseResolution(size); !ok {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.camera.Size == size {
+		return false
+	}
+	s.camera.Size = size
+	return true
+}
+
+func parseResolutionFromFFmpegLine(line string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if !strings.Contains(lower, "video:") {
+		return "", false
+	}
+
+	match := ffmpegVideoResolutionPattern.FindStringSubmatch(line)
+	if len(match) != 3 {
+		return "", false
+	}
+
+	size := fmt.Sprintf("%sx%s", match[1], match[2])
+	if _, _, ok := parseResolution(size); !ok {
+		return "", false
+	}
+	return size, true
 }
 
 func (s *cameraStream) updateProgress(key, value string) {
@@ -2385,7 +2779,8 @@ func runUI() {
 			transport:   spec.Transport,
 		}
 
-		cmd, err := startStream(stream)
+		callbacks := &streamStartupCallbacks{action: actionStatus.SetText}
+		cmd, err := startStream(stream, callbacks)
 		if err != nil {
 			stream.setStopped(fmt.Sprintf("failed: %v", err))
 			return err
@@ -3317,6 +3712,7 @@ func runUI() {
 			recoveryState := rtspRecoveryStates[spec.Key]
 			if stream != nil {
 				snapshot := stream.snapshotRow()
+				row[5] = snapshot[2]
 				row[7] = snapshot[4]
 				row[10] = monitoringSourceStatus(spec, stream, recoveryState)
 			} else {
@@ -3493,7 +3889,7 @@ func runUI() {
 		currentEncoder = newEncoder
 		updateEncoderStatus()
 		if len(inv.Errors) == 0 && len(inv.Active) > 0 {
-			newStreams = startAllStreams(inv.Active, newEncoder)
+			newStreams = startAllStreams(inv.Active, newEncoder, &streamStartupCallbacks{action: actionStatus.SetText})
 		}
 		*currentStreams = newStreams
 		clearRestartDirtyForStreams(newStreams)
@@ -3555,12 +3951,15 @@ func runUI() {
 		rescanBtn.Disable()
 		actionStatus.SetText("Rescanning sources...")
 		logging.InfoLogger.Printf("Configuration rescan requested")
-		progressDialog, reportProgress := newDetectionProgressDialog(window, "Rescanning Sources")
+		progressDialog, reportProgress, progressHasErrors := newDetectionProgressDialog(window, "Rescanning Sources")
 		progressDialog.Show()
 		reportProgress("Preparing rescan...")
 		go func() {
 			startTime := time.Now()
 			inv := buildSourceInventoryWithProgress(reportProgress)
+			for _, item := range inv.Errors {
+				reportProgress("Error: " + item)
+			}
 			currentInventory = inv
 			if inv.Encoder != nil {
 				currentEncoder = inv.Encoder
@@ -3570,15 +3969,19 @@ func runUI() {
 			renderMonitoringSourceToggles(inv)
 			table.Refresh()
 			updateCameraStatusLabel(inv.Status)
-			actionStatus.SetText(verificationMessage("Sources rescanned."))
+			if progressHasErrors() {
+				actionStatus.SetText("Rescan completed with errors. Review the dialog, then close it.")
+			} else {
+				actionStatus.SetText(verificationMessage("Sources rescanned."))
+				progressDialog.Hide()
+			}
 			rescanBtn.Enable()
-			progressDialog.Hide()
 			logging.InfoLogger.Printf("Configuration rescan completed in %s", time.Since(startTime))
 		}()
 	}
 
 	// Detection and streaming happen in background after window is shown.
-	startupProgressDialog, reportStartupProgress := newDetectionProgressDialog(window, "Detecting Sources")
+	startupProgressDialog, reportStartupProgress, startupHasErrors := newDetectionProgressDialog(window, "Detecting Sources")
 	startupProgressDialog.Show()
 	reportStartupProgress("Preparing initial source detection...")
 	go func() {
@@ -3593,6 +3996,7 @@ func runUI() {
 		if len(inv.Errors) > 0 {
 			for _, item := range inv.Errors {
 				logging.ErrorLogger.Println(item)
+				reportStartupProgress("Error: " + item)
 			}
 		}
 
@@ -3605,7 +4009,8 @@ func runUI() {
 		renderMonitoringSourceToggles(inv)
 
 		if len(inv.Active) > 0 && len(inv.Errors) == 0 {
-			newStreams := startAllStreams(inv.Active, inv.Encoder)
+			reportStartupProgress(fmt.Sprintf("Inventory ready. Validating %d stream(s)...", len(inv.Active)))
+			newStreams := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
 			*currentStreams = newStreams
 			if len(newStreams) > 0 {
 				updateCameraStatusLabel(inv.Status)
@@ -3615,8 +4020,12 @@ func runUI() {
 		} else {
 			updateCameraStatusLabel(inv.Status)
 		}
-		actionStatus.SetText("Preview/Record: ready")
-		startupProgressDialog.Hide()
+		if startupHasErrors() {
+			actionStatus.SetText("Detection completed with errors. Review the dialog, then close it.")
+		} else {
+			actionStatus.SetText("Preview/Record: ready")
+			startupProgressDialog.Hide()
+		}
 		logging.InfoLogger.Printf("Initial source detection completed in %s", time.Since(startTime))
 		table.Refresh()
 	}()

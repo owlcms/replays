@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/owlcms/replays/internal/config"
 	camerascfg "github.com/owlcms/replays/internal/config/cameras"
+	ffmpegcfg "github.com/owlcms/replays/internal/config/ffmpeg"
 	"github.com/owlcms/replays/internal/recording"
 )
 
@@ -352,6 +355,113 @@ func TestPreviewArgsForSize(t *testing.T) {
 	}
 }
 
+func TestParseResolutionFromFFmpegLine(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want string
+		ok   bool
+	}{
+		{
+			name: "parses ffmpeg input video line",
+			line: "  Stream #0:0: Video: h264 (High), yuv420p(progressive), 1920x1080, 30 fps, 30 tbr, 90k tbn",
+			want: "1920x1080",
+			ok:   true,
+		},
+		{
+			name: "ignores non video lines",
+			line: "Input #0, rtsp, from 'rtsp://camera':",
+			want: "",
+			ok:   false,
+		},
+		{
+			name: "ignores video lines without dimensions",
+			line: "Stream #0:0: Video: h264",
+			want: "",
+			ok:   false,
+		},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseResolutionFromFFmpegLine(tc.line)
+			if ok != tc.ok {
+				t.Fatalf("parseResolutionFromFFmpegLine() ok = %t, want %t", ok, tc.ok)
+			}
+			if got != tc.want {
+				t.Fatalf("parseResolutionFromFFmpegLine() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSimplifyDetectionProgressUsesSourceNameInActivity(t *testing.T) {
+	update, ok := simplifyDetectionProgress("Examining USB source 2/3: Laptop Camera")
+	if !ok {
+		t.Fatal("simplifyDetectionProgress() ok = false, want true")
+	}
+	if update.stage != "Scanning sources" {
+		t.Fatalf("stage = %q, want %q", update.stage, "Scanning sources")
+	}
+	if update.detail != "Checking source: Laptop Camera" {
+		t.Fatalf("detail = %q, want %q", update.detail, "Checking source: Laptop Camera")
+	}
+}
+
+func TestSimplifyDetectionProgressShowsStreamGrabActivity(t *testing.T) {
+	update, ok := simplifyDetectionProgress("Testing stream grab for CamON...")
+	if !ok {
+		t.Fatal("simplifyDetectionProgress() ok = false, want true")
+	}
+	if update.stage != "Verifying stream settings" {
+		t.Fatalf("stage = %q, want %q", update.stage, "Verifying stream settings")
+	}
+	if update.detail != "Testing stream grab for CamON" {
+		t.Fatalf("detail = %q, want %q", update.detail, "Testing stream grab for CamON")
+	}
+}
+
+func TestSimplifyDetectionProgressMarksSourceFailureAsError(t *testing.T) {
+	update, ok := simplifyDetectionProgress("Validation failed for CamON; collecting diagnostics...")
+	if !ok {
+		t.Fatal("simplifyDetectionProgress() ok = false, want true")
+	}
+	if !update.hasError {
+		t.Fatal("hasError = false, want true")
+	}
+	if update.statusMessage != "X CamON" {
+		t.Fatalf("statusMessage = %q, want %q", update.statusMessage, "X CamON")
+	}
+}
+
+func TestCameraStreamSnapshotUsesUpdatedResolution(t *testing.T) {
+	stream := &cameraStream{camera: recording.DetectedCamera{Name: "CamON", Size: "-"}}
+	if !stream.updateDetectedResolution("1920x1080") {
+		t.Fatal("updateDetectedResolution() = false, want true for a valid new size")
+	}
+	if got := stream.snapshotRow()[2]; got != "1920x1080" {
+		t.Fatalf("snapshotRow()[2] = %q, want 1920x1080", got)
+	}
+	if stream.updateDetectedResolution("invalid") {
+		t.Fatal("updateDetectedResolution() = true, want false for an invalid size")
+	}
+}
+
+func TestMonitorFFmpegErrorsUpdatesDetectedSourceResolution(t *testing.T) {
+	stream := &cameraStream{
+		camera:     recording.DetectedCamera{Name: "Laptop Cam", Size: "1280x720"},
+		sourceType: "usb",
+		shortID:    "C1",
+	}
+
+	monitorFFmpegErrors(stream, strings.NewReader("Stream #0:0: Video: mjpeg, yuvj422p(pc), 1920x1080, 30 fps\n"))
+
+	if got := stream.snapshotRow()[2]; got != "1920x1080" {
+		t.Fatalf("snapshotRow()[2] = %q, want 1920x1080", got)
+	}
+}
+
 func TestUnreadyRTSPStatusUsesStartingLabel(t *testing.T) {
 	stream := &cameraStream{
 		sourceType: "rtsp",
@@ -442,7 +552,7 @@ func TestBuildUSBSourcesFromDetectedUsesStableAssignmentState(t *testing.T) {
 		Fps:            30,
 	}
 
-	sources := buildUSBSourcesFromDetected([]recording.DetectedCamera{cam}, 9001, map[int]struct{}{}, map[string]struct{}{})
+	sources := buildUSBSourcesFromDetected([]recording.DetectedCamera{cam}, 9001, map[int]struct{}{}, map[string]struct{}{}, nil)
 	if len(sources) != 1 {
 		t.Fatalf("expected 1 source, got %d", len(sources))
 	}
@@ -454,5 +564,202 @@ func TestBuildUSBSourcesFromDetectedUsesStableAssignmentState(t *testing.T) {
 	}
 	if sources[0].Name != "Platform Left" || sources[0].ShortID != "C1" {
 		t.Fatalf("expected metadata from stable assignment, got name=%q shortID=%q", sources[0].Name, sources[0].ShortID)
+	}
+}
+
+func TestResolveStreamFFmpegPath(t *testing.T) {
+	tests := []struct {
+		name          string
+		defaultPath   string
+		encoder       *recording.HwEncoder
+		needsEncoding bool
+		want          string
+	}{
+		{name: "copy stream keeps default runtime", defaultPath: "ffmpeg7", encoder: &recording.HwEncoder{FFmpegPath: "ffmpeg6"}, needsEncoding: false, want: "ffmpeg7"},
+		{name: "encoded stream uses encoder override", defaultPath: "ffmpeg7", encoder: &recording.HwEncoder{FFmpegPath: "ffmpeg6"}, needsEncoding: true, want: "ffmpeg6"},
+		{name: "encoded stream without override uses default", defaultPath: "ffmpeg7", encoder: &recording.HwEncoder{}, needsEncoding: true, want: "ffmpeg7"},
+		{name: "empty default falls back to ffmpeg", defaultPath: "", encoder: nil, needsEncoding: false, want: "ffmpeg"},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveStreamFFmpegPath(tc.defaultPath, tc.encoder, tc.needsEncoding); got != tc.want {
+				t.Fatalf("resolveStreamFFmpegPath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildStreamCommandSpecUsesNVENCFallbackOnlyWhenEncoding(t *testing.T) {
+	previousCamerasConfig := camerasConfig
+	previousFFmpegConfig := ffmpegConfig
+	previousFFmpegPath := config.GetFFmpegPath()
+	defer func() {
+		camerasConfig = previousCamerasConfig
+		ffmpegConfig = previousFFmpegConfig
+		config.SetFFmpegPath(previousFFmpegPath)
+	}()
+
+	camerasConfig = &camerascfg.Config{}
+	ffmpegConfig = &ffmpegcfg.Config{}
+	config.SetFFmpegPath("ffmpeg7")
+
+	nvenc := &recording.HwEncoder{Name: "h264_nvenc", FFmpegPath: "ffmpeg6"}
+
+	copyStream := &cameraStream{
+		camera: recording.DetectedCamera{Format: "rtsp", PixFmt: "h264", Device: "rtsp://copy"},
+		encoder: nvenc,
+		port:    9005,
+	}
+	copySpec, err := buildStreamCommandSpec(copyStream, streamOutputLive)
+	if err != nil {
+		t.Fatalf("buildStreamCommandSpec(copy) error = %v", err)
+	}
+	if copySpec.ffmpegPath != "ffmpeg7" {
+		t.Fatalf("copy stream ffmpeg path = %q, want ffmpeg7", copySpec.ffmpegPath)
+	}
+
+	encodedStream := &cameraStream{
+		camera: recording.DetectedCamera{Format: "rtsp", PixFmt: "mjpeg", Device: "rtsp://encode"},
+		encoder: nvenc,
+		port:    9006,
+	}
+	encodedSpec, err := buildStreamCommandSpec(encodedStream, streamOutputLive)
+	if err != nil {
+		t.Fatalf("buildStreamCommandSpec(encoded) error = %v", err)
+	}
+	if encodedSpec.ffmpegPath != "ffmpeg6" {
+		t.Fatalf("encoded stream ffmpeg path = %q, want ffmpeg6", encodedSpec.ffmpegPath)
+	}
+}
+
+func TestStreamNeedsStartupProbeIncludesCopyStreams(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream *cameraStream
+		want   bool
+	}{
+		{
+			name:   "nil stream does not probe",
+			stream: nil,
+			want:   false,
+		},
+		{
+			name: "h264 copy stream probes",
+			stream: &cameraStream{
+				camera: recording.DetectedCamera{PixFmt: "h264"},
+			},
+			want: true,
+		},
+		{
+			name: "software stream probes",
+			stream: &cameraStream{
+				camera: recording.DetectedCamera{PixFmt: "mjpeg"},
+			},
+			want: true,
+		},
+	}
+
+	for i := range tests {
+		tc := &tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			if got := streamNeedsStartupProbe(tc.stream); got != tc.want {
+				t.Fatalf("streamNeedsStartupProbe() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildStreamCommandSpecProbeNullCopiesToNullOutput(t *testing.T) {
+	previousCamerasConfig := camerasConfig
+	previousFFmpegConfig := ffmpegConfig
+	previousFFmpegPath := config.GetFFmpegPath()
+	defer func() {
+		camerasConfig = previousCamerasConfig
+		ffmpegConfig = previousFFmpegConfig
+		config.SetFFmpegPath(previousFFmpegPath)
+	}()
+
+	camerasConfig = &camerascfg.Config{}
+	ffmpegConfig = &ffmpegcfg.Config{
+		Software: ffmpegcfg.SoftwareEncoder{OutputParameters: "-c:v libx264"},
+		Output:   ffmpegcfg.OutputConfig{ExtraFlags: "-f mpegts"},
+	}
+	config.SetFFmpegPath("ffmpeg7")
+
+	stream := &cameraStream{
+		camera: recording.DetectedCamera{Format: "rtsp", PixFmt: "h264", Device: "rtsp://copy"},
+		port:    9005,
+	}
+
+	spec, err := buildStreamCommandSpec(stream, streamOutputProbeNull)
+	if err != nil {
+		t.Fatalf("buildStreamCommandSpec(probe) error = %v", err)
+	}
+
+	joined := strings.Join(spec.args, " ")
+	if !strings.Contains(joined, "-c:v copy") {
+		t.Fatalf("probe args = %q, want copy output", joined)
+	}
+	if !strings.Contains(joined, "-f null -") {
+		t.Fatalf("probe args = %q, want null output", joined)
+	}
+	if !strings.Contains(joined, "-frames:v 1") {
+		t.Fatalf("probe args = %q, want single-frame probe", joined)
+	}
+}
+
+func TestRunStartupProbeRetriesFailedGrabWithDebugLogging(t *testing.T) {
+	previousCamerasConfig := camerasConfig
+	previousFFmpegConfig := ffmpegConfig
+	previousFFmpegPath := config.GetFFmpegPath()
+	previousRunner := runStartupProbeCommandFunc
+	defer func() {
+		camerasConfig = previousCamerasConfig
+		ffmpegConfig = previousFFmpegConfig
+		config.SetFFmpegPath(previousFFmpegPath)
+		runStartupProbeCommandFunc = previousRunner
+	}()
+
+	camerasConfig = &camerascfg.Config{}
+	ffmpegConfig = &ffmpegcfg.Config{
+		Software: ffmpegcfg.SoftwareEncoder{OutputParameters: "-c:v libx264"},
+		Output:   ffmpegcfg.OutputConfig{ExtraFlags: "-f mpegts"},
+	}
+	config.SetFFmpegPath("ffmpeg7")
+
+	var logLevels []string
+	var argLists []string
+	runStartupProbeCommandFunc = func(ffmpegPath string, args []string, logLevel string, timeout time.Duration) (string, error) {
+		logLevels = append(logLevels, logLevel)
+		argLists = append(argLists, strings.Join(append([]string(nil), args...), " "))
+		if logLevel == "error" {
+			return "first grab failed", errors.New("grab failed")
+		}
+		return "debug grab details", nil
+	}
+
+	stream := &cameraStream{
+		camera:  recording.DetectedCamera{Name: "CamON", Format: "rtsp", PixFmt: "h264", Device: "rtsp://copy"},
+		shortID: "R1",
+		port:    9005,
+	}
+
+	err := runStartupProbe(stream, &streamStartupCallbacks{})
+	if err == nil {
+		t.Fatal("runStartupProbe() error = nil, want the first grab failure")
+	}
+	if !strings.Contains(err.Error(), "stream validation failed") || !strings.Contains(err.Error(), "first grab failed") {
+		t.Fatalf("runStartupProbe() error = %q, want stream validation failure with first grab details", err.Error())
+	}
+	if strings.Join(logLevels, ",") != "error,debug" {
+		t.Fatalf("probe log levels = %v, want [error debug]", logLevels)
+	}
+	if len(argLists) != 2 || argLists[0] != argLists[1] {
+		t.Fatalf("probe args = %v, want same args for error and debug grabs", argLists)
+	}
+	if !strings.Contains(argLists[0], "-f null -") {
+		t.Fatalf("probe args = %q, want null output", argLists[0])
 	}
 }
