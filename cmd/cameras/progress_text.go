@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/owlcms/replays/internal/recording"
 )
 
 type detectionProgressTemplate struct {
@@ -30,7 +32,14 @@ func mustParseDetectionProgressTemplates() map[string]detectionProgressTemplate 
 }
 
 func renderDetectionProgressText(templateText, payload string) string {
-	return strings.ReplaceAll(templateText, "{payload}", payload)
+	name, detail := recording.ProgressPayloadParts(payload)
+	if detail == "" {
+		templateText = strings.ReplaceAll(templateText, ": {detail}", "")
+	}
+	rendered := strings.ReplaceAll(templateText, "{payload}", payload)
+	rendered = strings.ReplaceAll(rendered, "{name}", name)
+	rendered = strings.ReplaceAll(rendered, "{detail}", detail)
+	return rendered
 }
 
 func detectionProgressUpdateForTag(tag, payload string) (detectionProgressUpdate, bool) {
@@ -40,11 +49,12 @@ func detectionProgressUpdateForTag(tag, payload string) (detectionProgressUpdate
 	}
 
 	return detectionProgressUpdate{
-		stage:         renderDetectionProgressText(template.Stage, payload),
-		detail:        renderDetectionProgressText(template.Detail, payload),
-		statusKey:     renderDetectionProgressText(template.StatusKey, payload),
-		statusMessage: renderDetectionProgressText(template.StatusMessage, payload),
-		replaceStatus: template.ReplaceStatus,
-		hasError:      template.HasError,
+		stage:          renderDetectionProgressText(template.Stage, payload),
+		detail:         renderDetectionProgressText(template.Detail, payload),
+		statusKey:      renderDetectionProgressText(template.StatusKey, payload),
+		statusMessage:  renderDetectionProgressText(template.StatusMessage, payload),
+		replaceStatus:  template.ReplaceStatus,
+		hasError:       template.HasError,
+		statusHasError: template.HasError,
 	}, true
 }

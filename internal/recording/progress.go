@@ -5,6 +5,7 @@ import "strings"
 // ProgressSep is the separator between a progress tag and its payload.
 // Using a rare Unicode character so it cannot appear in device names or paths.
 const ProgressSep = "¤"
+const ProgressDetailSep = "\x1f"
 
 // Progress tags for messages emitted by this package via ProbeProgressFunc.
 // Each message is formatted as tag + ProgressSep + payload.
@@ -18,6 +19,11 @@ const (
 	// Payload: encoder name.
 	ProgEncoder = "encoder"
 
+	// ProgEncoderUnconfigured is emitted when ffmpeg reports an encoder that has
+	// no matching [[encoder]] settings in ffmpeg.toml.
+	// Payload: encoder name.
+	ProgEncoderUnconfigured = "encNoCfg"
+
 	// ProgListing is emitted when starting a device enumeration pass.
 	// Payload: human-readable description (not parsed structurally).
 	ProgListing = "listing"
@@ -30,6 +36,22 @@ const (
 // ProgressMsg builds a tagged progress message for use with ProbeProgressFunc.
 func ProgressMsg(tag, payload string) string {
 	return tag + ProgressSep + payload
+}
+
+// ProgressDetailPayload combines a display name and detail reason in one payload.
+func ProgressDetailPayload(name, detail string) string {
+	name = strings.TrimSpace(name)
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return name
+	}
+	return name + ProgressDetailSep + detail
+}
+
+// ProgressPayloadParts splits a progress payload into display name and optional detail.
+func ProgressPayloadParts(payload string) (name, detail string) {
+	name, detail, _ = strings.Cut(payload, ProgressDetailSep)
+	return strings.TrimSpace(name), strings.TrimSpace(detail)
 }
 
 // ProgressParse splits a tagged progress message into (tag, payload, ok).

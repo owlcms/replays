@@ -423,15 +423,43 @@ func TestSimplifyDetectionProgressShowsStreamGrabActivity(t *testing.T) {
 }
 
 func TestSimplifyDetectionProgressMarksSourceFailureAsError(t *testing.T) {
-	update, ok := simplifyDetectionProgress(progMsg(progValidateFailed, "CamON"))
+	update, ok := simplifyDetectionProgress(progMsg(progValidateFailed, recording.ProgressDetailPayload("CamON", "timed out after 3s")))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}
 	if !update.hasError {
 		t.Fatal("hasError = false, want true")
 	}
-	if update.statusMessage != "X CamON" {
-		t.Fatalf("statusMessage = %q, want %q", update.statusMessage, "X CamON")
+	if update.statusMessage != "X CamON: timed out after 3s" {
+		t.Fatalf("statusMessage = %q, want %q", update.statusMessage, "X CamON: timed out after 3s")
+	}
+}
+
+func TestSimplifyDetectionProgressReportsUnconfiguredEncoder(t *testing.T) {
+	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgEncoderUnconfigured, recording.ProgressDetailPayload("h264_amf", "no ffmpeg.toml encoder settings")))
+	if !ok {
+		t.Fatal("simplifyDetectionProgress() ok = false, want true")
+	}
+	if update.detail != "no ffmpeg.toml encoder settings: h264_amf" {
+		t.Fatalf("detail = %q, want unconfigured encoder detail", update.detail)
+	}
+	if update.statusMessage != "- h264_amf: no ffmpeg.toml encoder settings" {
+		t.Fatalf("statusMessage = %q, want unconfigured encoder status", update.statusMessage)
+	}
+}
+
+func TestRenderProgressStatusSeparatesFailures(t *testing.T) {
+	order := []string{"cam1", "cam2", "cam3"}
+	entries := map[string]progressStatusEntry{
+		"cam1": {text: "✓ Camera 1"},
+		"cam2": {text: "X Camera 2", hasError: true},
+		"cam3": {text: "✓ Camera 3"},
+	}
+
+	got := renderProgressStatus(order, entries)
+	want := "✓ Camera 1\n✓ Camera 3\n\nX Camera 2"
+	if got != want {
+		t.Fatalf("renderProgressStatus() = %q, want %q", got, want)
 	}
 }
 
@@ -605,10 +633,15 @@ func TestBuildStreamCommandSpecUsesNVENCFallbackOnlyWhenEncoding(t *testing.T) {
 	ffmpegConfig = &ffmpegcfg.Config{}
 	config.SetFFmpegPath("ffmpeg7")
 
-	nvenc := &recording.HwEncoder{Name: "h264_nvenc", FFmpegPath: "ffmpeg6"}
+	nvenc := &recording.HwEncoder{
+		Name:             "h264_nvenc",
+		FFmpegPath:       "ffmpeg6",
+		VideoFilter:      "format=yuv420p",
+		OutputParameters: "-c:v h264_nvenc",
+	}
 
 	copyStream := &cameraStream{
-		camera: recording.DetectedCamera{Format: "rtsp", PixFmt: "h264", Device: "rtsp://copy"},
+		camera:  recording.DetectedCamera{Format: "rtsp", PixFmt: "h264", Device: "rtsp://copy"},
 		encoder: nvenc,
 		port:    9005,
 	}
@@ -619,9 +652,12 @@ func TestBuildStreamCommandSpecUsesNVENCFallbackOnlyWhenEncoding(t *testing.T) {
 	if copySpec.ffmpegPath != "ffmpeg7" {
 		t.Fatalf("copy stream ffmpeg path = %q, want ffmpeg7", copySpec.ffmpegPath)
 	}
+	if strings.Contains(strings.Join(copySpec.args, " "), "format=yuv420p") {
+		t.Fatalf("copy stream args = %q, did not expect encoder video filter", strings.Join(copySpec.args, " "))
+	}
 
 	encodedStream := &cameraStream{
-		camera: recording.DetectedCamera{Format: "rtsp", PixFmt: "mjpeg", Device: "rtsp://encode"},
+		camera:  recording.DetectedCamera{Format: "rtsp", PixFmt: "mjpeg", Device: "rtsp://encode"},
 		encoder: nvenc,
 		port:    9006,
 	}
@@ -631,6 +667,9 @@ func TestBuildStreamCommandSpecUsesNVENCFallbackOnlyWhenEncoding(t *testing.T) {
 	}
 	if encodedSpec.ffmpegPath != "ffmpeg6" {
 		t.Fatalf("encoded stream ffmpeg path = %q, want ffmpeg6", encodedSpec.ffmpegPath)
+	}
+	if !strings.Contains(strings.Join(encodedSpec.args, " "), "-vf format=yuv420p") {
+		t.Fatalf("encoded stream args = %q, want encoder video filter from ffmpeg.toml", strings.Join(encodedSpec.args, " "))
 	}
 }
 
@@ -690,7 +729,7 @@ func TestBuildStreamCommandSpecProbeNullCopiesToNullOutput(t *testing.T) {
 
 	stream := &cameraStream{
 		camera: recording.DetectedCamera{Format: "rtsp", PixFmt: "h264", Device: "rtsp://copy"},
-		port:    9005,
+		port:   9005,
 	}
 
 	spec, err := buildStreamCommandSpec(stream, streamOutputProbeNull)

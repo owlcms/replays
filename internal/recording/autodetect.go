@@ -105,18 +105,20 @@ func DetectAndWriteConfig(window fyne.Window) {
 	go func() {
 		defer progressDialog.Hide()
 
-		// Load shared cameras config so we use config-driven encoder & priority logic
+		// Load shared ffmpeg.toml config so encoder and camera priorities have one source of truth.
 		cameraCfg, cfgErr := ffmpeg.LoadConfig()
 		if cfgErr != nil {
-			logging.WarningLogger.Printf("Could not load cameras shared config, using legacy defaults: %v", cfgErr)
+			logging.ErrorLogger.Printf("Could not load ffmpeg.toml for automatic detection: %v", cfgErr)
+			dialog.ShowError(fmt.Errorf("could not load ffmpeg.toml for automatic detection: %v", cfgErr), window)
+			return
 		}
 
-		// Step 1: Detect available H.264 hardware encoders (config-driven when available)
+		// Step 1: Detect available H.264 hardware encoders from ffmpeg.toml definitions.
 		progressLabel.SetText("Detecting hardware encoders...")
 		encoders := DetectEncodersWithConfig(cameraCfg)
 		logging.InfoLogger.Printf("Detected %d hardware encoders", len(encoders))
 
-		// Step 2: Detect cameras (using config-driven mode priorities)
+		// Step 2: Detect cameras using ffmpeg.toml mode priorities.
 		progressLabel.SetText("Detecting cameras...")
 		cameras := DetectCamerasWithConfig(cameraCfg)
 		logging.InfoLogger.Printf("Detected %d cameras", len(cameras))
@@ -143,11 +145,14 @@ func DetectAndWriteConfig(window fyne.Window) {
 	}()
 }
 
-// DetectEncoders probes ffmpeg for available H.264 hardware encoders.
-// If a CamerasConfig is provided, encoder definitions come from the config.
-// If cfg is nil, falls back to the legacy hardcoded definitions.
+// DetectEncoders probes ffmpeg for available H.264 hardware encoders using ffmpeg.toml.
 func DetectEncoders() []HwEncoder {
-	return DetectEncodersWithConfig(nil)
+	cfg, err := ffmpeg.LoadConfig()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load ffmpeg.toml for encoder detection: %v", err)
+		return nil
+	}
+	return DetectEncodersWithConfig(cfg)
 }
 
 // DetectEncodersWithConfig probes ffmpeg for available H.264 hardware encoders,
@@ -157,6 +162,18 @@ func DetectEncodersWithConfig(cfg *ffmpeg.Config) []HwEncoder {
 }
 
 func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgressFunc) []HwEncoder {
+	if cfg == nil {
+		loaded, err := ffmpeg.LoadConfig()
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to load ffmpeg.toml for encoder detection: %v", err)
+			if progress != nil {
+				progress(ProgressMsg(ProgHwMsg, "Error: failed to load ffmpeg.toml for encoder detection"))
+			}
+			return nil
+		}
+		cfg = loaded
+	}
+
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
@@ -250,20 +267,19 @@ func mergeFallbackNVENCEncoder(primary, fallback []HwEncoder, cfg *ffmpeg.Config
 }
 
 func encoderPreferenceOrder(cfg *ffmpeg.Config) []string {
-	if cfg != nil && len(cfg.Encoders) > 0 {
-		order := make([]string, 0, len(cfg.Encoders))
-		seen := make(map[string]struct{}, len(cfg.Encoders))
-		for _, enc := range cfg.Encoders {
-			if _, ok := seen[enc.Name]; ok {
-				continue
-			}
-			seen[enc.Name] = struct{}{}
-			order = append(order, enc.Name)
-		}
-		return order
+	if cfg == nil {
+		return nil
 	}
-
-	return []string{"h264_nvenc", "h264_amf", "h264_vaapi", "h264_qsv"}
+	order := make([]string, 0, len(cfg.Encoders))
+	seen := make(map[string]struct{}, len(cfg.Encoders))
+	for _, enc := range cfg.Encoders {
+		if _, ok := seen[enc.Name]; ok {
+			continue
+		}
+		seen[enc.Name] = struct{}{}
+		order = append(order, enc.Name)
+	}
+	return order
 }
 
 func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgressFunc) []HwEncoder {
@@ -289,32 +305,30 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 	}
 
 	availableEncoders := parseAvailableH264Encoders(out.Bytes())
+	if progress != nil {
+		reportUnconfiguredEncoders(availableEncoders, cfg, progress)
+	}
 
 	// Build candidate list from config definitions (order = preference)
 	var candidates []HwEncoder
-	if cfg != nil && len(cfg.Encoders) > 0 {
-		for _, enc := range cfg.Encoders {
-			if !encoderIsProbeCandidate(enc.Name, enc.GpuVendors, availableEncoders, detectedGPUVendors) {
-				continue
-			}
-			// Check platform restriction (supports dshow/v4l2 and linux/windows)
-			if enc.Platform != "" && !encoderPlatformMatchesRuntime(enc.Platform) {
-				logging.InfoLogger.Printf("Skipping encoder %s: platform=%s, current_os=%s", enc.Name, enc.Platform, runtime.GOOS)
-				continue
-			}
-			logging.InfoLogger.Printf("Encoder %s is a candidate (gpuVendors=%v, detected=%v)", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
-			candidates = append(candidates, HwEncoder{
-				Name:             enc.Name,
-				Description:      enc.Description,
-				InputParameters:  enc.InputParameters,
-				OutputParameters: enc.OutputParameters,
-				VideoFilter:      enc.VideoFilter,
-				TestInit:         enc.TestInit,
-			})
+	for _, enc := range cfg.Encoders {
+		if !encoderIsProbeCandidate(enc.Name, enc.GpuVendors, availableEncoders, detectedGPUVendors) {
+			continue
 		}
-	} else {
-		// Legacy hardcoded fallback (used when cfg is nil, e.g. from replays)
-		candidates = legacyEncoderCandidates(availableEncoders, detectedGPUVendors)
+		// Check platform restriction (supports dshow/v4l2 and linux/windows)
+		if enc.Platform != "" && !encoderPlatformMatchesRuntime(enc.Platform) {
+			logging.InfoLogger.Printf("Skipping encoder %s: platform=%s, current_os=%s", enc.Name, enc.Platform, runtime.GOOS)
+			continue
+		}
+		logging.InfoLogger.Printf("Encoder %s is a candidate (gpuVendors=%v, detected=%v)", enc.Name, enc.GpuVendors, sortedVendorKeys(detectedGPUVendors))
+		candidates = append(candidates, HwEncoder{
+			Name:             enc.Name,
+			Description:      enc.Description,
+			InputParameters:  enc.InputParameters,
+			OutputParameters: enc.OutputParameters,
+			VideoFilter:      enc.VideoFilter,
+			TestInit:         enc.TestInit,
+		})
 	}
 
 	// Verify each candidate encoder actually works on this hardware
@@ -332,6 +346,34 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 		}
 	}
 	return found
+}
+
+func reportUnconfiguredEncoders(available map[string]bool, cfg *ffmpeg.Config, progress ProbeProgressFunc) {
+	if progress == nil || cfg == nil {
+		return
+	}
+	configured := make(map[string]struct{}, len(cfg.Encoders))
+	for _, enc := range cfg.Encoders {
+		name := strings.TrimSpace(enc.Name)
+		if name != "" {
+			configured[name] = struct{}{}
+		}
+	}
+
+	var missing []string
+	for name, ok := range available {
+		if !ok {
+			continue
+		}
+		if _, exists := configured[name]; !exists {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	for _, name := range missing {
+		logging.InfoLogger.Printf("Skipping encoder %s: no ffmpeg.toml settings", name)
+		progress(ProgressMsg(ProgEncoderUnconfigured, ProgressDetailPayload(name, "no ffmpeg.toml encoder settings")))
+	}
 }
 
 func parseAvailableH264Encoders(output []byte) map[string]bool {
@@ -365,7 +407,7 @@ func encoderIsProbeCandidate(name string, gpuVendors []string, available map[str
 }
 
 func encoderGPUVendorMatches(required []string, detected map[string]bool) bool {
-	if len(required) == 0 || len(detected) == 0 {
+	if len(required) == 0 {
 		return true
 	}
 
@@ -380,48 +422,10 @@ func encoderGPUVendorMatches(required []string, detected map[string]bool) bool {
 			return true
 		}
 	}
-	return !hasRequirement
-}
-
-// legacyEncoderCandidates returns the hardcoded encoder definitions used
-// when no CamerasConfig is available (backward-compatible with replays).
-func legacyEncoderCandidates(available map[string]bool, detectedGPUVendors map[string]bool) []HwEncoder {
-	var candidates []HwEncoder
-	if encoderIsProbeCandidate("h264_nvenc", []string{"nvidia"}, available, detectedGPUVendors) {
-		candidates = append(candidates, HwEncoder{
-			Name: "h264_nvenc", Description: "NVIDIA GPU",
-			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
-			VideoFilter:      "",
-			OutputParameters: "-c:v h264_nvenc -preset p5 -rc cbr -b:v 8M",
-		})
+	if !hasRequirement {
+		return true
 	}
-	if encoderIsProbeCandidate("h264_amf", []string{"amd"}, available, detectedGPUVendors) {
-		candidates = append(candidates, HwEncoder{
-			Name: "h264_amf", Description: "AMD GPU (AMF)",
-			InputParameters:  "-rtbufsize 512M -thread_queue_size 4096",
-			VideoFilter:      "",
-			OutputParameters: "-c:v h264_amf -rc cbr -b:v 8M",
-		})
-	}
-	if encoderIsProbeCandidate("h264_vaapi", []string{"amd", "intel"}, available, detectedGPUVendors) && runtime.GOOS == "linux" {
-		candidates = append(candidates, HwEncoder{
-			Name: "h264_vaapi", Description: "VAAPI (AMD/Intel on Linux)",
-			InputParameters:  "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096",
-			VideoFilter:      "format=nv12,hwupload",
-			OutputParameters: "-c:v h264_vaapi -rc_mode CBR -b:v 8M",
-			TestInit:         "-init_hw_device vaapi=va:/dev/dri/renderD128",
-		})
-	}
-	if encoderIsProbeCandidate("h264_qsv", []string{"intel"}, available, detectedGPUVendors) {
-		candidates = append(candidates, HwEncoder{
-			Name: "h264_qsv", Description: "Intel GPU (QSV)",
-			InputParameters:  "-init_hw_device qsv=hw -filter_hw_device hw -rtbufsize 512M -thread_queue_size 4096",
-			VideoFilter:      "format=nv12",
-			OutputParameters: "-c:v h264_qsv -preset medium -look_ahead 0 -rc_mode CBR -b:v 8M",
-			TestInit:         "-init_hw_device qsv=hw -filter_hw_device hw",
-		})
-	}
-	return candidates
+	return false
 }
 
 func encoderPlatformMatchesRuntime(platform string) bool {
@@ -669,19 +673,34 @@ func testEncoderWithInit(ffmpegPath string, enc HwEncoder) bool {
 	return true
 }
 
-// DetectCameras detects available camera devices and their capabilities.
-// It uses legacy hardcoded priorities for mode selection.
+// DetectCameras detects available camera devices and their capabilities using ffmpeg.toml.
 func DetectCameras() []DetectedCamera {
-	return DetectCamerasWithConfig(nil)
+	cfg, err := ffmpeg.LoadConfig()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load ffmpeg.toml for camera detection: %v", err)
+		return nil
+	}
+	return DetectCamerasWithConfig(cfg)
 }
 
-// DetectCamerasWithConfig detects cameras using config-driven mode priorities
-// when cfg is non-nil; falls back to legacy hardcoded priorities otherwise.
+// DetectCamerasWithConfig detects cameras using config-driven mode priorities.
 func DetectCamerasWithConfig(cfg *ffmpeg.Config) []DetectedCamera {
 	return DetectCamerasWithConfigAndProgress(cfg, nil)
 }
 
 func DetectCamerasWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
+	if cfg == nil {
+		loaded, err := ffmpeg.LoadConfig()
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to load ffmpeg.toml for camera detection: %v", err)
+			if progress != nil {
+				progress(ProgressMsg(ProgHwMsg, "Error: failed to load ffmpeg.toml for camera detection"))
+			}
+			return nil
+		}
+		cfg = loaded
+	}
+
 	switch runtime.GOOS {
 	case "linux":
 		return detectCamerasLinux(cfg, progress)
@@ -1173,8 +1192,7 @@ func resolveV4LLinkBase(dirPath, device string) string {
 	return ""
 }
 
-// PickBestCameraModeWithConfig selects the best camera mode using config-driven priorities.
-// If cfg is nil, uses legacy hardcoded priorities.
+// PickBestCameraModeWithConfig selects the best camera mode using ffmpeg.toml priorities.
 func PickBestCameraModeWithConfig(allModes []cameraMode, cfg *ffmpeg.Config) cameraMode {
 	if len(allModes) == 0 {
 		return cameraMode{pixFmt: "unknown", width: 1280, height: 720, fps: 30}
@@ -1230,11 +1248,6 @@ func modePreferredOverWithConfig(candidate, current cameraMode, cfg *ffmpeg.Conf
 		currentFormat = cfg.FormatPriorityValue(current.pixFmt)
 		candidateProfile = cfg.ProfilePriorityValue(candidate.width, candidate.height, candidate.fps)
 		currentProfile = cfg.ProfilePriorityValue(current.width, current.height, current.fps)
-	} else {
-		candidateFormat = modeFormatPriority(candidate.pixFmt)
-		currentFormat = modeFormatPriority(current.pixFmt)
-		candidateProfile = modeProfilePriority(candidate)
-		currentProfile = modeProfilePriority(current)
 	}
 
 	if candidateFormat != currentFormat {
@@ -1254,39 +1267,12 @@ func modePreferredOverWithConfig(candidate, current cameraMode, cfg *ffmpeg.Conf
 	return candidatePixels > currentPixels
 }
 
-func modeFormatPriority(pixFmt string) int {
-	switch pixFmt {
-	case "h264":
-		return 3
-	case "mjpeg":
-		return 2
-	default:
-		return 1
-	}
-}
-
-func modeProfilePriority(mode cameraMode) int {
-	isFullHD := mode.width == 1920 && mode.height == 1080
-	isHD := mode.width == 1280 && mode.height == 720
-
-	switch {
-	case isFullHD && mode.fps >= 59:
-		return 4
-	case isHD && mode.fps >= 59:
-		return 3
-	case isFullHD && mode.fps >= 29:
-		return 2
-	case isHD && mode.fps >= 29:
-		return 1
-	default:
-		return 0
-	}
-}
-
-// writeAutoConfig generates auto.toml from detected hardware.
-// When cfg is non-nil, encoder output parameters and format logic come from
-// the shared cameras configuration; otherwise legacy hardcoded values are used.
+// writeAutoConfig generates auto.toml from detected hardware using ffmpeg.toml settings.
 func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwEncoder, cfg *ffmpeg.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("ffmpeg config is required to write auto.toml")
+	}
+
 	// replays app behavior for auto.toml generation
 	// - input
 	//   - input format is obtained by probing cameras
@@ -1338,10 +1324,9 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 	// Pick the best hardware encoder (prefer GPU over software)
 	bestEncoder := PickBestEncoder(encoders)
 
-	// Resolve the software fallback string from config or hardcoded default
-	softwareFallback := "-c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p"
-	if cfg != nil && cfg.Software.OutputParameters != "" {
-		softwareFallback = cfg.Software.OutputParameters
+	softwareFallback := strings.TrimSpace(cfg.Software.OutputParameters)
+	if softwareFallback == "" {
+		return fmt.Errorf("ffmpeg config is missing software outputParameters")
 	}
 
 	for i, cam := range cameras {
@@ -1433,7 +1418,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 				}
 				buf.WriteString(fmt.Sprintf("    outputParameters = '%s%s %s'\n", vfPart, bestEncoder.OutputParameters, fpsParams))
 			} else {
-				// Software fallback (from shared cameras config or hardcoded default)
+				// Software encoder settings come from ffmpeg.toml.
 				buf.WriteString(fmt.Sprintf("    outputParameters = '%s %s'\n", softwareFallback, fpsParams))
 			}
 			buf.WriteString("    recode = false\n")
@@ -1485,10 +1470,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 	return nil
 }
 
-// PickBestEncoder selects the best available hardware encoder.
-// When DetectEncodersWithConfig was used, encoders are already in config
-// preference order, so the first one wins. For the legacy path, we apply
-// a hardcoded preference: nvenc > amf > vaapi > qsv.
+// PickBestEncoder selects the first verified encoder, preserving ffmpeg.toml preference order.
 func PickBestEncoder(encoders []HwEncoder) *HwEncoder {
 	if len(encoders) > 0 {
 		return &encoders[0]

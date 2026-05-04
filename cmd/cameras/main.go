@@ -96,12 +96,18 @@ func newProgressDetailRow(label string, value fyne.CanvasObject) fyne.CanvasObje
 }
 
 type detectionProgressUpdate struct {
-	stage         string
-	detail        string
-	statusKey     string
-	statusMessage string
-	replaceStatus bool
-	hasError      bool
+	stage          string
+	detail         string
+	statusKey      string
+	statusMessage  string
+	replaceStatus  bool
+	hasError       bool
+	statusHasError bool
+}
+
+type progressStatusEntry struct {
+	text     string
+	hasError bool
 }
 
 func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog, func(string), func() bool) {
@@ -123,7 +129,7 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 
 	var mu sync.Mutex
 	statusOrder := make([]string, 0, 32)
-	statusByKey := make(map[string]string)
+	statusByKey := make(map[string]progressStatusEntry)
 	lastStage := ""
 	lastDetail := ""
 	hasError := false
@@ -146,7 +152,7 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 			if _, exists := statusByKey[update.statusKey]; !exists {
 				statusOrder = append(statusOrder, update.statusKey)
 			}
-			statusByKey[update.statusKey] = update.statusMessage
+			statusByKey[update.statusKey] = progressStatusEntry{text: update.statusMessage, hasError: update.statusHasError}
 		}
 		if len(statusOrder) > 25 {
 			trimmedOrder := statusOrder[len(statusOrder)-25:]
@@ -161,13 +167,7 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 			}
 			statusOrder = trimmedOrder
 		}
-		lines := make([]string, 0, len(statusOrder))
-		for _, key := range statusOrder {
-			if text := strings.TrimSpace(statusByKey[key]); text != "" {
-				lines = append(lines, text)
-			}
-		}
-		content := strings.Join(lines, "\n")
+		content := renderProgressStatus(statusOrder, statusByKey)
 		if update.stage != "" {
 			lastStage = update.stage
 		}
@@ -208,6 +208,33 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 		defer mu.Unlock()
 		return hasError
 	}
+}
+
+func renderProgressStatus(statusOrder []string, statusByKey map[string]progressStatusEntry) string {
+	lines := make([]string, 0, len(statusOrder)+1)
+	var errorLines []string
+	for _, key := range statusOrder {
+		entry, ok := statusByKey[key]
+		if !ok {
+			continue
+		}
+		text := strings.TrimSpace(entry.text)
+		if text == "" {
+			continue
+		}
+		if entry.hasError {
+			errorLines = append(errorLines, text)
+			continue
+		}
+		lines = append(lines, text)
+	}
+	if len(errorLines) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, errorLines...)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func simplifyDetectionProgress(message string) (detectionProgressUpdate, bool) {
@@ -459,7 +486,7 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 		if err != nil {
 			fmt.Printf("  ERROR: Failed to start stream: %v\n", err)
 			stream.setStopped(fmt.Sprintf("failed: %v", err))
-			callbacks.report(progMsg(progStreamFailed, cam.Name))
+			callbacks.report(progMsg(progStreamFailed, recording.ProgressDetailPayload(cam.Name, err.Error())))
 		} else {
 			stream.cmd = cmd
 			stream.setRunning()
@@ -909,7 +936,7 @@ func runStartupProbe(stream *cameraStream, callbacks *streamStartupCallbacks) er
 
 	reason := summarizeStartupProbeOutput(output, err)
 	logging.ErrorLogger.Printf("Startup stream preflight failed for %s [%s]: %s", stream.camera.Name, stream.shortID, reason)
-	callbacks.report(progMsg(progValidateFailed, stream.camera.Name))
+	callbacks.report(progMsg(progValidateFailed, recording.ProgressDetailPayload(stream.camera.Name, reason)))
 
 	debugOutput, debugErr := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "debug", streamStartupProbeTimeout)
 	if debugErr != nil {

@@ -9,6 +9,12 @@
 		"stage": "Scanning sources",
 		"detail": "Checking encoder: {payload}"
 	},
+	"encNoCfg": {
+		"stage": "Scanning sources",
+		"detail": "{detail}: {name}",
+		"statusKey": "encoderConfig:{name}",
+		"statusMessage": "- {name}: {detail}"
+	},
 	"listing": {
 		"stage": "Scanning sources",
 		"detail": "Listing {payload}..."
@@ -86,9 +92,9 @@
 	},
 	"valFail": {
 		"stage": "Verifying stream settings",
-		"detail": "Collecting diagnostics for {payload}",
-		"statusKey": "{payload}",
-		"statusMessage": "X {payload}",
+		"detail": "Collecting diagnostics for {name}: {detail}",
+		"statusKey": "{name}",
+		"statusMessage": "X {name}: {detail}",
 		"hasError": true
 	},
 	"streamStart": {
@@ -99,9 +105,9 @@
 	},
 	"streamFail": {
 		"stage": "Starting streams",
-		"detail": "Startup failed for {payload}",
-		"statusKey": "{payload}",
-		"statusMessage": "X {payload}",
+		"detail": "Startup failed for {name}: {detail}",
+		"statusKey": "{name}",
+		"statusMessage": "X {name}: {detail}",
 		"hasError": true
 	}
 }
