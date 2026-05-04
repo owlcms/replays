@@ -130,14 +130,22 @@ func LoadConfig() (*Config, error) {
 	if !loaded {
 		fmt.Println("FFmpeg config: using embedded defaults")
 		logging.InfoLogger.Println("No ffmpeg.toml found, using embedded defaults")
-		if _, err := toml.Decode(string(defaultConfig), &cfg); err != nil {
+		defaultCfg, err := parseEmbeddedDefaultConfig()
+		if err != nil {
 			return nil, fmt.Errorf("failed to parse embedded ffmpeg.toml: %w", err)
 		}
+		cfg = defaultCfg
 	}
 
-	cfg.filterEncodersForPlatform()
 	cfg.applyDefaults()
+	cfg.filterEncodersForPlatform()
 	return &cfg, nil
+}
+
+func parseEmbeddedDefaultConfig() (Config, error) {
+	var cfg Config
+	_, err := toml.Decode(string(defaultConfig), &cfg)
+	return cfg, err
 }
 
 // ExtractDefaultConfig writes ffmpeg.toml to the shared config directory
@@ -189,25 +197,47 @@ func encoderPlatformMatch(platform string) bool {
 
 // applyDefaults fills in zero-value fields with sensible defaults.
 func (c *Config) applyDefaults() {
+	defaults, err := parseEmbeddedDefaultConfig()
+	if err != nil {
+		logging.WarningLogger.Printf("Failed to parse embedded ffmpeg defaults: %v", err)
+	}
 	if c.Software.OutputParameters == "" {
-		c.Software.OutputParameters = "-c:v libx264 -preset ultrafast -tune zerolatency -b:v 4M"
+		c.Software.OutputParameters = defaults.Software.OutputParameters
+		if c.Software.OutputParameters == "" {
+			c.Software.OutputParameters = "-c:v libx264 -preset ultrafast -tune zerolatency -profile:v main -pix_fmt yuv420p -bf 0 -sc_threshold 0 -flags +cgop -b:v 4M -maxrate 4M -bufsize 4M"
+		}
+	}
+	if len(c.Encoders) == 0 && len(defaults.Encoders) > 0 {
+		c.Encoders = append([]EncoderConfig(nil), defaults.Encoders...)
 	}
 	if len(c.Cameras.FormatPriority) == 0 {
-		c.Cameras.FormatPriority = []string{"h264", "mjpeg"}
+		c.Cameras.FormatPriority = append([]string(nil), defaults.Cameras.FormatPriority...)
+		if len(c.Cameras.FormatPriority) == 0 {
+			c.Cameras.FormatPriority = []string{"h264", "mjpeg"}
+		}
 	}
 	if len(c.Cameras.ModePriority) == 0 {
-		c.Cameras.ModePriority = []string{
-			"1920x1080@59",
-			"1280x720@59",
-			"1920x1080@29",
-			"1280x720@29",
+		c.Cameras.ModePriority = append([]string(nil), defaults.Cameras.ModePriority...)
+		if len(c.Cameras.ModePriority) == 0 {
+			c.Cameras.ModePriority = []string{
+				"1920x1080@59",
+				"1280x720@59",
+				"1920x1080@29",
+				"1280x720@29",
+			}
 		}
 	}
 	if c.Output.GopMultiplier == 0 {
-		c.Output.GopMultiplier = 1
+		c.Output.GopMultiplier = defaults.Output.GopMultiplier
+		if c.Output.GopMultiplier == 0 {
+			c.Output.GopMultiplier = 1
+		}
 	}
 	if c.Output.ExtraFlags == "" {
-		c.Output.ExtraFlags = "-an -f mpegts"
+		c.Output.ExtraFlags = defaults.Output.ExtraFlags
+		if c.Output.ExtraFlags == "" {
+			c.Output.ExtraFlags = "-an -f mpegts"
+		}
 	}
 }
 
