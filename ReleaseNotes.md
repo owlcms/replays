@@ -1,5 +1,7 @@
 **Change log**
 
+- 2.3.1: cameras: improved startup diagnostics and improved resolution and effective frames monitoring
+
 - 2.3.0: replays now can read from a local camera module config
 - 2.3.0: replays will probe the camera streams to indicate that the camera module is not running or that streams are missing
 
