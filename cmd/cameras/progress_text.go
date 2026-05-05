@@ -18,10 +18,32 @@ type detectionProgressTemplate struct {
 	HasError      bool   `json:"hasError,omitempty"`
 }
 
+type detectionProgressUI struct {
+	InitialStage                string `json:"initialStage"`
+	CloseButtonLabel            string `json:"closeButtonLabel"`
+	CurrentStageLabel           string `json:"currentStageLabel"`
+	CurrentActivityLabel        string `json:"currentActivityLabel"`
+	SourceStatusLabel           string `json:"sourceStatusLabel"`
+	FailureStatusLabel          string `json:"failureStatusLabel"`
+	DetectingSourcesTitle       string `json:"detectingSourcesTitle"`
+	RescanningSourcesTitle      string `json:"rescanningSourcesTitle"`
+	DetectingSourcesStatus      string `json:"detectingSourcesStatus"`
+	RescanButtonLabel           string `json:"rescanButtonLabel"`
+	RescanningSourcesStatus     string `json:"rescanningSourcesStatus"`
+	RescanFailed                string `json:"rescanFailed"`
+	RescanCompletedWithErrors   string `json:"rescanCompletedWithErrors"`
+	RescanCompleted             string `json:"rescanCompleted"`
+	DetectionCompletedWithErrors string `json:"detectionCompletedWithErrors"`
+}
+
 //go:embed detection_progress_texts.json
 var detectionProgressTemplatesJSON []byte
 
+//go:embed detection_progress_ui.json
+var detectionProgressUIJSON []byte
+
 var detectionProgressTemplates = mustParseDetectionProgressTemplates()
+var detectionProgressUIStrings = mustParseDetectionProgressUI()
 
 func mustParseDetectionProgressTemplates() map[string]detectionProgressTemplate {
 	var templates map[string]detectionProgressTemplate
@@ -29,6 +51,14 @@ func mustParseDetectionProgressTemplates() map[string]detectionProgressTemplate 
 		panic(fmt.Sprintf("invalid detection progress templates: %v", err))
 	}
 	return templates
+}
+
+func mustParseDetectionProgressUI() detectionProgressUI {
+	var ui detectionProgressUI
+	if err := json.Unmarshal(detectionProgressUIJSON, &ui); err != nil {
+		panic(fmt.Sprintf("invalid detection progress UI strings: %v", err))
+	}
+	return ui
 }
 
 func renderDetectionProgressText(templateText, payload string) string {
@@ -39,6 +69,14 @@ func renderDetectionProgressText(templateText, payload string) string {
 	rendered := strings.ReplaceAll(templateText, "{payload}", payload)
 	rendered = strings.ReplaceAll(rendered, "{name}", name)
 	rendered = strings.ReplaceAll(rendered, "{detail}", detail)
+	return rendered
+}
+
+func renderDetectionProgressCopy(templateText string, values map[string]string) string {
+	rendered := templateText
+	for key, value := range values {
+		rendered = strings.ReplaceAll(rendered, "{"+key+"}", value)
+	}
 	return rendered
 }
 

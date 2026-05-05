@@ -7,7 +7,7 @@ import "strings"
 const ProgressSep = "¤"
 const ProgressDetailSep = "\x1f"
 
-// Progress tags for messages emitted by this package via ProbeProgressFunc.
+// Progress tags shared by recording and cameras progress reporting.
 // Each message is formatted as tag + ProgressSep + payload.
 // Callers should use ProgressMsg to build messages and ProgressParse to decode them.
 const (
@@ -31,6 +31,70 @@ const (
 	// ProgHwMsg is emitted for general hardware encoder status messages.
 	// Payload: human-readable description (not parsed structurally).
 	ProgHwMsg = "hwMsg"
+
+	// ProgRTSPSource is emitted while examining a configured RTSP source.
+	// Payload: source name.
+	ProgRTSPSource = "rtspSrc"
+
+	// ProgDetectedSource is emitted when a source is accepted into inventory.
+	// Payload: source name.
+	ProgDetectedSource = "detected"
+
+	// ProgSkippedSource is emitted when a source is filtered out.
+	// Payload: source name.
+	ProgSkippedSource = "skipped"
+
+	// ProgInventoryReady marks the end of the source inventory build.
+	// Payload: human-readable summary.
+	ProgInventoryReady = "inventory"
+
+	// ProgCheckingRTSP marks the start of the RTSP inventory phase.
+	// Payload: empty.
+	ProgCheckingRTSP = "chkRTSP"
+
+	// ProgCheckingLocal marks the start of the local-device inventory phase.
+	// Payload: empty.
+	ProgCheckingLocal = "chkLocal"
+
+	// ProgCheckingEncoders marks the start of the encoder inventory phase.
+	// Payload: empty.
+	ProgCheckingEncoders = "chkEnc"
+
+	// ProgPreparing marks a general preparation step.
+	// Payload: human-readable description.
+	ProgPreparing = "preparing"
+
+	// ProgError reports a top-level error unrelated to an individual source row.
+	// Payload: error message.
+	ProgError = "error"
+
+	// ProgStreamsAll reports the total number of streams about to start.
+	// Payload: count as string.
+	ProgStreamsAll = "streamsAll"
+
+	// ProgStreamPrep reports that a stream command is being prepared.
+	// Payload: source name.
+	ProgStreamPrep = "streamPrep"
+
+	// ProgStreamTest reports that a startup probe is running.
+	// Payload: source name.
+	ProgStreamTest = "streamTest"
+
+	// ProgValidatePassed reports that a startup probe passed.
+	// Payload: source name.
+	ProgValidatePassed = "valPass"
+
+	// ProgValidateFailed reports that a startup probe failed.
+	// Payload: source name + detail.
+	ProgValidateFailed = "valFail"
+
+	// ProgStreamStart reports that a stream process is starting.
+	// Payload: source name.
+	ProgStreamStart = "streamStart"
+
+	// ProgStreamFailed reports that a stream failed to start.
+	// Payload: source name + detail.
+	ProgStreamFailed = "streamFail"
 )
 
 // ProgressMsg builds a tagged progress message for use with ProbeProgressFunc.

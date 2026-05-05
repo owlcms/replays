@@ -111,16 +111,21 @@ type progressStatusEntry struct {
 }
 
 func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog, func(string), func() bool) {
-	stageLabel := widget.NewLabel("Preparing scan...")
+	stageLabel := widget.NewLabel(detectionProgressUIStrings.InitialStage)
 	stageLabel.Wrapping = fyne.TextWrapWord
 	detailLabel := widget.NewLabel("")
 	detailLabel.Wrapping = fyne.TextWrapWord
 	statusList := widget.NewLabel("")
 	statusList.Wrapping = fyne.TextWrapWord
+	failureHeader := widget.NewLabel(detectionProgressUIStrings.FailureStatusLabel)
+	failureHeader.Hide()
+	failureList := widget.NewLabel("")
+	failureList.Wrapping = fyne.TextWrapWord
+	failureList.Hide()
 	historyScroll := container.NewVScroll(statusList)
 	historyScroll.SetMinSize(fyne.NewSize(520, 280))
 	var progressDialog dialog.Dialog
-	closeButton := widget.NewButton("Close", func() {
+	closeButton := widget.NewButton(detectionProgressUIStrings.CloseButtonLabel, func() {
 		if progressDialog != nil {
 			progressDialog.Hide()
 		}
@@ -130,6 +135,7 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 	var mu sync.Mutex
 	statusOrder := make([]string, 0, 32)
 	statusByKey := make(map[string]progressStatusEntry)
+	nonSourceFailures := make([]string, 0, 8)
 	lastStage := ""
 	lastDetail := ""
 	hasError := false
@@ -147,6 +153,20 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 		mu.Lock()
 		if update.hasError {
 			hasError = true
+		}
+		if update.hasError && update.statusKey == "" {
+			if text := strings.TrimSpace(update.detail); text != "" {
+				alreadyPresent := false
+				for _, existing := range nonSourceFailures {
+					if existing == text {
+						alreadyPresent = true
+						break
+					}
+				}
+				if !alreadyPresent {
+					nonSourceFailures = append(nonSourceFailures, text)
+				}
+			}
 		}
 		if update.statusKey != "" {
 			if _, exists := statusByKey[update.statusKey]; !exists {
@@ -168,6 +188,7 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 			statusOrder = trimmedOrder
 		}
 		content := renderProgressStatus(statusOrder, statusByKey)
+		failureContent := strings.Join(nonSourceFailures, "\n")
 		if update.stage != "" {
 			lastStage = update.stage
 		}
@@ -176,6 +197,7 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 		}
 		stageValue := lastStage
 		detailValue := lastDetail
+		showFailureSection := strings.TrimSpace(failureContent) != ""
 		showClose := hasError
 		mu.Unlock()
 
@@ -187,7 +209,18 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 		}
 		statusList.SetText(content)
 		statusList.Refresh()
+		failureList.SetText(failureContent)
+		failureList.Refresh()
 		historyScroll.Refresh()
+		if showFailureSection {
+			failureHeader.Show()
+			failureHeader.Refresh()
+			failureList.Show()
+			failureList.Refresh()
+		} else {
+			failureHeader.Hide()
+			failureList.Hide()
+		}
 		if showClose {
 			closeButton.Show()
 			closeButton.Refresh()
@@ -195,11 +228,13 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 	}
 
 	body := container.NewVBox(
-		newProgressDetailRow("Current stage:", stageLabel),
-		newProgressDetailRow("Current activity:", detailLabel),
+		newProgressDetailRow(detectionProgressUIStrings.CurrentStageLabel, stageLabel),
+		newProgressDetailRow(detectionProgressUIStrings.CurrentActivityLabel, detailLabel),
 		widget.NewSeparator(),
-		widget.NewLabel("Source status:"),
+		widget.NewLabel(detectionProgressUIStrings.SourceStatusLabel),
 		historyScroll,
+		failureHeader,
+		failureList,
 		closeButton,
 	)
 	progressDialog = dialog.NewCustomWithoutButtons(title, body, window)
@@ -211,8 +246,7 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 }
 
 func renderProgressStatus(statusOrder []string, statusByKey map[string]progressStatusEntry) string {
-	lines := make([]string, 0, len(statusOrder)+1)
-	var errorLines []string
+	lines := make([]string, 0, len(statusOrder))
 	for _, key := range statusOrder {
 		entry, ok := statusByKey[key]
 		if !ok {
@@ -222,17 +256,7 @@ func renderProgressStatus(statusOrder []string, statusByKey map[string]progressS
 		if text == "" {
 			continue
 		}
-		if entry.hasError {
-			errorLines = append(errorLines, text)
-			continue
-		}
 		lines = append(lines, text)
-	}
-	if len(errorLines) > 0 {
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, errorLines...)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -443,7 +467,7 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 		fmt.Println("\nStarting camera streams (multicast):")
 		fmt.Println("=====================================")
 	}
-	callbacks.report(progMsg(progStreamsAll, fmt.Sprintf("%d", len(sources))))
+	callbacks.report(recording.ProgressMsg(recording.ProgStreamsAll, fmt.Sprintf("%d", len(sources))))
 
 	for _, source := range sources {
 		cam := source.Camera
@@ -481,12 +505,12 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 			fmt.Printf("  -> %s\n", udpDest)
 		}
 
-		callbacks.report(progMsg(progStreamPrep, cam.Name))
+		callbacks.report(recording.ProgressMsg(recording.ProgStreamPrep, cam.Name))
 		cmd, err := startStream(stream, callbacks)
 		if err != nil {
 			fmt.Printf("  ERROR: Failed to start stream: %v\n", err)
 			stream.setStopped(fmt.Sprintf("failed: %v", err))
-			callbacks.report(progMsg(progStreamFailed, recording.ProgressDetailPayload(cam.Name, err.Error())))
+			callbacks.report(recording.ProgressMsg(recording.ProgStreamFailed, recording.ProgressDetailPayload(cam.Name, err.Error())))
 		} else {
 			stream.cmd = cmd
 			stream.setRunning()
@@ -925,18 +949,18 @@ func runStartupProbe(stream *cameraStream, callbacks *streamStartupCallbacks) er
 
 	quickArgs := append([]string{"-hide_banner", "-loglevel", "error"}, spec.args...)
 	logging.InfoLogger.Printf("Startup stream preflight for %s [%s]: %s", stream.camera.Name, stream.shortID, formatCommandLine(spec.ffmpegPath, quickArgs))
-	callbacks.report(progMsg(progStreamTest, stream.camera.Name))
+	callbacks.report(recording.ProgressMsg(recording.ProgStreamTest, stream.camera.Name))
 
 	output, err := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "error", streamStartupProbeTimeout)
 	if err == nil {
 		logging.InfoLogger.Printf("Startup stream preflight passed for %s [%s]: %s", stream.camera.Name, stream.shortID, describeEncodingPlan(stream.camera, stream.encoder, ffmpegConfig))
-		callbacks.report(progMsg(progValidatePassed, stream.camera.Name))
+		callbacks.report(recording.ProgressMsg(recording.ProgValidatePassed, stream.camera.Name))
 		return nil
 	}
 
 	reason := summarizeStartupProbeOutput(output, err)
 	logging.ErrorLogger.Printf("Startup stream preflight failed for %s [%s]: %s", stream.camera.Name, stream.shortID, reason)
-	callbacks.report(progMsg(progValidateFailed, recording.ProgressDetailPayload(stream.camera.Name, reason)))
+	callbacks.report(recording.ProgressMsg(recording.ProgValidateFailed, recording.ProgressDetailPayload(stream.camera.Name, reason)))
 
 	debugOutput, debugErr := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "debug", streamStartupProbeTimeout)
 	if debugErr != nil {
@@ -952,7 +976,7 @@ func startStream(stream *cameraStream, callbacks *streamStartupCallbacks) (*exec
 	if err := runStartupProbe(stream, callbacks); err != nil {
 		return nil, err
 	}
-	callbacks.report(progMsg(progStreamStart, stream.camera.Name))
+	callbacks.report(recording.ProgressMsg(recording.ProgStreamStart, stream.camera.Name))
 
 	spec, err := buildStreamCommandSpec(stream, streamOutputLive)
 	if err != nil {
@@ -2072,7 +2096,7 @@ func runUI() {
 	window.Resize(fyne.NewSize(1480, 880))
 
 	headers := []string{"Name", "Short ID", "Port", "Format", "Encoder", "Resolution", "Expected FPS", "Measured FPS", "Start", "Stop", "Status", "Preview", "Record"}
-	cameraStatusLabel := widget.NewLabel("Detecting sources...")
+	cameraStatusLabel := widget.NewLabel(detectionProgressUIStrings.DetectingSourcesStatus)
 	cameraStatusLabel.TextStyle = fyne.TextStyle{Bold: true}
 	actionStatus := widget.NewLabel("")
 	clipLink := widget.NewHyperlink("", nil)
@@ -2207,7 +2231,7 @@ func runUI() {
 	stopAllBtn.Importance = widget.HighImportance
 	broadcastRestartBtn := widget.NewButton("Restart", nil)
 	broadcastRestartBtn.Importance = widget.MediumImportance
-	rescanBtn := widget.NewButton("Rescan Sources", nil)
+	rescanBtn := widget.NewButton(detectionProgressUIStrings.RescanButtonLabel, nil)
 	currentBroadcastUISignature := func() string {
 		if strings.TrimSpace(modeSelect.Selected) == "Unicast" {
 			return broadcastConfigSignature(true, camerascfg.MulticastConfig{}, unicastDestinations)
@@ -3830,16 +3854,16 @@ func runUI() {
 			return
 		}
 		rescanBtn.Disable()
-		actionStatus.SetText("Rescanning sources...")
+		actionStatus.SetText(detectionProgressUIStrings.RescanningSourcesStatus)
 		logging.InfoLogger.Printf("Configuration rescan requested")
-		progressDialog, reportProgress, progressHasErrors := newDetectionProgressDialog(window, "Rescanning Sources")
+		progressDialog, reportProgress, progressHasErrors := newDetectionProgressDialog(window, detectionProgressUIStrings.RescanningSourcesTitle)
 		progressDialog.Show()
-		reportProgress(progMsg(progPreparing, "Rescan"))
+		reportProgress(recording.ProgressMsg(recording.ProgPreparing, ""))
 		go func() {
 			startTime := time.Now()
 			inv := buildSourceInventoryWithProgress(reportProgress)
 			for _, item := range inv.Errors {
-				reportProgress(progMsg(progError, item))
+				reportProgress(recording.ProgressMsg(recording.ProgError, item))
 			}
 			currentInventory = inv
 			if inv.Encoder != nil {
@@ -3851,9 +3875,9 @@ func runUI() {
 			table.Refresh()
 			updateCameraStatusLabel(inv.Status)
 			if progressHasErrors() {
-				actionStatus.SetText("Rescan completed with errors. Review the dialog, then close it.")
+				actionStatus.SetText(detectionProgressUIStrings.RescanCompletedWithErrors)
 			} else {
-				actionStatus.SetText(verificationMessage("Sources rescanned."))
+				actionStatus.SetText(verificationMessage(detectionProgressUIStrings.RescanCompleted))
 				progressDialog.Hide()
 			}
 			rescanBtn.Enable()
@@ -3862,9 +3886,9 @@ func runUI() {
 	}
 
 	// Detection and streaming happen in background after window is shown.
-	startupProgressDialog, reportStartupProgress, startupHasErrors := newDetectionProgressDialog(window, "Detecting Sources")
+	startupProgressDialog, reportStartupProgress, startupHasErrors := newDetectionProgressDialog(window, detectionProgressUIStrings.DetectingSourcesTitle)
 	startupProgressDialog.Show()
-	reportStartupProgress(progMsg(progPreparing, "Initial detection"))
+	reportStartupProgress(recording.ProgressMsg(recording.ProgPreparing, ""))
 	go func() {
 		startTime := time.Now()
 		logging.InfoLogger.Printf("Initial source detection started")
@@ -3877,7 +3901,7 @@ func runUI() {
 		if len(inv.Errors) > 0 {
 			for _, item := range inv.Errors {
 				logging.ErrorLogger.Println(item)
-				reportStartupProgress(progMsg(progError, item))
+				reportStartupProgress(recording.ProgressMsg(recording.ProgError, item))
 			}
 		}
 
@@ -3890,7 +3914,7 @@ func runUI() {
 		renderMonitoringSourceToggles(inv)
 
 		if len(inv.Active) > 0 && len(inv.Errors) == 0 {
-			reportStartupProgress(progMsg(progInventoryReady, fmt.Sprintf("Validating %d stream(s)...", len(inv.Active))))
+			reportStartupProgress(recording.ProgressMsg(recording.ProgInventoryReady, fmt.Sprintf("Validating %d stream(s)...", len(inv.Active))))
 			newStreams := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
 			*currentStreams = newStreams
 			if len(newStreams) > 0 {
@@ -3902,7 +3926,7 @@ func runUI() {
 			updateCameraStatusLabel(inv.Status)
 		}
 		if startupHasErrors() {
-			actionStatus.SetText("Detection completed with errors. Review the dialog, then close it.")
+			actionStatus.SetText(detectionProgressUIStrings.DetectionCompletedWithErrors)
 		} else {
 			actionStatus.SetText("Preview/Record: ready")
 			startupProgressDialog.Hide()

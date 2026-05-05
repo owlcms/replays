@@ -106,8 +106,6 @@
 	"streamFail": {
 		"stage": "Starting streams",
 		"detail": "Startup failed for {name}: {detail}",
-		"statusKey": "{name}",
-		"statusMessage": "X {name}: {detail}",
 		"hasError": true
 	}
 }

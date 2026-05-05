@@ -397,58 +397,88 @@ func TestParseResolutionFromFFmpegLine(t *testing.T) {
 }
 
 func TestSimplifyDetectionProgressUsesSourceNameInActivity(t *testing.T) {
-	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgLocalSource, "Laptop Camera"))
+	payload := "Laptop Camera"
+	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgLocalSource, payload))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}
-	if update.stage != "Scanning sources" {
-		t.Fatalf("stage = %q, want %q", update.stage, "Scanning sources")
+	expectedStage := renderDetectionProgressText(detectionProgressTemplates[recording.ProgLocalSource].Stage, payload)
+	if update.stage != expectedStage {
+		t.Fatalf("stage = %q, want %q", update.stage, expectedStage)
 	}
-	if update.detail != "Checking source: Laptop Camera" {
-		t.Fatalf("detail = %q, want %q", update.detail, "Checking source: Laptop Camera")
+	expectedDetail := renderDetectionProgressText(detectionProgressTemplates[recording.ProgLocalSource].Detail, payload)
+	if update.detail != expectedDetail {
+		t.Fatalf("detail = %q, want %q", update.detail, expectedDetail)
 	}
 }
 
 func TestSimplifyDetectionProgressShowsStreamGrabActivity(t *testing.T) {
-	update, ok := simplifyDetectionProgress(progMsg(progStreamTest, "CamON"))
+	payload := "CamON"
+	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgStreamTest, payload))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}
-	if update.stage != "Verifying stream settings" {
-		t.Fatalf("stage = %q, want %q", update.stage, "Verifying stream settings")
+	expectedStage := renderDetectionProgressText(detectionProgressTemplates[recording.ProgStreamTest].Stage, payload)
+	if update.stage != expectedStage {
+		t.Fatalf("stage = %q, want %q", update.stage, expectedStage)
 	}
-	if update.detail != "Testing stream grab for CamON" {
-		t.Fatalf("detail = %q, want %q", update.detail, "Testing stream grab for CamON")
+	expectedDetail := renderDetectionProgressText(detectionProgressTemplates[recording.ProgStreamTest].Detail, payload)
+	if update.detail != expectedDetail {
+		t.Fatalf("detail = %q, want %q", update.detail, expectedDetail)
 	}
 }
 
 func TestSimplifyDetectionProgressMarksSourceFailureAsError(t *testing.T) {
-	update, ok := simplifyDetectionProgress(progMsg(progValidateFailed, recording.ProgressDetailPayload("CamON", "timed out after 3s")))
+	payload := recording.ProgressDetailPayload("CamON", "timed out after 3s")
+	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgValidateFailed, payload))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}
 	if !update.hasError {
 		t.Fatal("hasError = false, want true")
 	}
-	if update.statusMessage != "X CamON: timed out after 3s" {
-		t.Fatalf("statusMessage = %q, want %q", update.statusMessage, "X CamON: timed out after 3s")
+	expectedStatus := renderDetectionProgressText(detectionProgressTemplates[recording.ProgValidateFailed].StatusMessage, payload)
+	if update.statusMessage != expectedStatus {
+		t.Fatalf("statusMessage = %q, want %q", update.statusMessage, expectedStatus)
+	}
+}
+
+func TestSimplifyDetectionProgressKeepsStreamFailureOutOfSourceStatus(t *testing.T) {
+	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgStreamFailed, recording.ProgressDetailPayload("CamON", "stream validation failed: timed out after 3s")))
+	if !ok {
+		t.Fatal("simplifyDetectionProgress() ok = false, want true")
+	}
+	if !update.hasError {
+		t.Fatal("hasError = false, want true")
+	}
+	if update.detail != "Startup failed for CamON: stream validation failed: timed out after 3s" {
+		t.Fatalf("detail = %q, want detailed startup failure", update.detail)
+	}
+	if update.statusKey != "" {
+		t.Fatalf("statusKey = %q, want empty so per-source failure is not overwritten", update.statusKey)
+	}
+	if update.statusMessage != "" {
+		t.Fatalf("statusMessage = %q, want empty so generic startup failure stays out of source status", update.statusMessage)
 	}
 }
 
 func TestSimplifyDetectionProgressReportsUnconfiguredEncoder(t *testing.T) {
-	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgEncoderUnconfigured, recording.ProgressDetailPayload("h264_amf", "no ffmpeg.toml encoder settings")))
+	payload := recording.ProgressDetailPayload("h264_amf", "no ffmpeg.toml encoder settings")
+	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgEncoderUnconfigured, payload))
 	if !ok {
 		t.Fatal("simplifyDetectionProgress() ok = false, want true")
 	}
-	if update.detail != "no ffmpeg.toml encoder settings: h264_amf" {
+	expectedDetail := renderDetectionProgressText(detectionProgressTemplates[recording.ProgEncoderUnconfigured].Detail, payload)
+	if update.detail != expectedDetail {
 		t.Fatalf("detail = %q, want unconfigured encoder detail", update.detail)
 	}
-	if update.statusMessage != "- h264_amf: no ffmpeg.toml encoder settings" {
+	expectedStatus := renderDetectionProgressText(detectionProgressTemplates[recording.ProgEncoderUnconfigured].StatusMessage, payload)
+	if update.statusMessage != expectedStatus {
 		t.Fatalf("statusMessage = %q, want unconfigured encoder status", update.statusMessage)
 	}
 }
 
-func TestRenderProgressStatusSeparatesFailures(t *testing.T) {
+func TestRenderProgressStatusKeepsFailuresInline(t *testing.T) {
 	order := []string{"cam1", "cam2", "cam3"}
 	entries := map[string]progressStatusEntry{
 		"cam1": {text: "✓ Camera 1"},
@@ -457,7 +487,7 @@ func TestRenderProgressStatusSeparatesFailures(t *testing.T) {
 	}
 
 	got := renderProgressStatus(order, entries)
-	want := "✓ Camera 1\n✓ Camera 3\n\nX Camera 2"
+	want := "✓ Camera 1\nX Camera 2\n✓ Camera 3"
 	if got != want {
 		t.Fatalf("renderProgressStatus() = %q, want %q", got, want)
 	}
