@@ -25,6 +25,7 @@ type sourceSpec struct {
 	ShortID          string
 	Summary          string
 	Enabled          bool
+	Detected         bool
 	MonitoringOn     bool
 	OutputPort       int
 	Transport        string
@@ -45,6 +46,8 @@ type sourceInventory struct {
 	PendingVerification []string
 	Encoder             *recording.HwEncoder
 }
+
+var detectUSBCamerasWithConfigAndProgress = recording.DetectCamerasWithConfigAndProgressFiltered
 
 func currentStartPort() int {
 	if camerasConfig != nil && camerasConfig.Unicast.Enabled {
@@ -104,10 +107,10 @@ func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recordin
 	active := make([]sourceSpec, 0, len(rtspSpecs)+len(usbSpecs))
 	enabledCount := 0
 	for _, src := range usbSpecs {
-		if src.Enabled {
+		if src.Enabled && src.Detected {
 			enabledCount++
 		}
-		if src.Enabled && src.MonitoringOn {
+		if src.Enabled && src.Detected && src.MonitoringOn {
 			active = append(active, src)
 		}
 	}
@@ -157,21 +160,14 @@ func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recordin
 }
 
 func buildUSBSourcesWithProgress(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
-	cameras := recording.DetectCamerasWithConfigAndProgress(ffmpegConfig, progress)
+	cameras := detectUSBCamerasWithConfigAndProgress(ffmpegConfig, progress, disabledUSBDetectionFilter(progress))
 	return buildUSBSourcesFromDetected(cameras, startPort, usedPorts, usedShortIDs, progress)
 }
 
 func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
-	assignmentsByAttachment := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
-	assignmentsByMatchKey := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
+	assignmentsByAttachment, assignmentsByMatchKey := deviceAssignmentMaps()
 	for i := range camerasConfig.DeviceAssignments {
 		assignment := &camerasConfig.DeviceAssignments[i]
-		if attachmentPath := strings.TrimSpace(assignment.AttachmentPath); attachmentPath != "" {
-			assignmentsByAttachment[attachmentPath] = assignment
-		}
-		if matchKey := strings.TrimSpace(assignment.MatchKey); matchKey != "" {
-			assignmentsByMatchKey[matchKey] = assignment
-		}
 		if assignment.OutputPort > 0 {
 			usedPorts[assignment.OutputPort] = struct{}{}
 		}
@@ -196,9 +192,11 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 	})
 
 	sources := make([]sourceSpec, 0, len(filtered))
+	matchedAssignments := make(map[*camerascfg.DeviceAssignment]struct{}, len(filtered))
 	for _, cam := range filtered {
 		assignment := matchingDeviceAssignment(cam, assignmentsByAttachment, assignmentsByMatchKey)
 		if assignment != nil {
+			matchedAssignments[assignment] = struct{}{}
 			logging.InfoLogger.Printf("USB source %q matched assignment (disabled=%v, attachmentPath=%s)", cam.Name, assignment.Disabled, assignment.AttachmentPath)
 		} else {
 			logging.InfoLogger.Printf("USB source %q has no matching assignment (attachmentPath=%s, matchKey=%s) — defaults to enabled", cam.Name, cam.AttachmentPath, cam.MatchKey)
@@ -270,6 +268,7 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 			ShortID:          shortID,
 			Summary:          summarizeUSBIdentity(cam),
 			Enabled:          enabled,
+			Detected:         true,
 			MonitoringOn:     monitoringOn,
 			OutputPort:       port,
 			ProbeDirty:       hasDirtyReason(dirtyReasons, "probe"),
@@ -283,31 +282,160 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 		}
 	}
 
+	for i := range camerasConfig.DeviceAssignments {
+		assignment := &camerasConfig.DeviceAssignments[i]
+		if strings.TrimSpace(assignment.MatchKey) == "" && strings.TrimSpace(assignment.AttachmentPath) == "" {
+			continue
+		}
+		if _, matched := matchedAssignments[assignment]; matched {
+			continue
+		}
+		sources = append(sources, storedUSBSourceSpec(assignment, startPort, usedPorts, usedShortIDs))
+	}
+
 	return sources
 }
 
 func cachedDetectedCameras(specs []sourceSpec) []recording.DetectedCamera {
 	cameras := make([]recording.DetectedCamera, 0, len(specs))
 	for _, spec := range specs {
+		if !spec.Detected {
+			continue
+		}
 		cameras = append(cameras, spec.Camera)
 	}
 	return cameras
 }
 
+func deviceAssignmentMaps() (map[string]*camerascfg.DeviceAssignment, map[string]*camerascfg.DeviceAssignment) {
+	assignmentsByAttachment := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
+	assignmentsByMatchKey := make(map[string]*camerascfg.DeviceAssignment, len(camerasConfig.DeviceAssignments))
+	if camerasConfig == nil {
+		return assignmentsByAttachment, assignmentsByMatchKey
+	}
+	for i := range camerasConfig.DeviceAssignments {
+		assignment := &camerasConfig.DeviceAssignments[i]
+		if attachmentPath := strings.TrimSpace(assignment.AttachmentPath); attachmentPath != "" {
+			assignmentsByAttachment[attachmentPath] = assignment
+		}
+		if matchKey := strings.TrimSpace(assignment.MatchKey); matchKey != "" {
+			assignmentsByMatchKey[matchKey] = assignment
+		}
+	}
+	return assignmentsByAttachment, assignmentsByMatchKey
+}
+
+func disabledUSBDetectionFilter(progress func(string)) func(name, matchKey, attachmentPath string) bool {
+	assignmentsByAttachment, assignmentsByMatchKey := deviceAssignmentMaps()
+	return func(name, matchKey, attachmentPath string) bool {
+		assignment := matchingDeviceAssignmentIdentity(name, matchKey, attachmentPath, assignmentsByAttachment, assignmentsByMatchKey)
+		if assignment == nil || !assignment.Disabled {
+			return false
+		}
+		logging.InfoLogger.Printf("Skipping disabled USB source %q before probe (attachmentPath=%s, matchKey=%s)", name, attachmentPath, matchKey)
+		if progress != nil {
+			progress(recording.ProgressMsg(recording.ProgSkippedSource, name))
+		}
+		return true
+	}
+}
+
 func matchingDeviceAssignment(cam recording.DetectedCamera, assignmentsByAttachment, assignmentsByMatchKey map[string]*camerascfg.DeviceAssignment) *camerascfg.DeviceAssignment {
-	if attachmentPath := strings.TrimSpace(cam.AttachmentPath); attachmentPath != "" {
+	return matchingDeviceAssignmentIdentity(cam.Name, cam.MatchKey, cam.AttachmentPath, assignmentsByAttachment, assignmentsByMatchKey)
+}
+
+func matchingDeviceAssignmentIdentity(name, matchKey, attachmentPath string, assignmentsByAttachment, assignmentsByMatchKey map[string]*camerascfg.DeviceAssignment) *camerascfg.DeviceAssignment {
+	if attachmentPath = strings.TrimSpace(attachmentPath); attachmentPath != "" {
 		if assignment, ok := assignmentsByAttachment[attachmentPath]; ok {
 			return assignment
 		}
 	}
-	if assignment, ok := assignmentsByMatchKey[cam.MatchKey]; ok {
-		return assignment
+	if matchKey = strings.TrimSpace(matchKey); matchKey != "" {
+		if assignment, ok := assignmentsByMatchKey[matchKey]; ok {
+			return assignment
+		}
 	}
-	legacyWindowsKey := "dshow:" + strings.ToLower(strings.TrimSpace(cam.Name))
+	legacyWindowsKey := "dshow:" + strings.ToLower(strings.TrimSpace(name))
 	if assignment, ok := assignmentsByMatchKey[legacyWindowsKey]; ok {
 		return assignment
 	}
 	return nil
+}
+
+func storedUSBSourceSpec(assignment *camerascfg.DeviceAssignment, startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}) sourceSpec {
+	cam := storedUSBCameraFromAssignment(assignment)
+	name := strings.TrimSpace(assignment.Name)
+	if name == "" {
+		name = cam.Name
+	}
+	shortID := strings.TrimSpace(assignment.ShortID)
+	if shortID == "" {
+		shortID = nextShortID("C", usedShortIDs)
+	} else {
+		usedShortIDs[strings.ToUpper(shortID)] = struct{}{}
+	}
+	port := assignment.OutputPort
+	if port <= 0 {
+		port = nextAvailablePort(startPort, usedPorts)
+	}
+	usedPorts[port] = struct{}{}
+	supportedFormats := append([]string(nil), assignment.ProbeFormats...)
+	dirtyReasons := normalizeSourceDirtyReasons(assignment.DirtyReasons)
+	enabled := !assignment.Disabled
+	if !enabled {
+		dirtyReasons = removeDirtyReason(dirtyReasons, "restart")
+	}
+	monitoringOn := true
+	if assignment.On != nil {
+		monitoringOn = *assignment.On
+	}
+	return sourceSpec{
+		Key:              cam.MatchKey,
+		AttachmentPath:   cam.AttachmentPath,
+		SourceType:       "usb",
+		Name:             name,
+		ShortID:          shortID,
+		Summary:          summarizeUSBIdentity(cam),
+		Enabled:          enabled,
+		Detected:         false,
+		MonitoringOn:     monitoringOn,
+		OutputPort:       port,
+		ProbeDirty:       hasDirtyReason(dirtyReasons, "probe"),
+		DirtyReasons:     dirtyReasons,
+		SupportedFormats: supportedFormats,
+		PreferredFormat:  strings.TrimSpace(assignment.PreferredPixelFormat),
+		Camera:           cam,
+	}
+}
+
+func storedUSBCameraFromAssignment(assignment *camerascfg.DeviceAssignment) recording.DetectedCamera {
+	name := strings.TrimSpace(assignment.Name)
+	if name == "" {
+		name = strings.TrimSpace(assignment.AttachmentPath)
+	}
+	if name == "" {
+		name = strings.TrimSpace(assignment.MatchKey)
+	}
+	identity := strings.TrimSpace(assignment.AttachmentPath)
+	if identity == "" {
+		identity = strings.TrimSpace(assignment.MatchKey)
+	}
+	format := "v4l2"
+	if runtime.GOOS == "windows" {
+		format = "dshow"
+	}
+	return recording.DetectedCamera{
+		Name:             name,
+		Device:           identity,
+		Format:           format,
+		PixFmt:           strings.TrimSpace(assignment.ProbePixelFormat),
+		Size:             strings.TrimSpace(assignment.ProbeSize),
+		Fps:              assignment.ProbeFPS,
+		MatchKey:         strings.TrimSpace(assignment.MatchKey),
+		AttachmentPath:   strings.TrimSpace(assignment.AttachmentPath),
+		Identity:         identity,
+		SupportedFormats: append([]string(nil), assignment.ProbeFormats...),
+	}
 }
 
 func buildRTSPSources(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}) []sourceSpec {
@@ -368,6 +496,7 @@ func buildRTSPSourcesWithProgress(startPort int, usedPorts map[int]struct{}, use
 			ShortID:      shortID,
 			Summary:      summarizeRTSPURL(src.RTSPURL),
 			Enabled:      src.Enabled,
+			Detected:     true,
 			MonitoringOn: src.On == nil || *src.On,
 			OutputPort:   port,
 			Transport:    src.Transport,

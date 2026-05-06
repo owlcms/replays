@@ -349,7 +349,7 @@ func detectEncodersWithPath(path string, cfg *ffmpeg.Config, progress ProbeProgr
 }
 
 func reportUnconfiguredEncoders(available map[string]bool, cfg *ffmpeg.Config, progress ProbeProgressFunc) {
-	if progress == nil || cfg == nil {
+	if cfg == nil {
 		return
 	}
 	configured := make(map[string]struct{}, len(cfg.Encoders))
@@ -372,7 +372,6 @@ func reportUnconfiguredEncoders(available map[string]bool, cfg *ffmpeg.Config, p
 	sort.Strings(missing)
 	for _, name := range missing {
 		logging.InfoLogger.Printf("Skipping encoder %s: no ffmpeg.toml settings", name)
-		progress(ProgressMsg(ProgEncoderUnconfigured, ProgressDetailPayload(name, "no ffmpeg.toml encoder settings")))
 	}
 }
 
@@ -689,6 +688,10 @@ func DetectCamerasWithConfig(cfg *ffmpeg.Config) []DetectedCamera {
 }
 
 func DetectCamerasWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
+	return DetectCamerasWithConfigAndProgressFiltered(cfg, progress, nil)
+}
+
+func DetectCamerasWithConfigAndProgressFiltered(cfg *ffmpeg.Config, progress ProbeProgressFunc, skip func(name, matchKey, attachmentPath string) bool) []DetectedCamera {
 	if cfg == nil {
 		loaded, err := ffmpeg.LoadConfig()
 		if err != nil {
@@ -703,16 +706,16 @@ func DetectCamerasWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgre
 
 	switch runtime.GOOS {
 	case "linux":
-		return detectCamerasLinux(cfg, progress)
+		return detectCamerasLinux(cfg, progress, skip)
 	case "windows":
-		return detectCamerasWindows(cfg, progress)
+		return detectCamerasWindows(cfg, progress, skip)
 	default:
 		return nil
 	}
 }
 
 // detectCamerasLinux uses v4l2-ctl to detect cameras and their formats
-func detectCamerasLinux(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
+func detectCamerasLinux(cfg *ffmpeg.Config, progress ProbeProgressFunc, skip func(name, matchKey, attachmentPath string) bool) []DetectedCamera {
 	if progress != nil {
 		progress(ProgressMsg(ProgListing, "V4L2 devices"))
 	}
@@ -762,6 +765,10 @@ func detectCamerasLinux(cfg *ffmpeg.Config, progress ProbeProgressFunc) []Detect
 
 	var cameras []DetectedCamera
 	for _, dev := range devices {
+		matchKey, attachmentPath, _ := resolveStableCameraIdentity(dev.name, dev.device, dev.location)
+		if skip != nil && skip(dev.name, matchKey, attachmentPath) {
+			continue
+		}
 		if progress != nil {
 			progress(ProgressMsg(ProgLocalSource, dev.name))
 		}
@@ -897,7 +904,7 @@ func probeV4L2Device(name, device, location string, cfg *ffmpeg.Config) *Detecte
 }
 
 // detectCamerasWindows uses ffmpeg dshow to detect cameras
-func detectCamerasWindows(cfg *ffmpeg.Config, progress ProbeProgressFunc) []DetectedCamera {
+func detectCamerasWindows(cfg *ffmpeg.Config, progress ProbeProgressFunc, skip func(name, matchKey, attachmentPath string) bool) []DetectedCamera {
 	path := config.GetFFmpegPath()
 	if path == "" {
 		path = "ffmpeg"
@@ -943,6 +950,10 @@ func detectCamerasWindows(cfg *ffmpeg.Config, progress ProbeProgressFunc) []Dete
 
 	var cameras []DetectedCamera
 	for _, device := range devices {
+		matchKey, attachmentPath, _ := resolveWindowsCameraIdentity(device.name, device.alternativeName)
+		if skip != nil && skip(device.name, matchKey, attachmentPath) {
+			continue
+		}
 		if progress != nil {
 			progress(ProgressMsg(ProgLocalSource, device.name))
 		}

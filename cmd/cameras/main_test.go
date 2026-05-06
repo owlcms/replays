@@ -625,6 +625,127 @@ func TestBuildUSBSourcesFromDetectedUsesStableAssignmentState(t *testing.T) {
 	}
 }
 
+func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t *testing.T) {
+	previousConfig := camerasConfig
+	previousFFmpegConfig := ffmpegConfig
+	previousDetect := detectUSBCamerasWithConfigAndProgress
+	defer func() {
+		camerasConfig = previousConfig
+		ffmpegConfig = previousFFmpegConfig
+		detectUSBCamerasWithConfigAndProgress = previousDetect
+	}()
+
+	camerasConfig = &camerascfg.Config{
+		Cameras: camerascfg.CamerasSettings{IncludeAll: true},
+		DeviceAssignments: []camerascfg.DeviceAssignment{
+			{
+				AttachmentPath:   "/dev/v4l/by-path/disabled",
+				MatchKey:         "usb-disabled",
+				Name:             "Disabled Cam",
+				ShortID:          "C1",
+				OutputPort:       9001,
+				Disabled:         true,
+				On:               boolRef(false),
+				ProbePixelFormat: "mjpeg",
+				ProbeSize:        "1280x720",
+				ProbeFPS:         30,
+				ProbeFormats:     []string{"mjpeg", "yuyv422"},
+			},
+			{
+				AttachmentPath: "/dev/v4l/by-path/enabled",
+				MatchKey:       "usb-enabled",
+				Name:           "Enabled Cam",
+				ShortID:        "C2",
+				OutputPort:     9002,
+				On:             boolRef(true),
+			},
+		},
+	}
+	ffmpegConfig = &ffmpegcfg.Config{}
+
+	var checkedDisabled bool
+	var checkedEnabled bool
+	detectUSBCamerasWithConfigAndProgress = func(cfg *ffmpegcfg.Config, progress func(string), skip func(name, matchKey, attachmentPath string) bool) []recording.DetectedCamera {
+		if !skip("Disabled Cam", "usb-disabled", "/dev/v4l/by-path/disabled") {
+			t.Fatal("disabled assignment should be skipped before probe")
+		}
+		checkedDisabled = true
+		if skip("Enabled Cam", "usb-enabled", "/dev/v4l/by-path/enabled") {
+			t.Fatal("enabled assignment should not be skipped before probe")
+		}
+		checkedEnabled = true
+		return []recording.DetectedCamera{{
+			Name:             "Enabled Cam",
+			Device:           "/dev/video9",
+			Format:           "v4l2",
+			PixFmt:           "mjpeg",
+			Size:             "1280x720",
+			Fps:              30,
+			MatchKey:         "usb-enabled",
+			AttachmentPath:   "/dev/v4l/by-path/enabled",
+			Identity:         "/dev/v4l/by-path/enabled",
+			SupportedFormats: []string{"mjpeg", "yuyv422"},
+		}}
+	}
+
+	sources := buildUSBSourcesWithProgress(9001, map[int]struct{}{}, map[string]struct{}{}, nil)
+	if !checkedDisabled || !checkedEnabled {
+		t.Fatalf("expected skip filter checks for both assignments, got disabled=%t enabled=%t", checkedDisabled, checkedEnabled)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("expected 2 sources, got %d", len(sources))
+	}
+
+	var disabled *sourceSpec
+	var enabled *sourceSpec
+	for i := range sources {
+		switch sources[i].Key {
+		case "usb-disabled":
+			disabled = &sources[i]
+		case "usb-enabled":
+			enabled = &sources[i]
+		}
+	}
+	if disabled == nil {
+		t.Fatal("disabled assignment should remain visible in configuration inventory")
+	}
+	if disabled.Enabled {
+		t.Fatal("disabled assignment should stay disabled in inventory")
+	}
+	if disabled.Detected {
+		t.Fatal("disabled assignment should not be marked as live-detected")
+	}
+	if disabled.Camera.PixFmt != "mjpeg" || disabled.Camera.Size != "1280x720" {
+		t.Fatalf("disabled assignment should keep stored probe metadata, got pixFmt=%q size=%q", disabled.Camera.PixFmt, disabled.Camera.Size)
+	}
+	if enabled == nil {
+		t.Fatal("enabled detected source missing from inventory")
+	}
+	if !enabled.Enabled || !enabled.Detected {
+		t.Fatalf("enabled source state = enabled:%t detected:%t, want both true", enabled.Enabled, enabled.Detected)
+	}
+
+	inv := assembleSourceInventory(sources, nil, nil)
+	if len(inv.Active) != 1 || inv.Active[0].Key != "usb-enabled" {
+		t.Fatalf("active inventory = %+v, want only enabled detected source", inv.Active)
+	}
+}
+
+func TestCachedDetectedCamerasSkipsConfigOnlyRows(t *testing.T) {
+	specs := []sourceSpec{
+		{Key: "usb-config", Detected: false, Camera: recording.DetectedCamera{MatchKey: "usb-config"}},
+		{Key: "usb-live", Detected: true, Camera: recording.DetectedCamera{MatchKey: "usb-live"}},
+	}
+
+	cameras := cachedDetectedCameras(specs)
+	if len(cameras) != 1 {
+		t.Fatalf("cachedDetectedCameras() returned %d cameras, want 1", len(cameras))
+	}
+	if cameras[0].MatchKey != "usb-live" {
+		t.Fatalf("cachedDetectedCameras()[0] = %q, want usb-live", cameras[0].MatchKey)
+	}
+}
+
 func TestResolveStreamFFmpegPath(t *testing.T) {
 	tests := []struct {
 		name          string

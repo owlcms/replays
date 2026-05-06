@@ -100,7 +100,7 @@ func TestEncoderIsProbeCandidateRequiresAvailableEncoderAndMatchingGPU(t *testin
 	}
 }
 
-func TestReportUnconfiguredEncodersUsesProgress(t *testing.T) {
+func TestReportUnconfiguredEncodersDoesNotUseProgress(t *testing.T) {
 	available := map[string]bool{"h264_amf": true, "h264_nvenc": true, "h264_qsv": true}
 	cfg := testFFmpegConfigWithEncoder("h264_qsv")
 	var messages []string
@@ -109,16 +109,7 @@ func TestReportUnconfiguredEncodersUsesProgress(t *testing.T) {
 		messages = append(messages, message)
 	})
 
-	want := []string{
-		ProgressMsg(ProgEncoderUnconfigured, ProgressDetailPayload("h264_amf", "no ffmpeg.toml encoder settings")),
-		ProgressMsg(ProgEncoderUnconfigured, ProgressDetailPayload("h264_nvenc", "no ffmpeg.toml encoder settings")),
-	}
-	if len(messages) != len(want) {
-		t.Fatalf("reported %d messages, want %d: %v", len(messages), len(want), messages)
-	}
-	for i := range want {
-		if messages[i] != want[i] {
-			t.Fatalf("message[%d] = %q, want %q", i, messages[i], want[i])
-		}
+	if len(messages) != 0 {
+		t.Fatalf("reported %d messages, want 0: %v", len(messages), messages)
 	}
 }
