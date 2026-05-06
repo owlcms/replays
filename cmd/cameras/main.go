@@ -58,6 +58,17 @@ const (
 	previewMaxShortSide = 540
 )
 
+func defaultWindowSize(window fyne.Window) fyne.Size {
+	scale := float32(1)
+	if device := fyne.CurrentDevice(); device != nil {
+		if systemScale := device.SystemScaleForWindow(window); systemScale > 0 {
+			scale = systemScale
+		}
+	}
+
+	return fyne.NewSize(1368/scale, 880/scale)
+}
+
 var ffmpegVideoResolutionPattern = regexp.MustCompile(`\b(\d{2,5})x(\d{2,5})\b`)
 
 func setAppIcon(myApp fyne.App) {
@@ -452,6 +463,8 @@ func main() {
 
 	fmt.Println("Launching status window...")
 	runUI()
+	logging.InfoLogger.Printf("Camera UI exited; performing final ffmpeg cleanup")
+	jobutil.KillAllFFmpeg()
 }
 
 // startAllStreams starts streams for all configured or autodetected sources.
@@ -1671,6 +1684,12 @@ func rtspStartingAttemptLabel(recovery *rtspRecoveryState) string {
 }
 
 func monitoringSourceStatus(spec sourceSpec, stream *cameraStream, recovery *rtspRecoveryState) string {
+	if stream == nil {
+		if !spec.Detected && strings.EqualFold(spec.SourceType, "usb") {
+			return "not connected"
+		}
+	}
+
 	if strings.EqualFold(spec.SourceType, "rtsp") && recovery != nil && !recovery.exhausted {
 		if stream == nil {
 			if recovery.attention || !recovery.nextRetry.IsZero() {
@@ -2093,7 +2112,7 @@ func runUI() {
 	windowTitle := "Camera Streams"
 	window := myApp.NewWindow(windowTitle)
 	window.SetIcon(assets.IconResource)
-	window.Resize(fyne.NewSize(1480, 880))
+	window.Resize(defaultWindowSize(window))
 
 	headers := []string{"Name", "Short ID", "Port", "Format", "Encoder", "Resolution", "Expected FPS", "Measured FPS", "Start", "Stop", "Status", "Preview", "Record"}
 	cameraStatusLabel := widget.NewLabel(detectionProgressUIStrings.DetectingSourcesStatus)
@@ -3129,12 +3148,44 @@ func runUI() {
 			return err
 		}
 
+		// Preserve runtime On (monitoring) state from camerasConfig so that
+		// toggling Start/Stop in the monitoring page is not clobbered by stale
+		// row.monitoringOn values when the user clicks "Restart Streams".
+		existingUSBOn := make(map[string]*bool, len(camerasConfig.DeviceAssignments))
+		for i := range camerasConfig.DeviceAssignments {
+			a := &camerasConfig.DeviceAssignments[i]
+			if a.On != nil {
+				v := *a.On
+				if strings.TrimSpace(a.AttachmentPath) != "" {
+					existingUSBOn[a.AttachmentPath] = &v
+				}
+				if strings.TrimSpace(a.MatchKey) != "" {
+					existingUSBOn[a.MatchKey] = &v
+				}
+			}
+		}
+		existingRTSPOn := make(map[string]*bool, len(camerasConfig.RTSPSources))
+		for i := range camerasConfig.RTSPSources {
+			s := &camerasConfig.RTSPSources[i]
+			if s.On != nil {
+				v := *s.On
+				existingRTSPOn[s.SourceID] = &v
+			}
+		}
+
 		assignments := make([]camerascfg.DeviceAssignment, 0, len(usbRows))
 		portOwners := make(map[int]string)
 		for _, row := range usbRows {
 			assignment, err := row.assignment()
 			if err != nil {
 				return err
+			}
+			if on, ok := existingUSBOn[assignment.AttachmentPath]; ok && on != nil {
+				v := *on
+				assignment.On = &v
+			} else if on, ok := existingUSBOn[assignment.MatchKey]; ok && on != nil {
+				v := *on
+				assignment.On = &v
 			}
 			if assignment.OutputPort > 0 {
 				if owner, exists := portOwners[assignment.OutputPort]; exists {
@@ -3154,6 +3205,10 @@ func runUI() {
 			}
 			if skip {
 				continue
+			}
+			if on, ok := existingRTSPOn[source.SourceID]; ok && on != nil {
+				v := *on
+				source.On = &v
 			}
 			if source.OutputPort > 0 {
 				if owner, exists := portOwners[source.OutputPort]; exists {
@@ -3619,10 +3674,8 @@ func runUI() {
 				snapshot := stream.snapshotRow()
 				row[5] = snapshot[2]
 				row[7] = snapshot[4]
-				row[10] = monitoringSourceStatus(spec, stream, recoveryState)
-			} else {
-				row[10] = "stopped"
 			}
+			row[10] = monitoringSourceStatus(spec, stream, recoveryState)
 
 			if id.Col == 8 {
 				label.Hide()
@@ -3630,7 +3683,7 @@ func runUI() {
 				button.SetText("")
 				button.SetIcon(theme.MediaPlayIcon())
 				button.Importance = widget.MediumImportance
-				if spec.OutputPort <= 0 {
+				if spec.OutputPort <= 0 || (!spec.Detected && strings.EqualFold(spec.SourceType, "usb")) {
 					button.Disable()
 					button.OnTapped = nil
 					return
@@ -4036,6 +4089,7 @@ func runUI() {
 		rtspRowsContainer,
 	)
 
+	monitoringTable := container.NewScroll(table)
 	monitoringTab := container.NewBorder(
 		container.NewVBox(
 			cameraStatusLabel,
@@ -4044,14 +4098,14 @@ func runUI() {
 		nil,
 		nil,
 		nil,
-		table,
+		monitoringTable,
 	)
 	rescanBtn.Importance = widget.HighImportance
 	restartFromConfigBtn := widget.NewButton("Restart Streams", func() {
 		restartStreams()
 	})
 	restartFromConfigBtn.Importance = widget.HighImportance
-	configurationTab := container.NewVScroll(
+	configurationTab := container.NewScroll(
 		container.NewPadded(container.NewVBox(
 			newVerticalGap(4),
 			container.NewHBox(rescanBtn, restartFromConfigBtn),
