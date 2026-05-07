@@ -1,5 +1,7 @@
 **Change log**
 
+- 2.3.3: User interface fixes
+- 2.3.3: Linux behavior differences ajustments
 - 2.3.2: fixed option mapping for ffmpeg encoders (removed faulty override in the code, configuration files now always authoritative)
 - 2.3.1: cameras: improved startup diagnostics and improved resolution and effective frames monitoring
 - 2.3.0: replays now can read from a local camera module config
