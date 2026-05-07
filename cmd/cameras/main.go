@@ -56,17 +56,13 @@ var (
 const (
 	previewMaxLongSide  = 960
 	previewMaxShortSide = 540
+	defaultWindowWidth  = 1368
+	defaultWindowHeight = 880
 )
 
 func defaultWindowSize(window fyne.Window) fyne.Size {
-	scale := float32(1)
-	if device := fyne.CurrentDevice(); device != nil {
-		if systemScale := device.SystemScaleForWindow(window); systemScale > 0 {
-			scale = systemScale
-		}
-	}
-
-	return fyne.NewSize(1368/scale, 880/scale)
+	_ = window
+	return fyne.NewSize(defaultWindowWidth, defaultWindowHeight)
 }
 
 var ffmpegVideoResolutionPattern = regexp.MustCompile(`\b(\d{2,5})x(\d{2,5})\b`)
@@ -677,7 +673,9 @@ func (c *streamStartupCallbacks) report(message string) {
 		c.progress(trimmed)
 	}
 	if c.action != nil {
-		c.action(trimmed)
+		if actionText := renderProgressActionText(trimmed); actionText != "" {
+			c.action(actionText)
+		}
 	}
 }
 
@@ -3938,55 +3936,56 @@ func runUI() {
 		}()
 	}
 
-	// Detection and streaming happen in background after window is shown.
-	startupProgressDialog, reportStartupProgress, startupHasErrors := newDetectionProgressDialog(window, detectionProgressUIStrings.DetectingSourcesTitle)
-	startupProgressDialog.Show()
-	reportStartupProgress(recording.ProgressMsg(recording.ProgPreparing, ""))
-	go func() {
-		startTime := time.Now()
-		logging.InfoLogger.Printf("Initial source detection started")
-		inv := buildSourceInventoryWithProgress(reportStartupProgress)
-		if inv.Encoder != nil {
-			logging.InfoLogger.Printf("Best encoder: %s (%s)", inv.Encoder.Name, inv.Encoder.Description)
-		} else {
-			logging.InfoLogger.Printf("No hardware encoder available, will use software: %s", ffmpegConfig.Software.OutputParameters)
-		}
-		if len(inv.Errors) > 0 {
-			for _, item := range inv.Errors {
-				logging.ErrorLogger.Println(item)
-				reportStartupProgress(recording.ProgressMsg(recording.ProgError, item))
-			}
-		}
-
-		currentInventory = inv
-		if inv.Encoder != nil {
-			currentEncoder = inv.Encoder
-		}
-		updateEncoderStatus()
-		loadInventoryIntoRows(inv)
-		renderMonitoringSourceToggles(inv)
-
-		if len(inv.Active) > 0 && len(inv.Errors) == 0 {
-			reportStartupProgress(recording.ProgressMsg(recording.ProgInventoryReady, fmt.Sprintf("Validating %d stream(s)...", len(inv.Active))))
-			newStreams := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
-			*currentStreams = newStreams
-			if len(newStreams) > 0 {
-				updateCameraStatusLabel(inv.Status)
+	startInitialDetection := func() {
+		startupProgressDialog, reportStartupProgress, startupHasErrors := newDetectionProgressDialog(window, detectionProgressUIStrings.DetectingSourcesTitle)
+		startupProgressDialog.Show()
+		reportStartupProgress(recording.ProgressMsg(recording.ProgPreparing, ""))
+		go func() {
+			startTime := time.Now()
+			logging.InfoLogger.Printf("Initial source detection started")
+			inv := buildSourceInventoryWithProgress(reportStartupProgress)
+			if inv.Encoder != nil {
+				logging.InfoLogger.Printf("Best encoder: %s (%s)", inv.Encoder.Name, inv.Encoder.Description)
 			} else {
-				updateCameraStatusLabel("No streams started successfully. Check logs for errors.")
+				logging.InfoLogger.Printf("No hardware encoder available, will use software: %s", ffmpegConfig.Software.OutputParameters)
 			}
-		} else {
-			updateCameraStatusLabel(inv.Status)
-		}
-		if startupHasErrors() {
-			actionStatus.SetText(detectionProgressUIStrings.DetectionCompletedWithErrors)
-		} else {
-			actionStatus.SetText("Preview/Record: ready")
-			startupProgressDialog.Hide()
-		}
-		logging.InfoLogger.Printf("Initial source detection completed in %s", time.Since(startTime))
-		table.Refresh()
-	}()
+			if len(inv.Errors) > 0 {
+				for _, item := range inv.Errors {
+					logging.ErrorLogger.Println(item)
+					reportStartupProgress(recording.ProgressMsg(recording.ProgError, item))
+				}
+			}
+
+			currentInventory = inv
+			if inv.Encoder != nil {
+				currentEncoder = inv.Encoder
+			}
+			updateEncoderStatus()
+			loadInventoryIntoRows(inv)
+			renderMonitoringSourceToggles(inv)
+
+			if len(inv.Active) > 0 && len(inv.Errors) == 0 {
+				reportStartupProgress(recording.ProgressMsg(recording.ProgInventoryReady, fmt.Sprintf("Validating %d stream(s)...", len(inv.Active))))
+				newStreams := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
+				*currentStreams = newStreams
+				if len(newStreams) > 0 {
+					updateCameraStatusLabel(inv.Status)
+				} else {
+					updateCameraStatusLabel("No streams started successfully. Check logs for errors.")
+				}
+			} else {
+				updateCameraStatusLabel(inv.Status)
+			}
+			if startupHasErrors() {
+				actionStatus.SetText(detectionProgressUIStrings.DetectionCompletedWithErrors)
+			} else {
+				actionStatus.SetText("Preview/Record: ready")
+				startupProgressDialog.Hide()
+			}
+			logging.InfoLogger.Printf("Initial source detection completed in %s", time.Since(startTime))
+			table.Refresh()
+		}()
+	}
 
 	stopped := false
 	stopOnce := sync.Once{}
@@ -4126,5 +4125,7 @@ func runUI() {
 	)
 
 	window.SetContent(content)
-	window.ShowAndRun()
+	window.Show()
+	startInitialDetection()
+	myApp.Run()
 }

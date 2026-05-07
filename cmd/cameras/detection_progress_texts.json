@@ -33,7 +33,7 @@
 		"stage": "Scanning sources",
 		"detail": "Detected source: {payload}",
 		"statusKey": "{payload}",
-		"statusMessage": "✓ {payload}"
+		"statusMessage": "... {payload}"
 	},
 	"skipped": {
 		"stage": "Scanning sources",

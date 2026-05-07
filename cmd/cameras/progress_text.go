@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/owlcms/replays/internal/recording"
 )
@@ -72,14 +73,6 @@ func renderDetectionProgressText(templateText, payload string) string {
 	return rendered
 }
 
-func renderDetectionProgressCopy(templateText string, values map[string]string) string {
-	rendered := templateText
-	for key, value := range values {
-		rendered = strings.ReplaceAll(rendered, "{"+key+"}", value)
-	}
-	return rendered
-}
-
 func detectionProgressUpdateForTag(tag, payload string) (detectionProgressUpdate, bool) {
 	template, ok := detectionProgressTemplates[tag]
 	if !ok {
@@ -95,4 +88,40 @@ func detectionProgressUpdateForTag(tag, payload string) (detectionProgressUpdate
 		hasError:       template.HasError,
 		statusHasError: template.HasError,
 	}, true
+}
+
+func renderProgressActionText(message string) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return ""
+	}
+
+	if update, ok := simplifyDetectionProgress(trimmed); ok {
+		if detail := strings.TrimSpace(update.detail); detail != "" {
+			return detail
+		}
+		if status := strings.TrimSpace(update.statusMessage); status != "" {
+			return status
+		}
+		if stage := strings.TrimSpace(update.stage); stage != "" {
+			return stage
+		}
+	}
+
+	return sanitizeProgressActionText(trimmed)
+}
+
+func sanitizeProgressActionText(message string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		default:
+			return r
+		}
+	}, message)
+
+	return strings.Join(strings.Fields(cleaned), " ")
 }

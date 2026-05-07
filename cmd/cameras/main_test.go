@@ -462,6 +462,21 @@ func TestSimplifyDetectionProgressKeepsStreamFailureOutOfSourceStatus(t *testing
 	}
 }
 
+func TestRenderProgressActionTextDecodesStructuredStreamFailure(t *testing.T) {
+	message := recording.ProgressMsg(recording.ProgStreamFailed, recording.ProgressDetailPayload("CamON", "server failed"))
+
+	got := renderProgressActionText(message)
+	if got != "Startup failed for CamON: server failed" {
+		t.Fatalf("renderProgressActionText() = %q, want decoded stream failure", got)
+	}
+	if strings.Contains(got, recording.ProgressSep) {
+		t.Fatalf("renderProgressActionText() = %q, should not contain progress separator", got)
+	}
+	if strings.Contains(got, recording.ProgressDetailSep) {
+		t.Fatalf("renderProgressActionText() = %q, should not contain detail separator", got)
+	}
+}
+
 func TestSimplifyDetectionProgressReportsUnconfiguredEncoder(t *testing.T) {
 	payload := recording.ProgressDetailPayload("h264_amf", "no ffmpeg.toml encoder settings")
 	update, ok := simplifyDetectionProgress(recording.ProgressMsg(recording.ProgEncoderUnconfigured, payload))
@@ -665,7 +680,7 @@ func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t
 
 	var checkedDisabled bool
 	var checkedEnabled bool
-	detectUSBCamerasWithConfigAndProgress = func(cfg *ffmpegcfg.Config, progress func(string), skip func(name, matchKey, attachmentPath string) bool) []recording.DetectedCamera {
+	detectUSBCamerasWithConfigAndProgress = func(cfg *ffmpegcfg.Config, progress recording.ProbeProgressFunc, skip func(name, matchKey, attachmentPath string) bool) []recording.DetectedCamera {
 		if !skip("Disabled Cam", "usb-disabled", "/dev/v4l/by-path/disabled") {
 			t.Fatal("disabled assignment should be skipped before probe")
 		}
