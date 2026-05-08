@@ -143,6 +143,13 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		return fmt.Errorf("failed to create video directory: %w", err)
 	}
 
+	for i := range cameras {
+		cameraNumber := i + 1
+		if err := httpServer.ClearReplaySentinel(cameraNumber); err != nil {
+			logging.ErrorLogger.Printf("Failed to clear replay sentinel at recording start for Camera %d: %v", cameraNumber, err)
+		}
+	}
+
 	fullName = strings.ReplaceAll(fullName, " ", "_")
 
 	var cmds []*exec.Cmd
@@ -196,29 +203,38 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 // trimVideo handles the trimming of a single video file.
 // keepFromEndMs is the number of milliseconds to keep counted from end-of-file
 // (see buildTrimmingArgs for rationale).
-func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs int64, startTime int64, fullSessionDir string, timestamp string, finalFileNames *[]string) {
+func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs int64, startTime int64, sessionDir string, fullSessionDir string, timestamp string, finalFileNames []string) {
 	defer wg.Done()
+	cameraNumber := i + 1
+	if err := httpServer.ClearReplaySentinel(cameraNumber); err != nil {
+		logging.ErrorLogger.Printf("Failed to clear replay sentinel for Camera %d: %v", cameraNumber, err)
+	}
 
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
 	baseFileName = baseFileName[:len(baseFileName)-len(fmt.Sprintf("_%d", state.LastStartTime))]
 	finalFileName := filepath.Join(fullSessionDir, fmt.Sprintf("%s_%s.mp4", timestamp, baseFileName))
-	*finalFileNames = append(*finalFileNames, finalFileName)
+	finalFileNames[i] = finalFileName
 
 	attemptInfo := fmt.Sprintf("%s - %s attempt %d",
 		strings.ReplaceAll(state.CurrentAthlete, "_", " "),
 		state.CurrentLiftType,
 		state.CurrentAttempt)
 
-	logging.InfoLogger.Printf("Trimming video for Camera %d: %s", i+1, attemptInfo)
+	logging.InfoLogger.Printf("Trimming video for Camera %d: %s", cameraNumber, attemptInfo)
 
 	var err error
 	if startTime == 0 {
-		logging.InfoLogger.Printf("Start time is 0, not trimming the video for Camera %d", i+1)
+		logging.InfoLogger.Printf("Start time is 0, not trimming the video for Camera %d", cameraNumber)
 		if config.NoVideo {
-			logging.InfoLogger.Printf("Simulating rename video for Camera %d: %s -> %s", i+1, currentFileName, finalFileName)
+			logging.InfoLogger.Printf("Simulating rename video for Camera %d: %s -> %s", cameraNumber, currentFileName, finalFileName)
 		} else if err = os.Rename(currentFileName, finalFileName); err != nil {
-			logging.ErrorLogger.Printf("Failed to rename video file for Camera %d to %s: %v", i+1, finalFileName, err)
+			logging.ErrorLogger.Printf("Failed to rename video file for Camera %d to %s: %v", cameraNumber, finalFileName, err)
 			return
+		}
+		if !config.NoVideo {
+			if err := httpServer.PublishReplaySentinel(cameraNumber, sessionDir, filepath.Base(finalFileName)); err != nil {
+				logging.ErrorLogger.Printf("Failed to publish replay sentinel for Camera %d: %v", cameraNumber, err)
+			}
 		}
 	} else {
 		for j := 0; j < 5; j++ {
@@ -226,23 +242,27 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs 
 			cmd := CreateFfmpegCmd(args, "trimming")
 
 			if j == 0 {
-				logging.InfoLogger.Printf("Executing trim command for Camera %d: %s", i+1, cmd.String())
+				logging.InfoLogger.Printf("Executing trim command for Camera %d: %s", cameraNumber, cmd.String())
 			}
 
 			if err = cmd.Run(); err != nil {
-				logging.ErrorLogger.Printf("Waiting for input video for Camera %d (attempt %d/5): %v", i+1, j+1, err)
+				logging.ErrorLogger.Printf("Waiting for input video for Camera %d (attempt %d/5): %v", cameraNumber, j+1, err)
 				time.Sleep(1 * time.Second)
 			} else {
 				break
 			}
 			if j == 4 {
-				logging.ErrorLogger.Printf("Failed to open input video for Camera %d after 5 attempts: %v", i+1, err)
-				httpServer.SendStatus(httpServer.Ready, fmt.Sprintf("Error: Failed to trim video for Camera %d after 5 attempts", i+1))
+				logging.ErrorLogger.Printf("Failed to open input video for Camera %d after 5 attempts: %v", cameraNumber, err)
+				httpServer.SendStatus(httpServer.Ready, fmt.Sprintf("Error: Failed to trim video for Camera %d after 5 attempts", cameraNumber))
 				return
 			}
 		}
+		if err = httpServer.PublishReplaySentinel(cameraNumber, sessionDir, filepath.Base(finalFileName)); err != nil {
+			logging.ErrorLogger.Printf("Failed to publish replay sentinel for Camera %d: %v", cameraNumber, err)
+			return
+		}
 		if err = os.Remove(currentFileName); err != nil {
-			logging.ErrorLogger.Printf("Failed to remove untrimmed video file for Camera %d: %v", i+1, err)
+			logging.ErrorLogger.Printf("Failed to remove untrimmed video file for Camera %d: %v", cameraNumber, err)
 			return
 		}
 	}
@@ -271,7 +291,7 @@ func StopRecordingAndTrim(decisionTime int64) error {
 	logging.InfoLogger.Printf("Trim: keeping last %d ms (lead-in %d ms before timer stop)", keepFromEndMs, leadInMs)
 
 	timestamp := time.Now().Format("2006-01-02_15h04m05s")
-	var finalFileNames []string
+	finalFileNames := make([]string, len(currentFileNames))
 
 	// Create session directory if it doesn't exist
 	sessionDir := state.CurrentSession
@@ -291,7 +311,7 @@ func StopRecordingAndTrim(decisionTime int64) error {
 	var wg sync.WaitGroup
 	for i, currentFileName := range currentFileNames {
 		wg.Add(1)
-		go trimVideo(&wg, i, currentFileName, keepFromEndMs, startTime, fullSessionDir, timestamp, &finalFileNames)
+		go trimVideo(&wg, i, currentFileName, keepFromEndMs, startTime, sessionDir, fullSessionDir, timestamp, finalFileNames)
 	}
 
 	wg.Wait()
