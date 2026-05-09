@@ -90,17 +90,6 @@
     testInit = ""
 
 [[encoder]]
-    name = "h264_vaapi"
-    platform = "v4l2"
-    description = "VAAPI (AMD/Intel on Linux)"
-    gpuVendors = ["amd", "intel"]
-    inputParameters = "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096"
-    videoFilter = "format=nv12,hwupload"
-    # -bf 0 ensures monotonic DTS for downstream `-c copy` trims.
-    outputParameters = "-c:v h264_vaapi -profile:v main -rc_mode cbr -b:v 8M -maxrate 8M -bufsize 8M -bf 0"
-    testInit = "-init_hw_device vaapi=va:/dev/dri/renderD128"
-
-[[encoder]]
     name = "h264_qsv"
     platform = "v4l2"
     description = "Intel GPU (QSV / Xe)"
@@ -115,6 +104,17 @@
     #   -async_depth 1  : minimize encoder reorder buffer (low latency)
     outputParameters = "-c:v h264_qsv -profile:v main -preset medium -look_ahead 0 -rc_mode cbr -b:v 8M -maxrate 8M -bufsize 8M -bf 0 -idr_interval 1 -forced_idr 1 -async_depth 1"
     testInit = "-init_hw_device qsv=hw:/dev/dri/renderD128 -filter_hw_device hw"
+
+[[encoder]]
+    name = "h264_vaapi"
+    platform = "v4l2"
+    description = "VAAPI (AMD/Intel on Linux)"
+    gpuVendors = ["amd", "intel"]
+    inputParameters = "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096"
+    videoFilter = "format=nv12,hwupload"
+    # -bf 0 ensures monotonic DTS for downstream `-c copy` trims.
+    outputParameters = "-c:v h264_vaapi -profile:v main -rc_mode cbr -b:v 8M -maxrate 8M -bufsize 8M -bf 0"
+    testInit = "-init_hw_device vaapi=va:/dev/dri/renderD128"
 
 [[encoder]]
     name = "h264_qsv"

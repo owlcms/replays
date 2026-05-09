@@ -26,7 +26,7 @@ func findSystemFFmpegPath(currentPath string) string {
 			continue
 		}
 		seen[canonical] = struct{}{}
-		if _, err := os.Stat(canonical); err == nil && isFFmpegVersion6(canonical) {
+		if _, err := os.Stat(canonical); err == nil && isSupportedSystemFFmpeg(canonical) {
 			return canonical
 		}
 	}

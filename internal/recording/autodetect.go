@@ -181,7 +181,7 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 	logging.InfoLogger.Printf("Probing hardware encoders with ffmpeg: %s", path)
 
 	found := detectEncodersWithPath(path, cfg, progress)
-	if !shouldRetrySystemFFmpegProbe(found) {
+	if !shouldRetrySystemFFmpegProbe(found, cfg) {
 		return found
 	}
 
@@ -200,17 +200,31 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 		return found
 	}
 
-	merged := mergeFallbackNVENCEncoder(found, fallbackFound, cfg)
-	if containsHwEncoder(merged, "h264_nvenc") {
-		logging.InfoLogger.Printf("Using system ffmpeg for h264_nvenc only after bundled probe failure: %s", fallbackPath)
+	merged := mergeFallbackEncoders(found, fallbackFound, cfg)
+	if len(merged) > len(found) {
+		logging.InfoLogger.Printf("Using system ffmpeg fallback encoders after bundled probe failure: %s", fallbackPath)
 	}
 	return merged
 }
 
-func shouldRetrySystemFFmpegProbe(found []HwEncoder) bool {
+
+func shouldRetrySystemFFmpegProbe(found []HwEncoder, cfg *ffmpeg.Config) bool {
 	vendors := detectGPUVendors()
-	if vendors["nvidia"] && !containsHwEncoder(found, "h264_nvenc") {
-		logging.InfoLogger.Printf("NVIDIA GPU detected but h264_nvenc was not verified with the current ffmpeg; checking for system ffmpeg 6 fallback")
+	if cfg == nil {
+		return false
+	}
+
+	for _, enc := range cfg.Encoders {
+		if enc.Platform != "" && !encoderPlatformMatchesRuntime(enc.Platform) {
+			continue
+		}
+		if !encoderGPUVendorMatches(enc.GpuVendors, vendors) {
+			continue
+		}
+		if containsHwEncoder(found, enc.Name) {
+			continue
+		}
+		logging.InfoLogger.Printf("GPU-backed encoder %s was not verified with the current ffmpeg; checking for system ffmpeg fallback", enc.Name)
 		return true
 	}
 
@@ -226,41 +240,44 @@ func containsHwEncoder(encoders []HwEncoder, name string) bool {
 	return false
 }
 
-func mergeFallbackNVENCEncoder(primary, fallback []HwEncoder, cfg *ffmpeg.Config) []HwEncoder {
-	if containsHwEncoder(primary, "h264_nvenc") {
+func mergeFallbackEncoders(primary, fallback []HwEncoder, cfg *ffmpeg.Config) []HwEncoder {
+	if len(fallback) == 0 {
 		return primary
 	}
 
-	var nvenc *HwEncoder
-	for i := range fallback {
-		if fallback[i].Name == "h264_nvenc" {
-			nvenc = &fallback[i]
-			break
-		}
-	}
-	if nvenc == nil {
-		return primary
-	}
-
-	ordered := make([]HwEncoder, 0, len(primary)+1)
-	inserted := false
-	for _, name := range encoderPreferenceOrder(cfg) {
-		if name != "h264_nvenc" {
-			continue
-		}
-		ordered = append(ordered, *nvenc)
-		inserted = true
-		break
-	}
-	if !inserted {
-		ordered = append(ordered, *nvenc)
-	}
-
+	byName := make(map[string]HwEncoder, len(primary)+len(fallback))
 	for _, enc := range primary {
-		if enc.Name == "h264_nvenc" {
+		byName[enc.Name] = enc
+	}
+	for _, enc := range fallback {
+		if _, exists := byName[enc.Name]; !exists {
+			byName[enc.Name] = enc
+		}
+	}
+
+	ordered := make([]HwEncoder, 0, len(byName))
+	seen := make(map[string]struct{}, len(byName))
+	for _, name := range encoderPreferenceOrder(cfg) {
+		enc, ok := byName[name]
+		if !ok {
 			continue
 		}
 		ordered = append(ordered, enc)
+		seen[name] = struct{}{}
+	}
+	for _, enc := range primary {
+		if _, ok := seen[enc.Name]; ok {
+			continue
+		}
+		ordered = append(ordered, enc)
+		seen[enc.Name] = struct{}{}
+	}
+	for _, enc := range fallback {
+		if _, ok := seen[enc.Name]; ok {
+			continue
+		}
+		ordered = append(ordered, enc)
+		seen[enc.Name] = struct{}{}
 	}
 
 	return ordered
@@ -609,9 +626,9 @@ func formatCommandLine(name string, args []string) string {
 	return strings.Join(parts, " ")
 }
 
-var ffmpegVersion6Pattern = regexp.MustCompile(`(?i)^ffmpeg version (?:n)?6(?:[.\s-]|$)`)
+var ffmpegVersionPattern = regexp.MustCompile(`(?i)^ffmpeg version `)
 
-func isFFmpegVersion6(path string) bool {
+func isSupportedSystemFFmpeg(path string) bool {
 	cmd := CreateHiddenCmd(path, "-version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -629,12 +646,12 @@ func isFFmpegVersion6(path string) bool {
 		logging.InfoLogger.Printf("Skipping system ffmpeg candidate %s: empty version output", path)
 		return false
 	}
-	if !ffmpegVersion6Pattern.MatchString(versionLine) {
-		logging.InfoLogger.Printf("Skipping system ffmpeg candidate %s: expected ffmpeg 6.x, got %s", path, versionLine)
+	if !ffmpegVersionPattern.MatchString(versionLine) {
+		logging.InfoLogger.Printf("Skipping system ffmpeg candidate %s: unexpected version output %s", path, versionLine)
 		return false
 	}
 
-	logging.InfoLogger.Printf("System ffmpeg candidate %s matches required version: %s", path, versionLine)
+	logging.InfoLogger.Printf("System ffmpeg candidate %s is supported: %s", path, versionLine)
 	return true
 }
 

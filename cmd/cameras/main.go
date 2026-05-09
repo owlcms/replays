@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"image/color"
@@ -464,10 +465,11 @@ func main() {
 }
 
 // startAllStreams starts streams for all configured or autodetected sources.
-// Returns only the streams that started successfully.
-func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbacks *streamStartupCallbacks) []*cameraStream {
+// Returns only the streams that started successfully and any unicast warning generated during setup.
+func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbacks *streamStartupCallbacks) ([]*cameraStream, string) {
 	unicastMode := camerasConfig.Unicast.Enabled
 	var streams []*cameraStream
+	unicastWarning := ""
 
 	if unicastMode {
 		fmt.Println("\nStarting camera streams (unicast tee):")
@@ -482,10 +484,16 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 		if sources[0].OutputPort > 0 {
 			probePort = sources[0].OutputPort
 		}
-		if err := prepareReachableUnicastDestinations(probePort); err != nil {
+		warning, err := prepareReachableUnicastDestinations(probePort)
+		if err != nil {
 			fmt.Printf("  ERROR: Failed to prepare unicast destinations: %v\n", err)
 			callbacks.report(recording.ProgressMsg(recording.ProgStreamFailed, recording.ProgressDetailPayload("Unicast", err.Error())))
-			return streams
+			return streams, ""
+		}
+		if warning != "" {
+			unicastWarning = warning
+			fmt.Printf("  WARNING: %s\n", warning)
+			callbacks.report(recording.ProgressMsg(recording.ProgError, warning))
 		}
 	}
 
@@ -539,7 +547,7 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 
 	}
 
-	return streams
+	return streams, unicastWarning
 }
 
 func combineStopError(current error, next error) error {
@@ -586,11 +594,18 @@ func probeUnicastDestinationReachable(address string, port int) error {
 	}
 
 	target := net.JoinHostPort(trimmedAddress, strconv.Itoa(port))
-	conn, err := net.DialTimeout("udp", target, unicastReachabilityTimeout)
+	conn, err := net.DialTimeout("tcp", target, unicastReachabilityTimeout)
 	if err != nil {
+		if tcpDialErrorMeansReachable(err) {
+			return nil
+		}
 		return err
 	}
 	return conn.Close()
+}
+
+func tcpDialErrorMeansReachable(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET)
 }
 
 func disableUnreachableUnicastDestinations(cfg *camerascfg.Config, port int, checker func(string, int) error) ([]camerascfg.UnicastDestination, []unicastReachabilityIssue, bool) {
@@ -627,15 +642,32 @@ func disableUnreachableUnicastDestinations(cfg *camerascfg.Config, port int, che
 	return enabledUnicastDestinations(cfg.Unicast.Destinations), issues, changed
 }
 
-func prepareReachableUnicastDestinations(port int) error {
+func formatUnicastReachabilityWarning(issues []unicastReachabilityIssue, port int) string {
+	if len(issues) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		parts = append(parts, fmt.Sprintf("%s:%d (%v)", issue.Address, port, issue.Err))
+	}
+
+	if len(parts) == 1 {
+		return fmt.Sprintf("Disabled unreachable unicast destination %s", parts[0])
+	}
+	return fmt.Sprintf("Disabled %d unreachable unicast destinations: %s", len(parts), strings.Join(parts, "; "))
+}
+
+func prepareReachableUnicastDestinations(port int) (string, error) {
 	if camerasConfig == nil || !camerasConfig.Unicast.Enabled {
-		return nil
+		return "", nil
 	}
 	if port < 1 || port > 65535 {
-		return fmt.Errorf("invalid unicast destination port %d", port)
+		return "", fmt.Errorf("invalid unicast destination port %d", port)
 	}
 
 	reachable, issues, changed := disableUnreachableUnicastDestinations(camerasConfig, port, nil)
+	warning := formatUnicastReachabilityWarning(issues, port)
 	for _, issue := range issues {
 		logging.WarningLogger.Printf("Disabling unreachable unicast destination %s:%d: %v", issue.Address, port, issue.Err)
 	}
@@ -649,9 +681,12 @@ func prepareReachableUnicastDestinations(port int) error {
 	}
 
 	if len(reachable) == 0 {
-		return fmt.Errorf("no reachable unicast destinations remain enabled")
+		if warning != "" {
+			return "", fmt.Errorf("%s; no reachable unicast destinations remain enabled", warning)
+		}
+		return "", fmt.Errorf("no reachable unicast destinations remain enabled")
 	}
-	return nil
+	return warning, nil
 }
 
 func broadcastConfigSignature(unicastEnabled bool, multicast camerascfg.MulticastConfig, destinations []camerascfg.UnicastDestination) string {
@@ -2266,6 +2301,7 @@ func runUI() {
 	unicastContainer := container.NewVBox()
 
 	var applyBroadcastUIToConfig func() error
+	var syncBroadcastUIFromConfig func(bool)
 	var setBroadcastRestartDirty func()
 	var renderUnicastRows func()
 	renderUnicastRows = func() {
@@ -2378,6 +2414,24 @@ func runUI() {
 	savedBroadcastSignature := currentBroadcastUISignature()
 	setBroadcastRestartDirty = func() {
 		applyRestartButtonStyle(broadcastRestartBtn, currentBroadcastUISignature() != savedBroadcastSignature)
+	}
+	syncBroadcastUIFromConfig = func(force bool) {
+		if !force && currentBroadcastUISignature() != savedBroadcastSignature {
+			return
+		}
+
+		if camerasConfig.Unicast.Enabled {
+			modeSelect.SetSelected("Unicast")
+			unicastDestinations = append([]camerascfg.UnicastDestination(nil), camerasConfig.Unicast.Destinations...)
+			renderUnicastRows()
+		} else {
+			modeSelect.SetSelected("Multicast")
+			ipEntry.SetText(camerasConfig.Multicast.IP)
+			localOnlyCheck.SetChecked(camerasConfig.Multicast.LocalOnly)
+		}
+
+		savedBroadcastSignature = currentBroadcastUISignature()
+		setBroadcastRestartDirty()
 	}
 
 	usbRowsContainer := container.NewVBox()
@@ -2791,13 +2845,19 @@ func runUI() {
 		delete(rtspRecoveryStates, key)
 	}
 
-	startSingleSource := func(spec sourceSpec, resetRecovery bool) error {
+	startSingleSource := func(spec sourceSpec, resetRecovery bool) (string, error) {
 		cam := spec.Camera
 		port := spec.OutputPort
 		var udpDest string
+		warning := ""
 		if camerasConfig.Unicast.Enabled {
-			if err := prepareReachableUnicastDestinations(port); err != nil {
-				return err
+			var err error
+			warning, err = prepareReachableUnicastDestinations(port)
+			if err != nil {
+				return "", err
+			}
+			if warning != "" {
+				syncBroadcastUIFromConfig(false)
 			}
 			udpDest = camerasConfig.Unicast.TeeOutput(port)
 		} else {
@@ -2825,7 +2885,7 @@ func runUI() {
 		cmd, err := startStream(stream, callbacks)
 		if err != nil {
 			stream.setStopped(fmt.Sprintf("failed: %v", err))
-			return err
+			return warning, err
 		}
 		stream.cmd = cmd
 		stream.setRunning()
@@ -2847,7 +2907,7 @@ func runUI() {
 			}
 			return (*currentStreams)[i].camera.Name < (*currentStreams)[j].camera.Name
 		})
-		return nil
+		return warning, nil
 	}
 
 	stopSingleSource = func(key, reason string) error {
@@ -3026,12 +3086,19 @@ func runUI() {
 			}
 			item, _ = findInventorySource(spec.Key)
 			if findStreamIndex(spec.Key) == -1 {
-				if err := startSingleSource(*item, true); err != nil {
+				warning, err := startSingleSource(*item, true)
+				if err != nil {
 					return fmt.Errorf("failed to start %s: %w", item.Name, err)
+				}
+				if warning != "" {
+					refreshMonitoringStatus(fmt.Sprintf("Started %s. %s", item.Name, warning))
+				} else {
+					refreshMonitoringStatus(fmt.Sprintf("Started %s", item.Name))
 				}
 				if err := clearRestartDirtyForSource(*item); err != nil {
 					return err
 				}
+				return nil
 			}
 			refreshMonitoringStatus(fmt.Sprintf("Started %s", item.Name))
 			return nil
@@ -3079,14 +3146,19 @@ func runUI() {
 		if err := ensurePortFreeForRestart(item); err != nil {
 			return err
 		}
-		if err := startSingleSource(*item, resetRecovery); err != nil {
+		warning, err := startSingleSource(*item, resetRecovery)
+		if err != nil {
 			return fmt.Errorf("failed to restart %s: %w", item.Name, err)
 		}
 		if err := clearRestartDirtyForSource(*item); err != nil {
 			return err
 		}
 		logging.InfoLogger.Printf("Restart completed for %s on port %d", item.Name, item.OutputPort)
-		refreshMonitoringStatus(fmt.Sprintf("Restarted %s", item.Name))
+		if warning != "" {
+			refreshMonitoringStatus(fmt.Sprintf("Restarted %s. %s", item.Name, warning))
+		} else {
+			refreshMonitoringStatus(fmt.Sprintf("Restarted %s", item.Name))
+		}
 		return nil
 	}
 
@@ -3179,7 +3251,8 @@ func runUI() {
 
 			state.nextRetry = time.Time{}
 			logging.InfoLogger.Printf("RTSP WATCHDOG RETRY STARTING: source=%s port=%d retry=%d", spec.Name, spec.OutputPort, state.attempts)
-			if err := startSingleSource(spec, false); err != nil {
+			warning, err := startSingleSource(spec, false)
+			if err != nil {
 				state.reason = fmt.Sprintf("restart failed: %v", err)
 				if delay, retryAllowed := rtspRetryWindow(state.attempts); retryAllowed {
 					state.attempts++
@@ -3190,6 +3263,9 @@ func runUI() {
 					logging.ErrorLogger.Printf("RTSP WATCHDOG STOPPED: source=%s port=%d error=%v retries=%d", spec.Name, spec.OutputPort, err, state.attempts)
 				}
 				continue
+			}
+			if warning != "" {
+				actionStatus.SetText(fmt.Sprintf("Restarted %s. %s", spec.Name, warning))
 			}
 			logging.InfoLogger.Printf("RTSP WATCHDOG RETRY STARTED: source=%s port=%d retry=%d", spec.Name, spec.OutputPort, state.attempts)
 		}
@@ -3964,14 +4040,19 @@ func runUI() {
 		}
 		currentEncoder = newEncoder
 		updateEncoderStatus()
+		var unicastWarning string
 		if len(inv.Errors) == 0 && len(inv.Active) > 0 {
-			newStreams = startAllStreams(inv.Active, newEncoder, &streamStartupCallbacks{action: actionStatus.SetText})
+			newStreams, unicastWarning = startAllStreams(inv.Active, newEncoder, &streamStartupCallbacks{action: actionStatus.SetText})
 		}
+		syncBroadcastUIFromConfig(true)
 		*currentStreams = newStreams
 		clearRestartDirtyForStreams(newStreams)
 		table.Refresh()
 		updateCameraStatusLabel(inv.Status)
 		actionStatus.SetText(successMessage)
+		if strings.TrimSpace(unicastWarning) != "" {
+			dialog.ShowInformation("Unicast Destinations Disabled", unicastWarning, window)
+		}
 	}
 
 	restartStreams = func() {
@@ -4086,12 +4167,16 @@ func runUI() {
 
 			if len(inv.Active) > 0 && len(inv.Errors) == 0 {
 				reportStartupProgress(recording.ProgressMsg(recording.ProgInventoryReady, fmt.Sprintf("Validating %d stream(s)...", len(inv.Active))))
-				newStreams := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
+				newStreams, startupUnicastWarning := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
+				syncBroadcastUIFromConfig(true)
 				*currentStreams = newStreams
 				if len(newStreams) > 0 {
 					updateCameraStatusLabel(inv.Status)
 				} else {
 					updateCameraStatusLabel("No streams started successfully. Check logs for errors.")
+				}
+				if strings.TrimSpace(startupUnicastWarning) != "" {
+					dialog.ShowInformation("Unicast Destinations Disabled", startupUnicastWarning, window)
 				}
 			} else {
 				updateCameraStatusLabel(inv.Status)

@@ -2,8 +2,11 @@ package main
 
 import (
 	"errors"
+	"net"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -105,6 +108,51 @@ func TestDisableUnreachableUnicastDestinationsMarksFailuresDisabled(t *testing.T
 	}
 	if strings.Join(checked, ",") != "127.0.0.1,192.0.2.44" {
 		t.Fatalf("unexpected reachability checks: %v", checked)
+	}
+}
+
+func TestFormatUnicastReachabilityWarning(t *testing.T) {
+	issues := []unicastReachabilityIssue{
+		{Address: "192.0.2.44", Err: errors.New("network unreachable")},
+		{Address: "(blank)", Err: errors.New("empty destination address")},
+	}
+
+	got := formatUnicastReachabilityWarning(issues, 9001)
+	want := "Disabled 2 unreachable unicast destinations: 192.0.2.44:9001 (network unreachable); (blank):9001 (empty destination address)"
+	if got != want {
+		t.Fatalf("formatUnicastReachabilityWarning() = %q, want %q", got, want)
+	}
+}
+
+func TestTCPDialErrorMeansReachable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "connection refused means host reachable",
+			err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
+			want: true,
+		},
+		{
+			name: "connection reset means host reachable",
+			err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNRESET)},
+			want: true,
+		},
+		{
+			name: "network unreachable stays unreachable",
+			err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ENETUNREACH)},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tcpDialErrorMeansReachable(tc.err); got != tc.want {
+				t.Fatalf("tcpDialErrorMeansReachable(%v) = %t, want %t", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
