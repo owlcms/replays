@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -122,6 +123,33 @@ func PublishReplayState(camera int, session string, filename string, durationMs 
 
 	logging.InfoLogger.Printf("=== REPLAY STATE PUBLISHED timestamp=%s camera=%d session=%q filename=%q durationMs=%d video=%q ===", replayLogTimestamp(), camera, parsedReplay.Session, parsedReplay.Filename, replayState.DurationMs, videoPath)
 	return nil
+}
+
+// snapshotPublishedReplays returns a copy of the per-camera published
+// replay pointers (camera number ascending). Used to attach freshly-
+// published clip URLs to the Ready status broadcast so subscribers don't
+// need a follow-up GET /api/replay-state.
+func snapshotPublishedReplays() []ReplayCameraState {
+	publishedReplayMu.Lock()
+	defer publishedReplayMu.Unlock()
+	if len(publishedReplays) == 0 {
+		return nil
+	}
+	cameras := make([]int, 0, len(publishedReplays))
+	for camera := range publishedReplays {
+		cameras = append(cameras, camera)
+	}
+	sort.Ints(cameras)
+	out := make([]ReplayCameraState, 0, len(cameras))
+	for _, camera := range cameras {
+		out = append(out, publishedReplays[camera])
+	}
+	return out
+}
+
+// SnapshotPublishedReplays is the exported accessor.
+func SnapshotPublishedReplays() []ReplayCameraState {
+	return snapshotPublishedReplays()
 }
 
 func findPublishedReplayForCamera(camera int) (*ReplayCameraState, error) {
