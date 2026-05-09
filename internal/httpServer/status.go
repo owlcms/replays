@@ -17,12 +17,12 @@ const (
 )
 
 type StatusMessage struct {
-	Code          StatusCode          `json:"code"`
-	Text          string              `json:"text"`
-	Session       string              `json:"session"`
-	AthleteName   string              `json:"athleteName,omitempty"`
-	LiftType      string              `json:"liftType,omitempty"`
-	AttemptNumber int                 `json:"attemptNumber,omitempty"`
+	Code          StatusCode `json:"code"`
+	Text          string     `json:"text"`
+	Session       string     `json:"session"`
+	AthleteName   string     `json:"athleteName,omitempty"`
+	LiftType      string     `json:"liftType,omitempty"`
+	AttemptNumber int        `json:"attemptNumber,omitempty"`
 	// Cameras is populated for the Ready message and carries the per-camera
 	// publish pointers (videoPath relative to the replays HTTP root,
 	// durationMs probed by ffprobe). Lets clients act on a freshly-published
