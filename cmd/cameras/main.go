@@ -477,6 +477,17 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 		fmt.Println("=====================================")
 	}
 	callbacks.report(recording.ProgressMsg(recording.ProgStreamsAll, fmt.Sprintf("%d", len(sources))))
+	if unicastMode && len(sources) > 0 {
+		probePort := camerasConfig.Unicast.StartPort
+		if sources[0].OutputPort > 0 {
+			probePort = sources[0].OutputPort
+		}
+		if err := prepareReachableUnicastDestinations(probePort); err != nil {
+			fmt.Printf("  ERROR: Failed to prepare unicast destinations: %v\n", err)
+			callbacks.report(recording.ProgressMsg(recording.ProgStreamFailed, recording.ProgressDetailPayload("Unicast", err.Error())))
+			return streams
+		}
+	}
 
 	for _, source := range sources {
 		cam := source.Camera
@@ -507,7 +518,7 @@ func startAllStreams(sources []sourceSpec, encoder *recording.HwEncoder, callbac
 
 		fmt.Printf("\n[%s] %s (%s, %s @ %d fps)\n", cam.PixFmt, cam.Name, cam.Size, cam.PixFmt, cam.Fps)
 		if unicastMode {
-			for _, dest := range camerasConfig.Unicast.Destinations {
+			for _, dest := range enabledUnicastDestinations(camerasConfig.Unicast.Destinations) {
 				fmt.Printf("  -> udp://%s:%d\n", dest.Address, port)
 			}
 		} else {
@@ -547,6 +558,100 @@ func multicastOutputURL(multicast camerascfg.MulticastConfig, port int) string {
 		url += "&ttl=0"
 	}
 	return url
+}
+
+func enabledUnicastDestinations(destinations []camerascfg.UnicastDestination) []camerascfg.UnicastDestination {
+	enabled := make([]camerascfg.UnicastDestination, 0, len(destinations))
+	for _, destination := range destinations {
+		if !destination.Enabled {
+			continue
+		}
+		trimmedAddress := strings.TrimSpace(destination.Address)
+		if trimmedAddress == "" {
+			continue
+		}
+		destination.Address = trimmedAddress
+		enabled = append(enabled, destination)
+	}
+	return enabled
+}
+
+func probeUnicastDestinationReachable(address string, port int) error {
+	trimmedAddress := strings.TrimSpace(address)
+	if trimmedAddress == "" {
+		return fmt.Errorf("empty destination address")
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid destination port %d", port)
+	}
+
+	target := net.JoinHostPort(trimmedAddress, strconv.Itoa(port))
+	conn, err := net.DialTimeout("udp", target, unicastReachabilityTimeout)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+func disableUnreachableUnicastDestinations(cfg *camerascfg.Config, port int, checker func(string, int) error) ([]camerascfg.UnicastDestination, []unicastReachabilityIssue, bool) {
+	if cfg == nil || !cfg.Unicast.Enabled {
+		return nil, nil, false
+	}
+	if checker == nil {
+		checker = checkUnicastDestinationReachable
+	}
+
+	issues := make([]unicastReachabilityIssue, 0)
+	changed := false
+	for index := range cfg.Unicast.Destinations {
+		destination := &cfg.Unicast.Destinations[index]
+		if !destination.Enabled {
+			continue
+		}
+
+		trimmedAddress := strings.TrimSpace(destination.Address)
+		if trimmedAddress == "" {
+			destination.Enabled = false
+			issues = append(issues, unicastReachabilityIssue{Address: "(blank)", Err: fmt.Errorf("empty destination address")})
+			changed = true
+			continue
+		}
+
+		if err := checker(trimmedAddress, port); err != nil {
+			destination.Enabled = false
+			issues = append(issues, unicastReachabilityIssue{Address: trimmedAddress, Err: err})
+			changed = true
+		}
+	}
+
+	return enabledUnicastDestinations(cfg.Unicast.Destinations), issues, changed
+}
+
+func prepareReachableUnicastDestinations(port int) error {
+	if camerasConfig == nil || !camerasConfig.Unicast.Enabled {
+		return nil
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid unicast destination port %d", port)
+	}
+
+	reachable, issues, changed := disableUnreachableUnicastDestinations(camerasConfig, port, nil)
+	for _, issue := range issues {
+		logging.WarningLogger.Printf("Disabling unreachable unicast destination %s:%d: %v", issue.Address, port, issue.Err)
+	}
+
+	if changed {
+		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+			logging.ErrorLogger.Printf("Failed to save disabled unicast destinations: %v", err)
+		} else {
+			logging.InfoLogger.Printf("Saved cameras config after disabling %d unreachable unicast destination(s)", len(issues))
+		}
+	}
+
+	if len(reachable) == 0 {
+		return fmt.Errorf("no reachable unicast destinations remain enabled")
+	}
+	return nil
 }
 
 func broadcastConfigSignature(unicastEnabled bool, multicast camerascfg.MulticastConfig, destinations []camerascfg.UnicastDestination) string {
@@ -658,6 +763,15 @@ const (
 )
 
 const streamStartupProbeTimeout = 5 * time.Second
+
+const unicastReachabilityTimeout = 250 * time.Millisecond
+
+type unicastReachabilityIssue struct {
+	Address string
+	Err     error
+}
+
+var checkUnicastDestinationReachable = probeUnicastDestinationReachable
 
 type streamStartupCallbacks struct {
 	progress func(string)
@@ -828,6 +942,9 @@ func buildStreamCommandSpec(stream *cameraStream, mode streamOutputMode) (stream
 		args = append(args, "-frames:v", "1", "-nostats", "-f", "null", "-")
 	case streamOutputLive:
 		if unicastMode {
+			if strings.TrimSpace(udpDest) == "" {
+				return streamCommandSpec{}, fmt.Errorf("no enabled unicast destinations")
+			}
 			extra := fc.Output.ExtraFlags
 			extra = strings.ReplaceAll(extra, "-f mpegts", "")
 			extra = strings.TrimSpace(extra)
@@ -2679,6 +2796,9 @@ func runUI() {
 		port := spec.OutputPort
 		var udpDest string
 		if camerasConfig.Unicast.Enabled {
+			if err := prepareReachableUnicastDestinations(port); err != nil {
+				return err
+			}
 			udpDest = camerasConfig.Unicast.TeeOutput(port)
 		} else {
 			udpDest = multicastOutputURL(camerasConfig.Multicast, port)

@@ -606,7 +606,11 @@ func (c *UnicastConfig) TeeOutput(port int) string {
 		if !dest.Enabled {
 			continue
 		}
-		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", dest.Address, port, PktSize)
+		trimmedAddress := strings.TrimSpace(dest.Address)
+		if trimmedAddress == "" {
+			continue
+		}
+		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", trimmedAddress, port, PktSize)
 		legs = append(legs, leg)
 	}
 	return strings.Join(legs, "|")

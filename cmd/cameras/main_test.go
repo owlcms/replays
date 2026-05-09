@@ -58,6 +58,56 @@ func TestRTSPRetryWindow(t *testing.T) {
 	}
 }
 
+func TestDisableUnreachableUnicastDestinationsMarksFailuresDisabled(t *testing.T) {
+	cfg := &camerascfg.Config{
+		Unicast: camerascfg.UnicastConfig{
+			Enabled: true,
+			Destinations: []camerascfg.UnicastDestination{
+				{Address: "127.0.0.1", Enabled: true},
+				{Address: "192.0.2.44", Enabled: true},
+				{Address: "   ", Enabled: true},
+				{Address: "192.0.2.45", Enabled: false},
+			},
+		},
+	}
+
+	checked := make([]string, 0)
+	checker := func(address string, port int) error {
+		checked = append(checked, address)
+		if address == "192.0.2.44" {
+			return errors.New("network unreachable")
+		}
+		return nil
+	}
+
+	reachable, issues, changed := disableUnreachableUnicastDestinations(cfg, 9001, checker)
+
+	if !changed {
+		t.Fatal("expected changed=true when destinations are disabled")
+	}
+	if len(issues) != 2 {
+		t.Fatalf("expected two disabled destination issues, got %d: %#v", len(issues), issues)
+	}
+	if len(reachable) != 1 || reachable[0].Address != "127.0.0.1" {
+		t.Fatalf("expected only localhost to remain reachable, got %#v", reachable)
+	}
+	if !cfg.Unicast.Destinations[0].Enabled {
+		t.Fatal("expected reachable destination to remain enabled")
+	}
+	if cfg.Unicast.Destinations[1].Enabled {
+		t.Fatal("expected unreachable destination to be disabled")
+	}
+	if cfg.Unicast.Destinations[2].Enabled {
+		t.Fatal("expected blank destination to be disabled")
+	}
+	if cfg.Unicast.Destinations[3].Enabled {
+		t.Fatal("expected already disabled destination to stay disabled")
+	}
+	if strings.Join(checked, ",") != "127.0.0.1,192.0.2.44" {
+		t.Fatalf("unexpected reachability checks: %v", checked)
+	}
+}
+
 func TestCameraStreamAutoRestartReason(t *testing.T) {
 	now := time.Date(2026, time.April, 14, 20, 0, 0, 0, time.UTC)
 

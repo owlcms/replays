@@ -123,11 +123,27 @@ func TestSerializeIncludesMonitoringOnFlag(t *testing.T) {
 	}
 }
 
+func TestUnicastTeeOutputSkipsDisabledAndBlankDestinations(t *testing.T) {
+	cfg := &UnicastConfig{
+		Destinations: []UnicastDestination{
+			{Address: " 127.0.0.1 ", Enabled: true},
+			{Address: "192.0.2.44", Enabled: false},
+			{Address: "   ", Enabled: true},
+		},
+	}
+
+	got := cfg.TeeOutput(9001)
+	want := "[f=mpegts:onfail=ignore]udp://127.0.0.1:9001?pkt_size=1316"
+	if got != want {
+		t.Fatalf("TeeOutput() = %q, want %q", got, want)
+	}
+}
+
 func TestClearRestartDirtyReasonsRemovesRestartOnly(t *testing.T) {
 	cfg := &Config{
 		DeviceAssignments: []DeviceAssignment{{
-			MatchKey:      "usb-1",
-			DirtyReasons:  []string{"probe", "restart"},
+			MatchKey:     "usb-1",
+			DirtyReasons: []string{"probe", "restart"},
 		}},
 		RTSPSources: []RTSPSource{{
 			SourceID:     "rtsp-1",
