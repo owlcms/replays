@@ -29,6 +29,7 @@ var (
 	currentRecordings []*exec.Cmd
 	currentStdin      []*os.File
 	currentFileNames  []string
+	currentAttempt    httpServer.StatusAttemptDetails
 )
 
 // cleanParams splits a parameter string and removes outer quotes from each parameter
@@ -150,6 +151,14 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 		}
 	}
 
+	displayName := strings.ReplaceAll(fullName, "_", " ")
+	currentAttempt = httpServer.StatusAttemptDetails{
+		Session:       state.CurrentSession,
+		AthleteName:   displayName,
+		LiftType:      liftTypeKey,
+		AttemptNumber: attemptNumber,
+	}
+
 	fullName = strings.ReplaceAll(fullName, " ", "_")
 
 	var cmds []*exec.Cmd
@@ -191,10 +200,10 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	currentFileNames = fileNames
 	state.LastTimerStopTime = 0
 
-	httpServer.SendStatus(httpServer.Recording, fmt.Sprintf("Recording: %s - %s attempt %d",
-		strings.ReplaceAll(fullName, "_", " "),
-		liftTypeKey,
-		attemptNumber))
+	httpServer.SendStatusWithDetails(httpServer.Recording, fmt.Sprintf("Recording: %s - %s attempt %d",
+		currentAttempt.AthleteName,
+		currentAttempt.LiftType,
+		currentAttempt.AttemptNumber), currentAttempt)
 
 	logging.InfoLogger.Printf("Started recording videos: %v", fileNames)
 	return nil
@@ -203,7 +212,7 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 // trimVideo handles the trimming of a single video file.
 // keepFromEndMs is the number of milliseconds to keep counted from end-of-file
 // (see buildTrimmingArgs for rationale).
-func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs int64, startTime int64, sessionDir string, fullSessionDir string, timestamp string, finalFileNames []string) {
+func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs int64, startTime int64, sessionDir string, fullSessionDir string, timestamp string, finalFileNames []string, attemptDetails httpServer.StatusAttemptDetails) {
 	defer wg.Done()
 	cameraNumber := i + 1
 	if err := httpServer.ClearPublishedReplayState(cameraNumber); err != nil {
@@ -216,9 +225,9 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs 
 	finalFileNames[i] = finalFileName
 
 	attemptInfo := fmt.Sprintf("%s - %s attempt %d",
-		strings.ReplaceAll(state.CurrentAthlete, "_", " "),
-		state.CurrentLiftType,
-		state.CurrentAttempt)
+		attemptDetails.AthleteName,
+		attemptDetails.LiftType,
+		attemptDetails.AttemptNumber)
 
 	logging.InfoLogger.Printf("Trimming video for Camera %d: %s", cameraNumber, attemptInfo)
 
@@ -275,6 +284,20 @@ func StopRecordingAndTrim(decisionTime int64) error {
 		return err
 	}
 
+	attemptDetails := currentAttempt
+	if attemptDetails.AthleteName == "" {
+		attemptDetails.AthleteName = strings.ReplaceAll(state.CurrentAthlete, "_", " ")
+	}
+	if attemptDetails.LiftType == "" {
+		attemptDetails.LiftType = state.CurrentLiftType
+	}
+	if attemptDetails.AttemptNumber == 0 {
+		attemptDetails.AttemptNumber = state.CurrentAttempt
+	}
+	if attemptDetails.Session == "" {
+		attemptDetails.Session = state.CurrentSession
+	}
+
 	// leadInMs is how much footage to keep BEFORE the moment the timer was stopped.
 	const leadInMs int64 = 5000
 
@@ -294,7 +317,7 @@ func StopRecordingAndTrim(decisionTime int64) error {
 	finalFileNames := make([]string, len(currentFileNames))
 
 	// Create session directory if it doesn't exist
-	sessionDir := state.CurrentSession
+	sessionDir := attemptDetails.Session
 	if sessionDir == "" {
 		sessionDir = "unsorted"
 	}
@@ -303,21 +326,22 @@ func StopRecordingAndTrim(decisionTime int64) error {
 	if err := os.MkdirAll(fullSessionDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
+	attemptDetails.Session = sessionDir
 
 	// Update status to "Trimming videos for XXX attempt YYY"
-	statusMessage := fmt.Sprintf("Trimming videos for %s -- %s attempt %d", state.CurrentAthlete, state.CurrentLiftType, state.CurrentAttempt)
-	httpServer.SendStatus(httpServer.Trimming, statusMessage)
+	statusMessage := fmt.Sprintf("Trimming videos for %s -- %s attempt %d", attemptDetails.AthleteName, attemptDetails.LiftType, attemptDetails.AttemptNumber)
+	httpServer.SendStatusWithDetails(httpServer.Trimming, statusMessage, attemptDetails)
 
 	var wg sync.WaitGroup
 	for i, currentFileName := range currentFileNames {
 		wg.Add(1)
-		go trimVideo(&wg, i, currentFileName, keepFromEndMs, startTime, sessionDir, fullSessionDir, timestamp, finalFileNames)
+		go trimVideo(&wg, i, currentFileName, keepFromEndMs, startTime, sessionDir, fullSessionDir, timestamp, finalFileNames, attemptDetails)
 	}
 
 	wg.Wait()
 
 	// Send single "Videos ready" message after all cameras are done
-	httpServer.SendStatus(httpServer.Ready, "Videos ready")
+	httpServer.SendStatusWithDetails(httpServer.Ready, "Videos ready", attemptDetails)
 
 	logging.InfoLogger.Printf("Stopped recording and saved videos: %v", finalFileNames)
 	currentRecordings = nil

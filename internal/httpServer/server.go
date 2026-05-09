@@ -388,19 +388,30 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	clients[conn] = true
 	// Send current status immediately after connection
 	if statusMsg != "" {
+		msg := lastStatusMessage
+		if msg.Text == "" {
+			msg = buildStatusMessage(statusCode, statusMsg)
+		}
+
 		// prevent infinite loop if we are reloading after saving videos
 		if VideoReadyReloading {
 			statusMsg = "Videos ready"
 			statusCode = Ready
-			if err := conn.WriteJSON(buildStatusMessage(statusCode, statusMsg)); err != nil {
+			msg.Code = statusCode
+			msg.Text = statusMsg
+			lastStatusMessage = msg
+			if err := conn.WriteJSON(msg); err != nil {
 				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
 			}
 			VideoReadyReloading = false
 		} else {
 			if strings.Contains(statusMsg, "Recording") {
 				statusCode = Recording
+				msg.Code = statusCode
 			}
-			if err := conn.WriteJSON(buildStatusMessage(statusCode, statusMsg)); err != nil {
+			msg.Text = statusMsg
+			lastStatusMessage = msg
+			if err := conn.WriteJSON(msg); err != nil {
 				logging.ErrorLogger.Printf("Failed to send initial status: %v", err)
 			}
 		}

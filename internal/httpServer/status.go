@@ -25,36 +25,72 @@ type StatusMessage struct {
 	AttemptNumber int        `json:"attemptNumber,omitempty"`
 }
 
+type StatusAttemptDetails struct {
+	Session       string
+	AthleteName   string
+	LiftType      string
+	AttemptNumber int
+}
+
 var (
 	StatusChan          = make(chan StatusMessage, 10)
 	statusMsg           string
 	statusCode          StatusCode
+	lastStatusMessage   StatusMessage
 	VideoReadyReloading bool
 )
 
 func buildStatusMessage(code StatusCode, text string) StatusMessage {
+	return buildStatusMessageWithDetails(code, text, StatusAttemptDetails{})
+}
+
+func buildStatusMessageWithDetails(code StatusCode, text string, details StatusAttemptDetails) StatusMessage {
+	session := details.Session
+	if session == "" {
+		session = state.CurrentSession
+	}
+	athleteName := details.AthleteName
+	if athleteName == "" {
+		athleteName = state.CurrentAthlete
+	}
+	liftType := details.LiftType
+	if liftType == "" {
+		liftType = state.CurrentLiftType
+	}
+	attemptNumber := details.AttemptNumber
+	if attemptNumber == 0 {
+		attemptNumber = state.CurrentAttempt
+	}
+
 	return StatusMessage{
 		Code:          code,
 		Text:          text,
-		Session:       state.CurrentSession,
-		AthleteName:   state.CurrentAthlete,
-		LiftType:      state.CurrentLiftType,
-		AttemptNumber: state.CurrentAttempt,
+		Session:       session,
+		AthleteName:   athleteName,
+		LiftType:      liftType,
+		AttemptNumber: attemptNumber,
 	}
 }
 
 // SendStatus sends a status update to all clients through the broadcast channel
 // and updates the Fyne UI through StatusChan
 func SendStatus(code StatusCode, text string) {
+	SendStatusWithDetails(code, text, StatusAttemptDetails{})
+}
+
+// SendStatusWithDetails sends a status update with explicit attempt metadata.
+func SendStatusWithDetails(code StatusCode, text string, details StatusAttemptDetails) {
 	// Simplify the "Videos ready" message for web display
 	VideoReadyReloading = false
 	if code == Ready && strings.Contains(text, "Videos ready") {
 		text = "Reloading..."
 		VideoReadyReloading = true
 	}
-	msg := buildStatusMessage(code, text)
+	msg := buildStatusMessageWithDetails(code, text, details)
 	mu.Lock()
 	statusMsg = text
+	statusCode = code
+	lastStatusMessage = msg
 	for client := range clients {
 		logging.InfoLogger.Printf("Sending status update: %s", text)
 		if err := client.WriteJSON(msg); err != nil {
