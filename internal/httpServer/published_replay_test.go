@@ -1,6 +1,7 @@
 package httpServer
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,12 @@ func withReplayTestVideoDir(t *testing.T) string {
 	oldSession := state.CurrentSession
 	oldWaitTimeout := replayReadyWaitTimeout
 	oldPollInterval := replayReadyPollInterval
+	publishedReplayMu.Lock()
+	oldPublishedReplays := make(map[int]ReplayCameraState, len(publishedReplays))
+	for camera, replay := range publishedReplays {
+		oldPublishedReplays[camera] = replay
+	}
+	publishedReplayMu.Unlock()
 	replayGenerationMu.Lock()
 	oldGenerations := make(map[int]int64, len(replayGenerations))
 	for camera, generation := range replayGenerations {
@@ -32,12 +39,18 @@ func withReplayTestVideoDir(t *testing.T) string {
 	state.CurrentSession = "3"
 	replayReadyWaitTimeout = 20 * time.Millisecond
 	replayReadyPollInterval = time.Millisecond
+	publishedReplayMu.Lock()
+	publishedReplays = make(map[int]ReplayCameraState)
+	publishedReplayMu.Unlock()
 
 	t.Cleanup(func() {
 		config.SetVideoDir(oldVideoDir)
 		state.CurrentSession = oldSession
 		replayReadyWaitTimeout = oldWaitTimeout
 		replayReadyPollInterval = oldPollInterval
+		publishedReplayMu.Lock()
+		publishedReplays = oldPublishedReplays
+		publishedReplayMu.Unlock()
 		replayGenerationMu.Lock()
 		replayGenerations = oldGenerations
 		replayGenerationMu.Unlock()
@@ -58,36 +71,39 @@ func writeReplayTestFile(t *testing.T, videoDir string, session string, filename
 	}
 }
 
-func TestReplaySentinelPublishesAndClears(t *testing.T) {
+func TestPublishedReplayStatePublishesAndClears(t *testing.T) {
 	videoDir := withReplayTestVideoDir(t)
 	filename := "2026-05-08_11h09m59s_LARRIVEE_Mariane_CLEANJERK_attempt1_Camera1.mp4"
 	writeReplayTestFile(t, videoDir, "3", filename)
 
 	if _, err := findPublishedReplayForCamera(1); !os.IsNotExist(err) {
-		t.Fatalf("expected no replay before sentinel publish, got %v", err)
+		t.Fatalf("expected no replay before state publish, got %v", err)
 	}
 
-	if err := PublishReplaySentinel(1, "3", filename); err != nil {
-		t.Fatalf("failed to publish replay sentinel: %v", err)
+	if err := PublishReplayState(1, "3", filename, 12345); err != nil {
+		t.Fatalf("failed to publish replay state: %v", err)
 	}
 
 	replay, err := findPublishedReplayForCamera(1)
 	if err != nil {
-		t.Fatalf("failed to read replay sentinel: %v", err)
+		t.Fatalf("failed to read published replay state: %v", err)
 	}
 	if replay.VideoPath != "/videos/3/"+filename {
 		t.Fatalf("unexpected replay path %q", replay.VideoPath)
 	}
+	if replay.DurationMs != 12345 {
+		t.Fatalf("unexpected replay duration %d", replay.DurationMs)
+	}
 
-	if err := ClearReplaySentinel(1); err != nil {
-		t.Fatalf("failed to clear replay sentinel: %v", err)
+	if err := ClearPublishedReplayState(1); err != nil {
+		t.Fatalf("failed to clear published replay state: %v", err)
 	}
 	if _, err := findPublishedReplayForCamera(1); !os.IsNotExist(err) {
-		t.Fatalf("expected no replay after sentinel clear, got %v", err)
+		t.Fatalf("expected no replay after state clear, got %v", err)
 	}
 }
 
-func TestHandleReplayRequiresPublishedSentinel(t *testing.T) {
+func TestHandleReplayRequiresPublishedState(t *testing.T) {
 	videoDir := withReplayTestVideoDir(t)
 	filename := "2026-05-08_11h09m59s_LARRIVEE_Mariane_CLEANJERK_attempt1_Camera1.mp4"
 	writeReplayTestFile(t, videoDir, "3", filename)
@@ -95,17 +111,17 @@ func TestHandleReplayRequiresPublishedSentinel(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handleReplay(recorder, mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/replay/1", nil), map[string]string{"camera": "1"}))
 	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("expected missing sentinel to return 404, got %d", recorder.Code)
+		t.Fatalf("expected missing published state to return 404, got %d", recorder.Code)
 	}
 
-	if err := PublishReplaySentinel(1, "3", filename); err != nil {
-		t.Fatalf("failed to publish replay sentinel: %v", err)
+	if err := PublishReplayState(1, "3", filename, 12345); err != nil {
+		t.Fatalf("failed to publish replay state: %v", err)
 	}
 
 	recorder = httptest.NewRecorder()
 	handleReplay(recorder, mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/replay/1", nil), map[string]string{"camera": "1"}))
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected published sentinel to return 200, got %d", recorder.Code)
+		t.Fatalf("expected published state to return 200, got %d", recorder.Code)
 	}
 	if recorder.Body.String() != "video" {
 		t.Fatalf("unexpected response body %q", recorder.Body.String())
@@ -120,7 +136,37 @@ func TestHandleReplayRequiresPublishedSentinel(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	handleReplay(recorder, mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/replay/1", nil), map[string]string{"camera": "1"}))
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected reusable sentinel to serve another independent request, got %d", recorder.Code)
+		t.Fatalf("expected reusable published state to serve another independent request, got %d", recorder.Code)
+	}
+}
+
+func TestHandleReplayStateIncludesPublishedDuration(t *testing.T) {
+	videoDir := withReplayTestVideoDir(t)
+	filename := "2026-05-08_11h09m59s_LARRIVEE_Mariane_CLEANJERK_attempt1_Camera1.mp4"
+	writeReplayTestFile(t, videoDir, "3", filename)
+
+	if err := PublishReplayState(1, "3", filename, 12345); err != nil {
+		t.Fatalf("failed to publish replay state: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	handleReplayState(recorder, httptest.NewRequest(http.MethodGet, "/api/replay-state", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected replay state to return 200, got %d", recorder.Code)
+	}
+
+	var response ReplayStateResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode replay state response: %v", err)
+	}
+	if len(response.Cameras) != 4 {
+		t.Fatalf("expected 4 cameras, got %d", len(response.Cameras))
+	}
+	if response.Cameras[0].DurationMs != 12345 {
+		t.Fatalf("unexpected replay state duration %d", response.Cameras[0].DurationMs)
+	}
+	if response.Cameras[0].VideoPath != "/videos/3/"+filename {
+		t.Fatalf("unexpected replay state path %q", response.Cameras[0].VideoPath)
 	}
 }
 

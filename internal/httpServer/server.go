@@ -68,6 +68,7 @@ type ReplayCameraState struct {
 	LiftType      string `json:"liftType,omitempty"`
 	AttemptNumber int    `json:"attemptNumber,omitempty"`
 	Timestamp     string `json:"timestamp,omitempty"`
+	DurationMs    int64  `json:"durationMs,omitempty"`
 }
 
 type ReplayStateResponse struct {
@@ -816,59 +817,6 @@ func resolveReplaySession() (string, error) {
 	return latestDir.Name(), nil
 }
 
-func findLatestReplayForCamera(session string, camera int) (*ReplayCameraState, error) {
-	if session == "" {
-		return nil, os.ErrNotExist
-	}
-
-	sessionDir := filepath.Join(config.GetVideoDir(), session)
-	files, err := os.ReadDir(sessionDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var latestReplay *ReplayCameraState
-	var latestTimestamp string
-
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
-		parsedReplay, ok := parseReplayFilename(session, file.Name())
-		if !ok {
-			continue
-		}
-		if parsedReplay.Camera != camera {
-			continue
-		}
-
-		timestamp := parsedReplay.Timestamp
-		if latestReplay != nil && timestamp <= latestTimestamp {
-			continue
-		}
-
-		latestTimestamp = timestamp
-		latestReplay = &ReplayCameraState{
-			Camera:        camera,
-			Available:     true,
-			Session:       session,
-			Filename:      parsedReplay.Filename,
-			VideoPath:     parsedReplay.URL,
-			AthleteName:   parsedReplay.Athlete,
-			LiftType:      parsedReplay.LiftType,
-			AttemptNumber: parsedReplay.AttemptNumber,
-			Timestamp:     timestamp,
-		}
-	}
-
-	if latestReplay == nil {
-		return nil, os.ErrNotExist
-	}
-
-	return latestReplay, nil
-}
-
 func handleReplayState(w http.ResponseWriter, _ *http.Request) {
 	setReplayAPIHeaders(w)
 	session, err := resolveReplaySession()
@@ -894,7 +842,7 @@ func handleReplayState(w http.ResponseWriter, _ *http.Request) {
 		if replayErr == nil {
 			replayState = *latestReplay
 		} else if !os.IsNotExist(replayErr) {
-			logging.WarningLogger.Printf("Failed to read replay sentinel for Camera %d: %v", camera, replayErr)
+			logging.WarningLogger.Printf("Failed to read published replay state for Camera %d: %v", camera, replayErr)
 		}
 		response.Cameras = append(response.Cameras, replayState)
 	}
@@ -904,7 +852,7 @@ func handleReplayState(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// handleReplay serves the latest replay for the given camera number from the current session.
+// handleReplay serves the published replay for the given camera number.
 // Example filename: 2025-03-29_03h34m34s_DARSIGNY_Shad_CLEANJERK_attempt3_Camera1.mp4
 func handleReplay(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
@@ -922,24 +870,24 @@ func handleReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generation := currentReplayGeneration(camera)
-	logging.InfoLogger.Printf("=== REPLAY REQUEST RESOLVING timestamp=%s camera=%d generation=%d sentinel=%q ===", replayLogTimestamp(), camera, generation, replaySentinelPath(camera))
+	logging.InfoLogger.Printf("=== REPLAY REQUEST RESOLVING timestamp=%s camera=%d generation=%d ===", replayLogTimestamp(), camera, generation)
 
 	latestReplay, err := findPublishedReplayForCamera(camera)
 	if os.IsNotExist(err) {
-		logging.InfoLogger.Printf("=== REPLAY REQUEST WAITING timestamp=%s camera=%d timeoutMs=%d sentinel=%q ===", replayLogTimestamp(), camera, replayReadyWaitTimeout.Milliseconds(), replaySentinelPath(camera))
+		logging.InfoLogger.Printf("=== REPLAY REQUEST WAITING timestamp=%s camera=%d timeoutMs=%d ===", replayLogTimestamp(), camera, replayReadyWaitTimeout.Milliseconds())
 		latestReplay, err = waitForPublishedReplayForCamera(r.Context(), camera)
 	}
 	if err != nil {
 		if os.IsNotExist(err) {
-			logging.WarningLogger.Printf("=== REPLAY REQUEST NOT FOUND timestamp=%s camera=%d waitedMs=%d sentinel=%q ===", replayLogTimestamp(), camera, time.Since(startTime).Milliseconds(), replaySentinelPath(camera))
+			logging.WarningLogger.Printf("=== REPLAY REQUEST NOT FOUND timestamp=%s camera=%d waitedMs=%d ===", replayLogTimestamp(), camera, time.Since(startTime).Milliseconds())
 			http.Error(w, "No completed replay published for camera "+cameraNum, http.StatusNotFound)
 			return
 		}
 		if err == context.Canceled || err == context.DeadlineExceeded {
-			logging.WarningLogger.Printf("=== REPLAY REQUEST ABORTED timestamp=%s camera=%d waitedMs=%d sentinel=%q error=%v ===", replayLogTimestamp(), camera, time.Since(startTime).Milliseconds(), replaySentinelPath(camera), err)
+			logging.WarningLogger.Printf("=== REPLAY REQUEST ABORTED timestamp=%s camera=%d waitedMs=%d error=%v ===", replayLogTimestamp(), camera, time.Since(startTime).Milliseconds(), err)
 			return
 		}
-		logging.ErrorLogger.Printf("=== REPLAY REQUEST FAILED timestamp=%s camera=%d sentinel=%q error=%v ===", replayLogTimestamp(), camera, replaySentinelPath(camera), err)
+		logging.ErrorLogger.Printf("=== REPLAY REQUEST FAILED timestamp=%s camera=%d error=%v ===", replayLogTimestamp(), camera, err)
 		http.Error(w, "Failed to resolve replay for camera "+cameraNum, http.StatusInternalServerError)
 		return
 	}
@@ -958,7 +906,7 @@ func handleReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generation = currentReplayGeneration(camera)
-	logging.InfoLogger.Printf("=== REPLAY REQUEST SERVING timestamp=%s camera=%d generation=%d session=%q filename=%q video=%q sizeBytes=%d modTime=%q sentinel=%q ===", replayLogTimestamp(), camera, generation, latestReplay.Session, latestReplay.Filename, videoPath, videoInfo.Size(), videoInfo.ModTime().Format("2006-01-02 15:04:05.000 MST"), replaySentinelPath(camera))
+	logging.InfoLogger.Printf("=== REPLAY REQUEST SERVING timestamp=%s camera=%d generation=%d session=%q filename=%q video=%q sizeBytes=%d modTime=%q ===", replayLogTimestamp(), camera, generation, latestReplay.Session, latestReplay.Filename, videoPath, videoInfo.Size(), videoInfo.ModTime().Format("2006-01-02 15:04:05.000 MST"))
 	w.Header().Set("X-Replay-Camera", strconv.Itoa(camera))
 	w.Header().Set("X-Replay-Session", latestReplay.Session)
 	w.Header().Set("X-Replay-Filename", latestReplay.Filename)

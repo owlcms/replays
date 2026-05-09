@@ -145,8 +145,8 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 
 	for i := range cameras {
 		cameraNumber := i + 1
-		if err := httpServer.ClearReplaySentinel(cameraNumber); err != nil {
-			logging.ErrorLogger.Printf("Failed to clear replay sentinel at recording start for Camera %d: %v", cameraNumber, err)
+		if err := httpServer.ClearPublishedReplayState(cameraNumber); err != nil {
+			logging.ErrorLogger.Printf("Failed to clear published replay state at recording start for Camera %d: %v", cameraNumber, err)
 		}
 	}
 
@@ -206,8 +206,8 @@ func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs int64, startTime int64, sessionDir string, fullSessionDir string, timestamp string, finalFileNames []string) {
 	defer wg.Done()
 	cameraNumber := i + 1
-	if err := httpServer.ClearReplaySentinel(cameraNumber); err != nil {
-		logging.ErrorLogger.Printf("Failed to clear replay sentinel for Camera %d: %v", cameraNumber, err)
+	if err := httpServer.ClearPublishedReplayState(cameraNumber); err != nil {
+		logging.ErrorLogger.Printf("Failed to clear published replay state for Camera %d: %v", cameraNumber, err)
 	}
 
 	baseFileName := strings.TrimSuffix(filepath.Base(currentFileName), filepath.Ext(currentFileName))
@@ -232,8 +232,8 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs 
 			return
 		}
 		if !config.NoVideo {
-			if err := httpServer.PublishReplaySentinel(cameraNumber, sessionDir, filepath.Base(finalFileName)); err != nil {
-				logging.ErrorLogger.Printf("Failed to publish replay sentinel for Camera %d: %v", cameraNumber, err)
+			if err := httpServer.PublishReplayState(cameraNumber, sessionDir, filepath.Base(finalFileName), 0); err != nil {
+				logging.ErrorLogger.Printf("Failed to publish replay state for Camera %d: %v", cameraNumber, err)
 			}
 		}
 	} else {
@@ -257,8 +257,8 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs 
 				return
 			}
 		}
-		if err = httpServer.PublishReplaySentinel(cameraNumber, sessionDir, filepath.Base(finalFileName)); err != nil {
-			logging.ErrorLogger.Printf("Failed to publish replay sentinel for Camera %d: %v", cameraNumber, err)
+		if err = httpServer.PublishReplayState(cameraNumber, sessionDir, filepath.Base(finalFileName), keepFromEndMs); err != nil {
+			logging.ErrorLogger.Printf("Failed to publish replay state for Camera %d: %v", cameraNumber, err)
 			return
 		}
 		if err = os.Remove(currentFileName); err != nil {
