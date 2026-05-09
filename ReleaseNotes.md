@@ -1,5 +1,6 @@
 **Change log**
 
+- 2.3.5: Support tracker OBS plugin prefetch of replays (add URL to websocket notification)
 - 2.3.4: Replay module now sends an explicit status of the available replays over websocket to support tracker jury plugin
 - 2.3.4: Check camera unicast destinations for reachability to prevent ffmpeg tee errors
 - 2.3.3: Linux vs Windows differences
