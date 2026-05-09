@@ -132,6 +132,42 @@ func buildTrimmingArgs(keepFromEndMs int64, currentFileName, finalFileName strin
 	return args
 }
 
+// probeVideoDurationMs runs ffprobe against a finalized video file and returns
+// its actual duration in milliseconds. Returns 0 (and logs a warning) if the
+// duration cannot be determined; callers should fall back to the requested
+// trim length in that case.
+func probeVideoDurationMs(filePath string) int64 {
+	ffmpegPath := config.GetFFmpegPath()
+	ffprobePath := resolveFFprobePath(ffmpegPath)
+	if ffprobePath == "" {
+		logging.WarningLogger.Printf("ffprobe path not resolved; cannot probe duration of %s", filePath)
+		return 0
+	}
+	cmd := CreateHiddenCmd(ffprobePath,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		filePath,
+	)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		logging.WarningLogger.Printf("ffprobe failed for %s: %v", filePath, err)
+		return 0
+	}
+	trimmed := strings.TrimSpace(out.String())
+	if trimmed == "" {
+		logging.WarningLogger.Printf("ffprobe returned no duration for %s", filePath)
+		return 0
+	}
+	seconds, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil || seconds <= 0 {
+		logging.WarningLogger.Printf("ffprobe duration parse failed for %s (raw=%q): %v", filePath, trimmed, err)
+		return 0
+	}
+	return int64(seconds*1000.0 + 0.5)
+}
+
 // StartRecording starts recording videos using ffmpeg for all configured cameras
 func StartRecording(fullName, liftTypeKey string, attemptNumber int) error {
 	Recording = true
@@ -266,7 +302,20 @@ func trimVideo(wg *sync.WaitGroup, i int, currentFileName string, keepFromEndMs 
 				return
 			}
 		}
-		if err = httpServer.PublishReplayState(cameraNumber, sessionDir, filepath.Base(finalFileName), keepFromEndMs); err != nil {
+		// Probe the actual on-disk duration of the trimmed file. ffmpeg's
+		// -sseof snaps to the previous keyframe, so the resulting clip is
+		// usually shorter than keepFromEndMs. Publishing the requested
+		// keepFromEndMs caused downstream players (OBS scenes in tracker)
+		// to wait for non-existent frames and show a black tail.
+		probedDurationMs := probeVideoDurationMs(finalFileName)
+		publishedDurationMs := probedDurationMs
+		if publishedDurationMs <= 0 {
+			logging.WarningLogger.Printf("Falling back to requested duration %dms for Camera %d (%s); ffprobe did not return a usable value", keepFromEndMs, cameraNumber, finalFileName)
+			publishedDurationMs = keepFromEndMs
+		} else if keepFromEndMs > 0 && probedDurationMs != keepFromEndMs {
+			logging.InfoLogger.Printf("Camera %d: probed duration %dms differs from requested %dms (delta=%dms) for %s", cameraNumber, probedDurationMs, keepFromEndMs, probedDurationMs-keepFromEndMs, finalFileName)
+		}
+		if err = httpServer.PublishReplayState(cameraNumber, sessionDir, filepath.Base(finalFileName), publishedDurationMs); err != nil {
 			logging.ErrorLogger.Printf("Failed to publish replay state for Camera %d: %v", cameraNumber, err)
 			return
 		}
