@@ -1,10 +1,10 @@
 package config
 
-var programVersion = "1.8.1"
+var programVersion = "_TAG_"
 
 // GetProgramVersion returns the current version of the program
 func GetProgramVersion() string {
-	if programVersion == "_" + "TAG_" {
+	if programVersion == "_"+"TAG_" {
 		return "dev"
 	}
 	return programVersion
