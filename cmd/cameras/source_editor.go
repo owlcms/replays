@@ -23,6 +23,7 @@ const (
 	usbFormatWidth   = 110
 	usbProbeWidth    = 80
 	usbRestartWidth  = 80
+	usbRemoveWidth   = 80
 
 	rtspEnabledWidth   = 100
 	rtspNameWidth      = 180
@@ -80,6 +81,7 @@ type usbSourceRow struct {
 	attachmentPath  string
 	matchKey        string
 	identity        string
+	detected        bool
 	dirty           bool
 	storedEnabled   bool
 	storedName      string
@@ -122,6 +124,7 @@ func newUSBSourceRow(spec sourceSpec) *usbSourceRow {
 		attachmentPath:  spec.AttachmentPath,
 		matchKey:        spec.Key,
 		identity:        spec.Summary,
+		detected:        spec.Detected,
 		dirtyReasons:    append([]string(nil), spec.DirtyReasons...),
 		detectedPixFmt:  spec.Camera.PixFmt,
 		detectedSize:    spec.Camera.Size,
@@ -189,7 +192,7 @@ func (r *usbSourceRow) hasPendingChanges() bool {
 		r.currentFormat() != r.storedFormat
 }
 
-func (r *usbSourceRow) object(probe func(), _ func() bool, _, restart func()) fyne.CanvasObject {
+func (r *usbSourceRow) object(probe func(), _ func() bool, remove func(), restart func()) fyne.CanvasObject {
 	r.nameEntry.onFocusLost = nil
 	r.nameEntry.OnSubmitted = nil
 	r.shortIDEntry.onFocusLost = nil
@@ -215,6 +218,14 @@ func (r *usbSourceRow) object(probe func(), _ func() bool, _, restart func()) fy
 	r.restartBtn = restartBtn
 	r.refreshRestartHighlight()
 	identity := newReadOnlyEntry(r.identity)
+	removeControl := fyne.CanvasObject(widget.NewLabel(""))
+	if !r.detected {
+		removeControl = widget.NewButton("Remove", func() {
+			if remove != nil {
+				remove()
+			}
+		})
+	}
 	return container.NewHBox(
 		fixedWidth(usbEnabledWidth, r.enabledCheck),
 		fixedWidth(usbIdentityWidth, identity),
@@ -224,6 +235,7 @@ func (r *usbSourceRow) object(probe func(), _ func() bool, _, restart func()) fy
 		fixedWidth(usbFormatWidth, r.formatSelect),
 		fixedWidth(usbRestartWidth, restartBtn),
 		fixedWidth(usbProbeWidth, probeBtn),
+		fixedWidth(usbRemoveWidth, removeControl),
 	)
 }
 
@@ -592,4 +604,24 @@ func parseOptionalPort(raw string) (int, error) {
 		return 0, fmt.Errorf("invalid port %q", raw)
 	}
 	return port, nil
+}
+
+func removeDeviceAssignment(assignments []camerascfg.DeviceAssignment, attachmentPath, matchKey string) ([]camerascfg.DeviceAssignment, camerascfg.DeviceAssignment, bool) {
+	attachmentPath = strings.TrimSpace(attachmentPath)
+	matchKey = strings.TrimSpace(matchKey)
+	for i := range assignments {
+		if attachmentPath != "" && strings.TrimSpace(assignments[i].AttachmentPath) == attachmentPath {
+			removed := assignments[i]
+			updated := append([]camerascfg.DeviceAssignment{}, assignments[:i]...)
+			updated = append(updated, assignments[i+1:]...)
+			return updated, removed, true
+		}
+		if matchKey != "" && strings.TrimSpace(assignments[i].MatchKey) == matchKey {
+			removed := assignments[i]
+			updated := append([]camerascfg.DeviceAssignment{}, assignments[:i]...)
+			updated = append(updated, assignments[i+1:]...)
+			return updated, removed, true
+		}
+	}
+	return assignments, camerascfg.DeviceAssignment{}, false
 }

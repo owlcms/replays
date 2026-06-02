@@ -132,17 +132,17 @@ func TestTCPDialErrorMeansReachable(t *testing.T) {
 	}{
 		{
 			name: "connection refused means host reachable",
-			err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
 			want: true,
 		},
 		{
 			name: "connection reset means host reachable",
-			err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNRESET)},
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNRESET)},
 			want: true,
 		},
 		{
 			name: "network unreachable stays unreachable",
-			err: &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ENETUNREACH)},
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ENETUNREACH)},
 			want: false,
 		},
 	}
@@ -450,6 +450,38 @@ func TestPreviewArgsForSize(t *testing.T) {
 				t.Fatalf("previewArgsForSize(%q) = %v, want %v", tc.size, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestEnabledUnicastDestinationsAlwaysIncludePreviewLoopback(t *testing.T) {
+	destinations := []camerascfg.UnicastDestination{
+		{Address: "192.0.2.44", Enabled: true},
+		{Address: "localhost", Enabled: true},
+		{Address: "   ", Enabled: true},
+		{Address: "198.51.100.7", Enabled: false},
+	}
+
+	got := enabledUnicastDestinations(destinations)
+	if len(got) != 2 {
+		t.Fatalf("enabledUnicastDestinations() returned %d destinations, want 2: %#v", len(got), got)
+	}
+	if got[0].Address != camerascfg.PreviewLoopbackAddress {
+		t.Fatalf("enabledUnicastDestinations()[0] = %q, want %q", got[0].Address, camerascfg.PreviewLoopbackAddress)
+	}
+	if got[1].Address != "192.0.2.44" {
+		t.Fatalf("enabledUnicastDestinations()[1] = %q, want 192.0.2.44", got[1].Address)
+	}
+}
+
+func TestCameraStreamListenURLUsesBroadcastMode(t *testing.T) {
+	unicastStream := &cameraStream{port: 9001, udpDest: "ignored", unicastMode: true}
+	if got := unicastStream.listenURL(); got != "udp://127.0.0.1:9001" {
+		t.Fatalf("listenURL() in unicast mode = %q, want udp://127.0.0.1:9001", got)
+	}
+
+	multicastStream := &cameraStream{port: 9001, udpDest: "udp://239.255.0.1:9001?pkt_size=1316", unicastMode: false}
+	if got := multicastStream.listenURL(); got != "udp://239.255.0.1:9001?pkt_size=1316" {
+		t.Fatalf("listenURL() in multicast mode = %q, want multicast destination", got)
 	}
 }
 
@@ -841,6 +873,42 @@ func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t
 	inv := assembleSourceInventory(sources, nil, nil)
 	if len(inv.Active) != 1 || inv.Active[0].Key != "usb-enabled" {
 		t.Fatalf("active inventory = %+v, want only enabled detected source", inv.Active)
+	}
+}
+
+func TestRemoveDeviceAssignmentUsesAttachmentPathFirst(t *testing.T) {
+	assignments := []camerascfg.DeviceAssignment{
+		{AttachmentPath: "/dev/v4l/by-path/stale", MatchKey: "usb-stale", Name: "Stale Cam"},
+		{AttachmentPath: "/dev/v4l/by-path/live", MatchKey: "usb-live", Name: "Live Cam"},
+	}
+
+	updated, removed, ok := removeDeviceAssignment(assignments, "/dev/v4l/by-path/stale", "usb-live")
+	if !ok {
+		t.Fatal("removeDeviceAssignment() = not found, want stale assignment removed by attachment path")
+	}
+	if removed.Name != "Stale Cam" {
+		t.Fatalf("removed assignment = %+v, want Stale Cam", removed)
+	}
+	if len(updated) != 1 || updated[0].Name != "Live Cam" {
+		t.Fatalf("updated assignments = %+v, want only Live Cam", updated)
+	}
+}
+
+func TestRemoveDeviceAssignmentFallsBackToMatchKey(t *testing.T) {
+	assignments := []camerascfg.DeviceAssignment{
+		{MatchKey: "usb-stale", Name: "Stale Cam"},
+		{MatchKey: "usb-live", Name: "Live Cam"},
+	}
+
+	updated, removed, ok := removeDeviceAssignment(assignments, "", "usb-live")
+	if !ok {
+		t.Fatal("removeDeviceAssignment() = not found, want live assignment removed by match key")
+	}
+	if removed.Name != "Live Cam" {
+		t.Fatalf("removed assignment = %+v, want Live Cam", removed)
+	}
+	if len(updated) != 1 || updated[0].Name != "Stale Cam" {
+		t.Fatalf("updated assignments = %+v, want only Stale Cam", updated)
 	}
 }
 

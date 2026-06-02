@@ -37,6 +37,9 @@ type Config struct {
 // PktSize is the fixed UDP packet size for MPEG-TS streaming (7 × 188).
 const PktSize = 1316
 
+// PreviewLoopbackAddress is the mandatory local unicast leg used by preview.
+const PreviewLoopbackAddress = "127.0.0.1"
+
 // MulticastConfig holds multicast streaming settings.
 type MulticastConfig struct {
 	IP        string `toml:"ip"`
@@ -602,16 +605,42 @@ func quoteStrings(values []string) string {
 // Each enabled destination gets its own "[f=mpegts:onfail=ignore]udp://ip:port?pkt_size=N" leg.
 func (c *UnicastConfig) TeeOutput(port int) string {
 	var legs []string
+	seen := make(map[string]struct{}, len(c.Destinations)+1)
+	addLeg := func(address string) {
+		normalized := NormalizeUnicastDestinationAddress(address)
+		if normalized == "" {
+			return
+		}
+		key := strings.ToLower(normalized)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		legs = append(legs, fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", normalized, port, PktSize))
+	}
+
+	addLeg(PreviewLoopbackAddress)
 	for _, dest := range c.Destinations {
 		if !dest.Enabled {
 			continue
 		}
-		trimmedAddress := strings.TrimSpace(dest.Address)
-		if trimmedAddress == "" {
-			continue
-		}
-		leg := fmt.Sprintf("[f=mpegts:onfail=ignore]udp://%s:%d?pkt_size=%d", trimmedAddress, port, PktSize)
-		legs = append(legs, leg)
+		addLeg(dest.Address)
 	}
 	return strings.Join(legs, "|")
+}
+
+// NormalizeUnicastDestinationAddress canonicalizes loopback destinations so
+// preview can always listen on a stable local IPv4 address.
+func NormalizeUnicastDestinationAddress(address string) string {
+	trimmed := strings.TrimSpace(address)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.Trim(trimmed, "[]")
+	switch strings.ToLower(trimmed) {
+	case "127.0.0.1", "localhost", "::1":
+		return PreviewLoopbackAddress
+	default:
+		return trimmed
+	}
 }

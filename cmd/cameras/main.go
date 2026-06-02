@@ -569,17 +569,27 @@ func multicastOutputURL(multicast camerascfg.MulticastConfig, port int) string {
 }
 
 func enabledUnicastDestinations(destinations []camerascfg.UnicastDestination) []camerascfg.UnicastDestination {
-	enabled := make([]camerascfg.UnicastDestination, 0, len(destinations))
+	enabled := make([]camerascfg.UnicastDestination, 0, len(destinations)+1)
+	seen := make(map[string]struct{}, len(destinations)+1)
+	appendDestination := func(address string) {
+		normalized := camerascfg.NormalizeUnicastDestinationAddress(address)
+		if normalized == "" {
+			return
+		}
+		key := strings.ToLower(normalized)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		enabled = append(enabled, camerascfg.UnicastDestination{Address: normalized, Enabled: true})
+	}
+
+	appendDestination(camerascfg.PreviewLoopbackAddress)
 	for _, destination := range destinations {
 		if !destination.Enabled {
 			continue
 		}
-		trimmedAddress := strings.TrimSpace(destination.Address)
-		if trimmedAddress == "" {
-			continue
-		}
-		destination.Address = trimmedAddress
-		enabled = append(enabled, destination)
+		appendDestination(destination.Address)
 	}
 	return enabled
 }
@@ -2451,6 +2461,7 @@ func runUI() {
 	var syncUSBRowFromSpec func(*usbSourceRow, sourceSpec)
 	var syncRTSPRowFromSpec func(*rtspSourceRow, sourceSpec)
 	var saveUSBRow func(*usbSourceRow) error
+	var removeUSBRow func(*usbSourceRow) error
 	var saveRTSPRow func(*rtspSourceRow) error
 	var removeRTSPRow func(*rtspSourceRow) error
 	var clearRestartDirtyForSource func(sourceSpec) error
@@ -2491,6 +2502,7 @@ func runUI() {
 				fixedWidth(usbFormatWidth, widget.NewLabel("Format")),
 				fixedWidth(usbRestartWidth, widget.NewLabel("")),
 				fixedWidth(usbProbeWidth, widget.NewLabel("")),
+				fixedWidth(usbRemoveWidth, widget.NewLabel("")),
 			),
 		}
 		for i, row := range usbRows {
@@ -2525,7 +2537,12 @@ func runUI() {
 					return false
 				}
 				return true
-			}, nil, func() {
+			}, func() {
+				if err := removeUSBRow(usbRows[index]); err != nil {
+					dialog.ShowError(err, window)
+					actionStatus.SetText(fmt.Sprintf("Remove failed: %v", err))
+				}
+			}, func() {
 				row := usbRows[index]
 				wasRunning := false
 				for _, stream := range *currentStreams {
@@ -3581,6 +3598,7 @@ func runUI() {
 		row.attachmentPath = spec.AttachmentPath
 		row.matchKey = spec.Key
 		row.identity = spec.Summary
+		row.detected = spec.Detected
 		row.dirtyReasons = append([]string(nil), spec.DirtyReasons...)
 		row.detectedPixFmt = spec.Camera.PixFmt
 		row.detectedSize = spec.Camera.Size
@@ -3717,6 +3735,34 @@ func runUI() {
 			message = fmt.Sprintf("Saved %s. Restart required.", name)
 		}
 		actionStatus.SetText(verificationMessage(message))
+		return nil
+	}
+
+	removeUSBRow = func(row *usbSourceRow) error {
+		if row == nil {
+			return fmt.Errorf("source row not found")
+		}
+		if row.detected {
+			return fmt.Errorf("only stale sources can be removed")
+		}
+		updatedAssignments, removed, ok := removeDeviceAssignment(camerasConfig.DeviceAssignments, row.attachmentPath, row.matchKey)
+		if !ok {
+			return fmt.Errorf("source %s not found", configRowName(row.nameEntry.Text, row.identity))
+		}
+		camerasConfig.DeviceAssignments = updatedAssignments
+		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+			return fmt.Errorf("save failed: %w", err)
+		}
+		refreshInventoryFromConfig(false)
+		for i := range usbRows {
+			if usbRows[i] == row {
+				usbRows = append(usbRows[:i], usbRows[i+1:]...)
+				break
+			}
+		}
+		renderUSBRows()
+		name := configRowName(removed.Name, row.identity)
+		actionStatus.SetText(verificationMessage(fmt.Sprintf("Removed %s.", name)))
 		return nil
 	}
 
