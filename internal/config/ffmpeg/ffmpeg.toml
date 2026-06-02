@@ -113,7 +113,8 @@
     inputParameters = "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtbufsize 512M -thread_queue_size 4096"
     videoFilter = "format=nv12,hwupload"
     # -bf 0 ensures monotonic DTS for downstream `-c copy` trims.
-    outputParameters = "-c:v h264_vaapi -profile:v main -rc_mode cbr -b:v 8M -maxrate 8M -bufsize 8M -bf 0"
+    # Note: h264_vaapi does not support -rc_mode; CBR is achieved via matching -b:v/-maxrate/-bufsize.
+    outputParameters = "-c:v h264_vaapi -profile:v main -b:v 8M -maxrate 8M -bufsize 8M -bf 0"
     testInit = "-init_hw_device vaapi=va:/dev/dri/renderD128"
 
 [[encoder]]

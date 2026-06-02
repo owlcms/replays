@@ -38,7 +38,7 @@ logFfmpeg = false
 #    - auto.toml [cameraN] sections load first
 #    - config.toml [windows*]/[linux*] sections append additional sources
 #    - matching manual sources override the same source from auto.toml
-# 3) default_cameras.toml platform sections are used only when no direct-input sources are configured
+# If no source is configured by any of the above, replays starts with no camera sources.
 
 
 # Recommended workflow:

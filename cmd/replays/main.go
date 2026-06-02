@@ -198,35 +198,14 @@ func formatEnabledCameraList(cfg *replays.Config) string {
 	}
 
 	if len(cfg.Cameras) == 0 {
-		if cfg.Multicast.Enabled {
-			return "Cameras Module Streams are enabled, but no stream ports are configured."
-		}
-		return "No enabled cameras are configured for direct input."
+		return "No Cameras Module stream ports are configured."
 	}
 
 	var builder strings.Builder
-	if cfg.Multicast.Enabled {
-		builder.WriteString("Source mode: Cameras Module Streams\n\n")
-	} else {
-		builder.WriteString("Source mode: Direct input\n\n")
-	}
+	builder.WriteString("Camera streams received by replays:\n\n")
 
 	for i, camera := range cfg.Cameras {
 		builder.WriteString(fmt.Sprintf("%d. %s\n", i+1, camera.FfmpegCamera))
-		builder.WriteString(fmt.Sprintf("   Format: %s\n", camera.Format))
-		if strings.TrimSpace(camera.Size) != "" {
-			builder.WriteString(fmt.Sprintf("   Size: %s\n", camera.Size))
-		}
-		if camera.Fps > 0 {
-			builder.WriteString(fmt.Sprintf("   FPS: %d\n", camera.Fps))
-		}
-		if strings.TrimSpace(camera.InputParameters) != "" {
-			builder.WriteString(fmt.Sprintf("   Input: %s\n", camera.InputParameters))
-		}
-		if strings.TrimSpace(camera.OutputParameters) != "" {
-			builder.WriteString(fmt.Sprintf("   Output: %s\n", camera.OutputParameters))
-		}
-		builder.WriteString(fmt.Sprintf("   Recode on trim: %t\n", camera.Recode))
 		if i < len(cfg.Cameras)-1 {
 			builder.WriteString("\n")
 		}
@@ -491,31 +470,6 @@ func openConfigFile() {
 // Multicast camera helpers
 // ---------------------------------------------------------------------------
 
-// toggleMulticast flips the Cameras Module Streams flag, saves, and prompts for restart.
-func toggleMulticast(cfg *replays.Config, window fyne.Window) {
-	cfg.Multicast.Enabled = !cfg.Multicast.Enabled
-
-	configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
-	if err := replays.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
-		dialog.ShowError(fmt.Errorf("failed to save Cameras Module Stream setting: %w", err), window)
-		cfg.Multicast.Enabled = !cfg.Multicast.Enabled // revert
-		return
-	}
-
-	var msg string
-	if cfg.Multicast.Enabled {
-		msg = "Cameras Module Streams enabled."
-	} else {
-		msg = "Cameras Module Streams disabled. Local cameras will be used."
-	}
-	successDialog := dialog.NewInformation("Success", msg+" The application will now exit. Please restart it.", window)
-	successDialog.SetOnClosed(func() {
-		window.Close()
-		os.Exit(0)
-	})
-	successDialog.Show()
-}
-
 // showMulticastConfig shows a dialog to configure the Cameras Module Stream IP and port mapping.
 func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	m := cfg.Multicast
@@ -623,14 +577,6 @@ func showMulticastConfig(cfg *replays.Config, window fyne.Window) {
 	dlg.Show()
 }
 
-// multicastToggleLabel returns the menu label text based on current state.
-func multicastToggleLabel(enabled bool) string {
-	if enabled {
-		return "Stop using Cameras Module Streams"
-	}
-	return "Use Cameras Module Streams"
-}
-
 // isUnicastIP reports whether ip is a unicast listen address (0.0.0.0 or a
 // non-multicast IP), as opposed to a multicast group address.
 func isUnicastIP(ip string) bool {
@@ -642,10 +588,6 @@ func isUnicastIP(ip string) bool {
 }
 
 func localMulticastMismatchNote(cfg *replays.Config) string {
-	if !cfg.Multicast.Enabled {
-		return ""
-	}
-
 	replaysIP := strings.TrimSpace(cfg.Multicast.IP)
 
 	// If replays is configured for unicast listening, show an informational note
@@ -815,10 +757,6 @@ func main() {
 	window.CenterOnScreen()
 
 	// Create main menu
-	multicastToggle := fyne.NewMenuItem(multicastToggleLabel(cfg.Multicast.Enabled), nil)
-	multicastToggle.Action = func() {
-		toggleMulticast(cfg, window)
-	}
 	multicastConfigItem := fyne.NewMenuItem("Cameras Module Stream Configuration", func() {
 		showMulticastConfig(cfg, window)
 	})
@@ -846,21 +784,10 @@ func main() {
 				showLocalCamerasImportDialog(cfg, window)
 			}),
 			multicastConfigItem,
-			multicastToggle,
 			fyne.NewMenuItemSeparator(),
 			// Camera tooling
 			fyne.NewMenuItem("List Enabled Cameras", func() {
 				showEnabledCameras(cfg, window)
-			}),
-			fyne.NewMenuItem("List Detected Cameras", func() {
-				if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
-					recording.ListCameras(window)
-				}
-			}),
-			fyne.NewMenuItem("Auto-Detect Hardware", func() {
-				if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
-					recording.DetectAndWriteConfig(window)
-				}
 			}),
 		),
 		fyne.NewMenu("Help",

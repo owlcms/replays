@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -57,7 +58,27 @@ type localCamerasSelectionRow struct {
 	check  *widget.Check
 }
 
+// localCamerasInstallDir returns the owlcms-cameras installation directory.
+// In production it is derived from the install layout (sibling of owlcms-replays).
+// Returns "" if in production mode and no sibling cameras install is found —
+// that signals a remote-only deployment where cameras runs on another machine.
 func localCamerasInstallDir() string {
+	// In production, replays runs from <root>/owlcms-replays/<version>/.
+	// Cameras is installed at the sibling <root>/owlcms-cameras/.
+	// Derive that path from GetInstallDir() so it tracks wherever the user
+	// installed the apps, rather than relying on a hardcoded $HOME-based path.
+	if !config.IsLocalDevRuntime() {
+		// GetInstallDir() = <root>/owlcms-replays/<version>
+		// filepath.Dir twice → <root>
+		root := filepath.Dir(filepath.Dir(config.GetInstallDir()))
+		sibling := filepath.Join(root, "owlcms-cameras")
+		if info, err := os.Stat(sibling); err == nil && info.IsDir() {
+			return sibling
+		}
+		// Production mode, no sibling: cameras is on another machine.
+		return ""
+	}
+	// Dev: use OS default install location (then dev fallback in discoverLocalCamerasVersions).
 	switch runtime.GOOS {
 	case "windows":
 		return filepath.Join(os.Getenv("APPDATA"), "owlcms-cameras")
@@ -112,6 +133,10 @@ func localCamerasOverrideOption() (*localCamerasVersionOption, error) {
 	}, nil
 }
 
+// errRemoteCamerasOnly is returned when replays is in production mode with no
+// local Cameras Module installation — cameras runs on a separate machine.
+var errRemoteCamerasOnly = fmt.Errorf("no local Cameras Module installation found: this Replays instance appears to be receiving streams from a remote Cameras Module; use the stream configuration menu to set ports instead")
+
 func discoverLocalCamerasVersions() ([]localCamerasVersionOption, error) {
 	override, err := localCamerasOverrideOption()
 	if err != nil {
@@ -121,7 +146,22 @@ func discoverLocalCamerasVersions() ([]localCamerasVersionOption, error) {
 		return []localCamerasVersionOption{*override}, nil
 	}
 
-	options, err := discoverLocalCamerasVersionsInDir(localCamerasInstallDir())
+	// When replays itself is running from its local dev runtime
+	// (./video_config/replays, no control-panel VIDEO_CONFIGDIR), prefer the
+	// sibling dev cameras config so a production install does not shadow it.
+	if config.IsLocalDevRuntime() {
+		if dev := devLocalCamerasOption(); dev != nil {
+			return []localCamerasVersionOption{*dev}, nil
+		}
+	}
+
+	installDir := localCamerasInstallDir()
+	if installDir == "" {
+		// Production mode, no sibling cameras install: remote use case.
+		return nil, errRemoteCamerasOnly
+	}
+
+	options, err := discoverLocalCamerasVersionsInDir(installDir)
 	if err != nil {
 		return nil, err
 	}
@@ -129,20 +169,30 @@ func discoverLocalCamerasVersions() ([]localCamerasVersionOption, error) {
 		return options, nil
 	}
 
-	devDir, err := filepath.Abs(filepath.Join(".", config.LocalVideoConfigDir, "cameras"))
-	if err == nil {
-		configPath := filepath.Join(devDir, "config.toml")
-		if info, statErr := os.Stat(configPath); statErr == nil && !info.IsDir() {
-			return []localCamerasVersionOption{{
-				Label:      "local-dev",
-				Version:    "local-dev",
-				ConfigDir:  devDir,
-				ConfigPath: configPath,
-			}}, nil
-		}
+	if dev := devLocalCamerasOption(); dev != nil {
+		return []localCamerasVersionOption{*dev}, nil
 	}
 
 	return nil, nil
+}
+
+// devLocalCamerasOption returns the local dev cameras config option
+// (./video_config/cameras/config.toml) if it exists, or nil otherwise.
+func devLocalCamerasOption() *localCamerasVersionOption {
+	devDir, err := filepath.Abs(filepath.Join(".", config.LocalVideoConfigDir, "cameras"))
+	if err != nil {
+		return nil
+	}
+	configPath := filepath.Join(devDir, "config.toml")
+	if info, statErr := os.Stat(configPath); statErr == nil && !info.IsDir() {
+		return &localCamerasVersionOption{
+			Label:      "local-dev",
+			Version:    "local-dev",
+			ConfigDir:  devDir,
+			ConfigPath: configPath,
+		}
+	}
+	return nil
 }
 
 func discoverLocalCamerasVersionsInDir(root string) ([]localCamerasVersionOption, error) {
@@ -614,7 +664,15 @@ func applyLocalCamerasImport(cfg *replayscfg.Config, preview *localCamerasImport
 func showLocalCamerasImportDialog(cfg *replayscfg.Config, window fyne.Window) {
 	options, err := discoverLocalCamerasVersions()
 	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to scan local Cameras Module versions: %w", err), window)
+		if errors.Is(err, errRemoteCamerasOnly) {
+			dialog.ShowInformation("Cameras Module Not Local",
+				"No local Cameras Module installation was found.\n\n"+
+					"This Replays instance appears to be receiving streams from a Cameras Module running on another machine.\n\n"+
+					"Use \"Cameras Module Stream Configuration\" to configure the stream ports.",
+				window)
+		} else {
+			dialog.ShowError(fmt.Errorf("failed to scan local Cameras Module versions: %w", err), window)
+		}
 		return
 	}
 	if len(options) == 0 {

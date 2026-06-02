@@ -207,7 +207,6 @@ func DetectEncodersWithConfigAndProgress(cfg *ffmpeg.Config, progress ProbeProgr
 	return merged
 }
 
-
 func shouldRetrySystemFFmpegProbe(found []HwEncoder, cfg *ffmpeg.Config) bool {
 	vendors := detectGPUVendors()
 	if cfg == nil {
@@ -1339,7 +1338,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 	buf.WriteString("#    - auto.toml [cameraN] sections load first\n")
 	buf.WriteString("#    - config.toml [windows*]/[linux*] sections append additional sources\n")
 	buf.WriteString("#    - matching manual sources override the same source from auto.toml\n")
-	buf.WriteString("# 3) default_cameras.toml is used only when no direct-input sources are configured\n")
+	buf.WriteString("# If no source is configured by any of the above, replays starts with no camera sources.\n")
 	buf.WriteString("#\n")
 	buf.WriteString("# Recommended workflow:\n")
 	buf.WriteString("# - leave auto.toml as the generated baseline\n")

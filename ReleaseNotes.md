@@ -1,5 +1,8 @@
 **Change log**
 
+- 2.4.0: replays now works exclusively using streams produced by the cameras module.  If replays is installed on the same machine as the cameras module, you can read the ports in use using the menu. Otherwise use the ports mapping dialog.
+- 2.4.0: improved the cleanup of stale USB devices
+
 - 2.3.5: Support tracker OBS plugin prefetch of replays (add URL to websocket notification)
 - 2.3.4: Replay module now sends an explicit status of the available replays over websocket to support tracker jury plugin
 - 2.3.4: Check camera unicast destinations for reachability to prevent ffmpeg tee errors

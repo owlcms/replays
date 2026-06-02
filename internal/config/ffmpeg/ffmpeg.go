@@ -148,20 +148,26 @@ func parseEmbeddedDefaultConfig() (Config, error) {
 	return cfg, err
 }
 
-// ExtractDefaultConfig writes ffmpeg.toml to the shared config directory
-// if it doesn't already exist. Returns the written path or "" on error.
+// ExtractDefaultConfig writes ffmpeg.toml to the shared config directory,
+// always overwriting with the embedded version so upgrades pick up the latest
+// encoder settings. Returns the written path or "" on error.
 func ExtractDefaultConfig() string {
 	sharedPath := ResolveConfigPath()
 	if err := os.MkdirAll(filepath.Dir(sharedPath), 0755); err != nil {
 		logging.ErrorLogger.Printf("Failed to create directory for ffmpeg.toml: %v", err)
 		return ""
 	}
-	if _, err := os.Stat(sharedPath); os.IsNotExist(err) {
+	existing, readErr := os.ReadFile(sharedPath)
+	if readErr != nil || string(existing) != string(defaultConfig) {
 		if err := os.WriteFile(sharedPath, defaultConfig, 0644); err != nil {
 			logging.ErrorLogger.Printf("Failed to write ffmpeg.toml: %v", err)
 			return ""
 		}
-		logging.InfoLogger.Printf("Wrote default ffmpeg.toml to %s", sharedPath)
+		if readErr != nil {
+			logging.InfoLogger.Printf("Wrote default ffmpeg.toml to %s", sharedPath)
+		} else {
+			logging.InfoLogger.Printf("Updated ffmpeg.toml to current embedded version at %s", sharedPath)
+		}
 	}
 	return sharedPath
 }

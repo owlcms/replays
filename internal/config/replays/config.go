@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -56,252 +55,45 @@ func LoadConfig(configFile string) (*Config, error) {
 	}
 	logging.InfoLogger.Printf("Videos will be stored in: %s", cfg.VideoDir)
 
-	var raw map[string]interface{}
-	if _, err := toml.DecodeFile(configFile, &raw); err != nil {
-		return nil, fmt.Errorf("failed to parse config file for camera configurations: %w", err)
-	}
+	// Replays is a pure MPEG-TS receiver: cameras are always provided as UDP
+	// streams from the Cameras module (local or remote). There is no local
+	// capture / autodetection path.
+	cfg.Multicast.Enabled = true
+	cfg.Multicast.ApplyDefaults()
 
-	if !hasMpegTSEnabledKey(raw) {
-		cfg.Multicast.Enabled = true
-	}
-
-	platformKey := getPlatformName()
-	var cameras []config.CameraConfiguration
-
-	decodePlatformConfig := func(sectionName string, data interface{}) (config.CameraConfiguration, error) {
-		m, ok := data.(map[string]interface{})
-		if !ok {
-			return config.CameraConfiguration{}, fmt.Errorf("invalid type for platform config")
-		}
-		var pc config.CameraConfiguration
-		if val, ok := m["enabled"].(bool); ok && !val {
-			logging.InfoLogger.Printf("Camera configuration for section %s is disabled", sectionName)
-			return config.CameraConfiguration{}, fmt.Errorf("camera configuration for section %s is disabled", sectionName)
-		}
-		if val, ok := m["ffmpegPath"].(string); ok {
-			pc.FfmpegPath = val
-		}
-		if val, ok := m["ffmpegCamera"].(string); ok {
-			pc.FfmpegCamera = val
-		}
-		if val, ok := m["camera"].(string); ok {
-			pc.FfmpegCamera = val
-		}
-		if val, ok := m["platform"].(string); ok {
-			pc.Platform = strings.ToLower(strings.TrimSpace(val))
-		}
-		if val, ok := m["format"].(string); ok {
-			pc.Format = val
-		}
-		if val, ok := m["params"].(string); ok {
-			pc.Params = val
-		}
-		if val, ok := m["inputParameters"].(string); ok {
-			pc.InputParameters = val
-		}
-		if val, ok := m["outputParameters"].(string); ok {
-			pc.OutputParameters = val
-		}
-		if val, ok := m["size"].(string); ok {
-			pc.Size = val
-		}
-		if val, ok := m["fps"].(int64); ok {
-			pc.Fps = int(val)
-		}
-		if val, ok := m["recode"].(bool); ok {
-			pc.Recode = val
-		} else {
-			pc.Recode = false
-		}
-		if pc.Platform == "" {
-			if runtime.GOOS == "windows" && pc.Format == "v4l2" {
-				logging.InfoLogger.Printf("Camera configuration for section %s skipped due to format/platform mismatch: format=%s current=%s", sectionName, pc.Format, runtime.GOOS)
-				return config.CameraConfiguration{}, fmt.Errorf("camera configuration for section %s skipped due to format/platform mismatch", sectionName)
-			}
-			if runtime.GOOS == "linux" && pc.Format == "dshow" {
-				logging.InfoLogger.Printf("Camera configuration for section %s skipped due to format/platform mismatch: format=%s current=%s", sectionName, pc.Format, runtime.GOOS)
-				return config.CameraConfiguration{}, fmt.Errorf("camera configuration for section %s skipped due to format/platform mismatch", sectionName)
-			}
-		}
-		if pc.Platform != "" && pc.Platform != runtime.GOOS {
-			logging.InfoLogger.Printf("Camera configuration for section %s skipped due to platform mismatch: target=%s current=%s", sectionName, pc.Platform, runtime.GOOS)
-			return config.CameraConfiguration{}, fmt.Errorf("camera configuration for section %s skipped due to platform mismatch", sectionName)
-		}
-		if pc.Format == "dshow" && !strings.HasPrefix(pc.FfmpegCamera, "video=") {
-			pc.FfmpegCamera = "video=" + pc.FfmpegCamera
-		}
-		return pc, nil
-	}
-
-	loadPlatformCamerasFromRaw := func(rawMap map[string]interface{}, sourceName string) []config.CameraConfiguration {
-		var result []config.CameraConfiguration
-		for i := 1; ; i++ {
-			key := platformKey
-			if i > 1 {
-				key = platformKey + strconv.Itoa(i)
-			}
-			confRaw, exists := rawMap[key]
-			if !exists {
-				if platformKey == "windows" && i == 1 {
-					confRaw, exists = rawMap["windows1"]
-				} else if platformKey == "linux" && i == 1 {
-					confRaw, exists = rawMap["linux1"]
-				}
-				if !exists {
-					break
-				}
-			}
-			pc, err := decodePlatformConfig(key, confRaw)
-			if err != nil {
-				continue
-			}
-			result = append(result, pc)
-		}
-		if len(result) > 0 {
-			logging.InfoLogger.Printf("Loaded %d camera configurations from %s", len(result), sourceName)
-		}
-		return result
-	}
-
-	loadAutoCamerasFromRaw := func(rawMap map[string]interface{}, sourceName string) []config.CameraConfiguration {
-		var result []config.CameraConfiguration
-		for i := 1; ; i++ {
-			key := "camera" + strconv.Itoa(i)
-			confRaw, exists := rawMap[key]
-			if !exists {
-				break
-			}
-			pc, err := decodePlatformConfig(key, confRaw)
-			if err != nil {
-				continue
-			}
-			result = append(result, pc)
-		}
-		if len(result) > 0 {
-			logging.InfoLogger.Printf("Loaded %d camera configurations from %s", len(result), sourceName)
-		}
-		return result
-	}
-
-	if cfg.Multicast.Enabled {
-		cfg.Multicast.ApplyDefaults()
-		multicastCameras := cfg.Multicast.BuildCameraConfigs()
-		if len(multicastCameras) == 0 {
-			return nil, fmt.Errorf("mpeg-ts is enabled but no camera ports are configured in %s", configFile)
-		}
-		cameras = multicastCameras
-		logging.InfoLogger.Printf("MPEG-TS mode enabled: loaded %d camera stream(s) from %s", len(multicastCameras), configFile)
+	cameras := cfg.Multicast.BuildCameraConfigs()
+	if len(cameras) == 0 {
+		logging.WarningLogger.Printf("No camera stream ports configured in the [mpeg-ts] section of %s. Replays will start with no camera sources.", configFile)
 	} else {
-		manualCameras := loadPlatformCamerasFromRaw(raw, configFile)
-		autoTomlPath := filepath.Join(config.GetInstallDir(), "auto.toml")
-		if _, err := os.Stat(autoTomlPath); err == nil {
-			logging.InfoLogger.Printf("Found auto.toml, loading camera configurations from it")
-			var autoRaw map[string]interface{}
-			if _, err := toml.DecodeFile(autoTomlPath, &autoRaw); err == nil {
-				autoCameras := loadAutoCamerasFromRaw(autoRaw, "auto.toml")
-				cameras = mergeCameraConfigurations(autoCameras, manualCameras)
-				if len(autoCameras) > 0 && len(manualCameras) > 0 {
-					logging.InfoLogger.Printf("Merged %d auto.toml camera configuration(s) with %d manual configuration(s) from %s", len(autoCameras), len(manualCameras), configFile)
-				}
-			} else {
-				logging.ErrorLogger.Printf("Failed to parse auto.toml: %v", err)
-			}
-		}
-
-		if len(cameras) == 0 {
-			if len(manualCameras) > 0 {
-				cameras = manualCameras
-			}
-		}
-
-		if len(cameras) == 0 {
-			defaultCamerasPath := filepath.Join(config.GetInstallDir(), "default_cameras.toml")
-			if err := ExtractDefaultPlatformCamerasConfig(config.GetInstallDir()); err != nil {
-				return nil, fmt.Errorf("failed to extract default cameras config: %w", err)
-			}
-			var defaultRaw map[string]interface{}
-			if _, err := toml.DecodeFile(defaultCamerasPath, &defaultRaw); err != nil {
-				logging.ErrorLogger.Printf("Failed to parse default_cameras.toml: %v", err)
-			} else {
-				cameras = loadPlatformCamerasFromRaw(defaultRaw, defaultCamerasPath)
-			}
-		}
-
+		logging.InfoLogger.Printf("MPEG-TS receiver: loaded %d camera stream(s) from %s", len(cameras), configFile)
 	}
 
 	cfg.Cameras = cameras
-	cfg.Multicast.ApplyDefaults()
 
 	config.SetVideoDir(cfg.VideoDir)
 	config.SetVideoConfig(cfg.Width, cfg.Height, cfg.Fps)
 
-	platformKey = getPlatformName()
-	logging.InfoLogger.Printf("Configuration loaded from %s for platform %s:\n"+
+	logging.InfoLogger.Printf("Configuration loaded from %s:\n"+
 		"    Port: %d\n"+
 		"    VideoDir: %s\n",
-		configFile, platformKey, cfg.Port, cfg.VideoDir)
+		configFile, cfg.Port, cfg.VideoDir)
 
 	for i, camera := range cameras {
 		suffix := ""
 		if i > 0 {
 			suffix = strconv.Itoa(i + 1)
 		}
-		logging.InfoLogger.Printf("Camera configuration for %s%s:\n"+
-			"    FFmpeg Path: %s\n"+
+		logging.InfoLogger.Printf("Camera stream %s%s:\n"+
 			"    FFmpeg Camera: %s\n"+
 			"    Format: %s\n"+
-			"    Params: %s\n"+
-			"    Size: %s\n"+
-			"    FPS: %d\n"+
 			"    Recode: %t",
-			platformKey, suffix,
-			camera.FfmpegPath, camera.FfmpegCamera, camera.Format,
-			camera.Params, camera.Size, camera.Fps, camera.Recode)
+			"camera", suffix,
+			camera.FfmpegCamera, camera.Format, camera.Recode)
 	}
 
 	currentConfig = &cfg
 	config.LogFfmpeg = cfg.LogFfmpeg
 	return &cfg, nil
-}
-
-func mergeCameraConfigurations(autoCameras, manualCameras []config.CameraConfiguration) []config.CameraConfiguration {
-	if len(autoCameras) == 0 {
-		return append([]config.CameraConfiguration(nil), manualCameras...)
-	}
-	if len(manualCameras) == 0 {
-		return append([]config.CameraConfiguration(nil), autoCameras...)
-	}
-
-	merged := append([]config.CameraConfiguration(nil), autoCameras...)
-	indexBySource := make(map[string]int, len(merged))
-	for i, camera := range merged {
-		if key := cameraSourceKey(camera); key != "" {
-			indexBySource[key] = i
-		}
-	}
-
-	for _, camera := range manualCameras {
-		key := cameraSourceKey(camera)
-		if idx, ok := indexBySource[key]; ok && key != "" {
-			merged[idx] = camera
-			continue
-		}
-		merged = append(merged, camera)
-		if key != "" {
-			indexBySource[key] = len(merged) - 1
-		}
-	}
-
-	return merged
-}
-
-func cameraSourceKey(camera config.CameraConfiguration) string {
-	format := strings.ToLower(strings.TrimSpace(camera.Format))
-	source := strings.ToLower(strings.TrimSpace(camera.FfmpegCamera))
-	if format == "" || source == "" {
-		return ""
-	}
-	return format + "|" + source
 }
 
 // GetCurrentConfig returns the current configuration.
@@ -497,40 +289,4 @@ func UpdateMpegTSConfig(configFile string, settings config.MulticastSettings) er
 	}
 
 	return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
-}
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
-func hasMpegTSEnabledKey(raw map[string]interface{}) bool {
-	mpegTSRaw, ok := raw["mpeg-ts"]
-	if !ok {
-		return false
-	}
-	section, ok := mpegTSRaw.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	_, hasEnabled := section["enabled"]
-	return hasEnabled
-}
-
-func isWSL() bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-	data, err := os.ReadFile("/proc/version")
-	if err != nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(string(data)), "microsoft") ||
-		strings.Contains(strings.ToLower(string(data)), "wsl")
-}
-
-func getPlatformName() string {
-	if isWSL() {
-		return "WSL"
-	}
-	return runtime.GOOS
 }
