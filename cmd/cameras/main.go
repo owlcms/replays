@@ -209,30 +209,32 @@ func newDetectionProgressDialog(window fyne.Window, title string) (dialog.Dialog
 		showClose := hasError
 		mu.Unlock()
 
-		if stageValue != "" {
-			stageLabel.SetText(stageValue)
-		}
-		if detailValue != "" {
-			detailLabel.SetText(detailValue)
-		}
-		statusList.SetText(content)
-		statusList.Refresh()
-		failureList.SetText(failureContent)
-		failureList.Refresh()
-		historyScroll.Refresh()
-		if showFailureSection {
-			failureHeader.Show()
-			failureHeader.Refresh()
-			failureList.Show()
+		fyne.Do(func() {
+			if stageValue != "" {
+				stageLabel.SetText(stageValue)
+			}
+			if detailValue != "" {
+				detailLabel.SetText(detailValue)
+			}
+			statusList.SetText(content)
+			statusList.Refresh()
+			failureList.SetText(failureContent)
 			failureList.Refresh()
-		} else {
-			failureHeader.Hide()
-			failureList.Hide()
-		}
-		if showClose {
-			closeButton.Show()
-			closeButton.Refresh()
-		}
+			historyScroll.Refresh()
+			if showFailureSection {
+				failureHeader.Show()
+				failureHeader.Refresh()
+				failureList.Show()
+				failureList.Refresh()
+			} else {
+				failureHeader.Hide()
+				failureList.Hide()
+			}
+			if showClose {
+				closeButton.Show()
+				closeButton.Refresh()
+			}
+		})
 	}
 
 	body := container.NewVBox(
@@ -884,7 +886,11 @@ func buildStreamCommandSpec(stream *cameraStream, mode streamOutputMode) (stream
 
 	var args []string
 
-	args = append(args, "-use_wallclock_as_timestamps", "1")
+	// AVFoundation timestamps can conflict with a wall-clock override when
+	// muxed into MPEG-TS, so retain the capture device's native timestamps.
+	if cam.Format != "avfoundation" {
+		args = append(args, "-use_wallclock_as_timestamps", "1")
+	}
 
 	needsEncoding := strings.ToLower(strings.TrimSpace(cam.PixFmt)) != "h264"
 	ffmpegPath = resolveStreamFFmpegPath(ffmpegPath, encoder, needsEncoding)
@@ -928,6 +934,13 @@ func buildStreamCommandSpec(stream *cameraStream, mode streamOutputMode) (stream
 		args = append(args, "-video_size", cam.Size)
 		args = append(args, "-framerate", fmt.Sprintf("%d", cam.Fps))
 		args = append(args, "-i", cam.Device)
+
+	case "avfoundation":
+		args = append(args, "-f", "avfoundation")
+		args = append(args, "-pixel_format", cam.PixFmt)
+		args = append(args, "-video_size", cam.Size)
+		args = append(args, "-framerate", fmt.Sprintf("%d", cam.Fps))
+		args = append(args, "-i", cam.Device+":none")
 
 	case "rtsp":
 		transport := strings.ToLower(strings.TrimSpace(stream.transport))
@@ -991,14 +1004,22 @@ func buildStreamCommandSpec(stream *cameraStream, mode streamOutputMode) (stream
 				return streamCommandSpec{}, fmt.Errorf("no enabled unicast destinations")
 			}
 			extra := fc.Output.ExtraFlags
-			extra = strings.ReplaceAll(extra, "-f mpegts", "")
+			usesTee := strings.Contains(udpDest, "|")
+			if usesTee {
+				extra = strings.ReplaceAll(extra, "-f mpegts", "")
+			}
 			extra = strings.TrimSpace(extra)
 			if extra != "" {
 				args = append(args, strings.Fields(extra)...)
 			}
 			args = append(args, "-map", "0:v")
 			args = append(args, "-nostats", "-progress", "pipe:1")
-			args = append(args, "-f", "tee", udpDest)
+			if usesTee {
+				args = append(args, "-f", "tee", udpDest)
+			} else {
+				const teeMPEGTSLegPrefix = "[f=mpegts:onfail=ignore]"
+				args = append(args, strings.TrimPrefix(udpDest, teeMPEGTSLegPrefix))
+			}
 		} else {
 			args = append(args, strings.Fields(fc.Output.ExtraFlags)...)
 			args = append(args, "-nostats", "-progress", "pipe:1")
@@ -2076,6 +2097,34 @@ func (s *cameraStream) previewListenURL() string {
 	return parsed.String()
 }
 
+func activatePreviewWindow(pid int) {
+	if runtime.GOOS != "darwin" || pid <= 0 {
+		return
+	}
+
+	go func() {
+		var lastErr error
+		var lastOutput string
+		activated := false
+		for attempt := 1; attempt <= 12; attempt++ {
+			time.Sleep(250 * time.Millisecond)
+			script := fmt.Sprintf(`ObjC.import('AppKit'); var application = $.NSRunningApplication.runningApplicationWithProcessIdentifier(%d); if (!application || !application.activateWithOptions($.NSApplicationActivateIgnoringOtherApps)) { throw new Error('Preview window is not ready'); }`, pid)
+			output, err := exec.Command("osascript", "-l", "JavaScript", "-e", script).CombinedOutput()
+			if err == nil {
+				activated = true
+				continue
+			}
+			lastErr = err
+			lastOutput = strings.TrimSpace(string(output))
+		}
+		if activated {
+			logging.InfoLogger.Printf("Preview window activated for pid=%d", pid)
+			return
+		}
+		logging.WarningLogger.Printf("Could not activate Preview window for pid=%d: %v: %s", pid, lastErr, lastOutput)
+	}()
+}
+
 func launchPreview(stream *cameraStream, onDone func()) error {
 	startTime := time.Now()
 	args := []string{
@@ -2084,6 +2133,9 @@ func launchPreview(stream *cameraStream, onDone func()) error {
 		"-sync", "video",
 		"-framedrop",
 	}
+	if runtime.GOOS == "darwin" {
+		args = append(args, "-alwaysontop")
+	}
 	args = append(args, previewArgsForSize(stream.camera.Size)...)
 	listenURL := stream.previewListenURL()
 	args = append(args, listenURL)
@@ -2091,17 +2143,23 @@ func launchPreview(stream *cameraStream, onDone func()) error {
 	ffplayPath := resolveFFplayPath()
 	logging.InfoLogger.Printf("Preview launch requested for %s [%s]: ffplay=%s listenURL=%s size=%s port=%d", stream.camera.Name, stream.shortID, ffplayPath, listenURL, stream.camera.Size, stream.port)
 	cmd := recording.CreateHiddenCmd(ffplayPath, args...)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("create ffplay stderr pipe: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		logging.ErrorLogger.Printf("Preview start failed for %s [%s] after %s: %v", stream.camera.Name, stream.shortID, time.Since(startTime), err)
 		return err
 	}
 	logging.InfoLogger.Printf("Preview process started for %s [%s] after %s with pid=%d", stream.camera.Name, stream.shortID, time.Since(startTime), cmd.Process.Pid)
+	activatePreviewWindow(cmd.Process.Pid)
 
 	if err := jobutil.Assign(cmd); err != nil {
 		logging.ErrorLogger.Printf("Failed to assign ffplay to job object: %v", err)
 	}
 
 	registerPreviewCmd(cmd)
+	go logPreviewErrors(stream, stderr, cmd.Process.Pid)
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
@@ -2116,6 +2174,24 @@ func launchPreview(stream *cameraStream, onDone func()) error {
 	}()
 
 	return nil
+}
+
+func logPreviewErrors(stream *cameraStream, stderr io.ReadCloser, previewPID int) {
+	scanner := bufio.NewScanner(stderr)
+	previewWindowReady := false
+	for scanner.Scan() {
+		message := strings.TrimSpace(scanner.Text())
+		if message != "" {
+			logging.WarningLogger.Printf("ffplay stderr [%s]: %s", stream.camera.Name, message)
+			if !previewWindowReady && strings.HasPrefix(message, "Input #") {
+				previewWindowReady = true
+				activatePreviewWindow(previewPID)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		logging.WarningLogger.Printf("ffplay stderr read failed for %s: %v", stream.camera.Name, err)
+	}
 }
 
 func sanitizeFilePart(value string) string {
@@ -2266,7 +2342,7 @@ func (e *portTableEntry) FocusLost() {
 }
 
 func runUI() {
-	myApp := app.New()
+	myApp := app.NewWithID("app.owlcms.cameras")
 	myApp.Settings().SetTheme(appTheme{theme.DefaultTheme()})
 	setAppIcon(myApp)
 	windowTitle := "Camera Streams"
@@ -3985,7 +4061,9 @@ func runUI() {
 					clipLink.Hide()
 					actionStatus.SetText("Preview/Record: ready")
 					if err := launchPreview(capturedStream, func() {
-						actionStatus.SetText("Preview/Record: ready")
+						fyne.Do(func() {
+							actionStatus.SetText("Preview/Record: ready")
+						})
 					}); err != nil {
 						actionStatus.SetText(fmt.Sprintf("Preview failed: %v", err))
 						logging.ErrorLogger.Printf("Failed to start ffplay preview for %s (%s): %v", capturedStream.camera.Name, capturedStream.udpDest, err)
@@ -4018,25 +4096,31 @@ func runUI() {
 					go func(s *cameraStream) {
 						outputPath, err := recordClip(s)
 						if err != nil {
-							actionStatus.SetText(fmt.Sprintf("Record failed: %v", err))
+							fyne.Do(func() {
+								actionStatus.SetText(fmt.Sprintf("Record failed: %v", err))
+							})
 							logging.ErrorLogger.Printf("Failed to record clip for %s (%s): %v", s.camera.Name, s.udpDest, err)
 							return
 						}
 						path := outputPath
-						actionStatus.SetText("Saved: ")
-						clipLink.SetText(filepath.FromSlash(path))
-						clipLink.OnTapped = func() {
-							scheduleClipHide(1 * time.Minute)
-							openFile(path, func() {
-								if clipLinkTimer != nil {
-									clipLinkTimer.Stop()
-								}
-								clipLink.Hide()
-								actionStatus.SetText("Preview/Record: ready")
-							})
-						}
-						clipLink.Show()
-						scheduleClipHide(2 * time.Minute)
+						fyne.Do(func() {
+							actionStatus.SetText("Saved: ")
+							clipLink.SetText(filepath.FromSlash(path))
+							clipLink.OnTapped = func() {
+								scheduleClipHide(1 * time.Minute)
+								openFile(path, func() {
+									fyne.Do(func() {
+										if clipLinkTimer != nil {
+											clipLinkTimer.Stop()
+										}
+										clipLink.Hide()
+										actionStatus.SetText("Preview/Record: ready")
+									})
+								})
+							}
+							clipLink.Show()
+							scheduleClipHide(2 * time.Minute)
+						})
 					}(capturedStream)
 				}
 				return
@@ -4163,22 +4247,24 @@ func runUI() {
 			for _, item := range inv.Errors {
 				reportProgress(recording.ProgressMsg(recording.ProgError, item))
 			}
-			currentInventory = inv
-			if inv.Encoder != nil {
-				currentEncoder = inv.Encoder
-			}
-			updateEncoderStatus()
-			loadInventoryIntoRows(inv)
-			renderMonitoringSourceToggles(inv)
-			table.Refresh()
-			updateCameraStatusLabel(inv.Status)
-			if progressHasErrors() {
-				actionStatus.SetText(detectionProgressUIStrings.RescanCompletedWithErrors)
-			} else {
-				actionStatus.SetText(verificationMessage(detectionProgressUIStrings.RescanCompleted))
-				progressDialog.Hide()
-			}
-			rescanBtn.Enable()
+			fyne.Do(func() {
+				currentInventory = inv
+				if inv.Encoder != nil {
+					currentEncoder = inv.Encoder
+				}
+				updateEncoderStatus()
+				loadInventoryIntoRows(inv)
+				renderMonitoringSourceToggles(inv)
+				table.Refresh()
+				updateCameraStatusLabel(inv.Status)
+				if progressHasErrors() {
+					actionStatus.SetText(detectionProgressUIStrings.RescanCompletedWithErrors)
+				} else {
+					actionStatus.SetText(verificationMessage(detectionProgressUIStrings.RescanCompleted))
+					progressDialog.Hide()
+				}
+				rescanBtn.Enable()
+			})
 			logging.InfoLogger.Printf("Configuration rescan completed in %s", time.Since(startTime))
 		}()
 	}
@@ -4203,38 +4289,51 @@ func runUI() {
 				}
 			}
 
-			currentInventory = inv
-			if inv.Encoder != nil {
-				currentEncoder = inv.Encoder
-			}
-			updateEncoderStatus()
-			loadInventoryIntoRows(inv)
-			renderMonitoringSourceToggles(inv)
-
+			var newStreams []*cameraStream
+			var startupUnicastWarning string
 			if len(inv.Active) > 0 && len(inv.Errors) == 0 {
 				reportStartupProgress(recording.ProgressMsg(recording.ProgInventoryReady, fmt.Sprintf("Validating %d stream(s)...", len(inv.Active))))
-				newStreams, startupUnicastWarning := startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{progress: reportStartupProgress, action: actionStatus.SetText})
-				syncBroadcastUIFromConfig(true)
-				*currentStreams = newStreams
-				if len(newStreams) > 0 {
-					updateCameraStatusLabel(inv.Status)
+				newStreams, startupUnicastWarning = startAllStreams(inv.Active, inv.Encoder, &streamStartupCallbacks{
+					progress: reportStartupProgress,
+					action: func(message string) {
+						fyne.Do(func() {
+							actionStatus.SetText(message)
+						})
+					},
+				})
+			}
+
+			fyne.Do(func() {
+				currentInventory = inv
+				if inv.Encoder != nil {
+					currentEncoder = inv.Encoder
+				}
+				updateEncoderStatus()
+				loadInventoryIntoRows(inv)
+				renderMonitoringSourceToggles(inv)
+				if len(inv.Active) > 0 && len(inv.Errors) == 0 {
+					syncBroadcastUIFromConfig(true)
+					*currentStreams = newStreams
+					if len(newStreams) > 0 {
+						updateCameraStatusLabel(inv.Status)
+					} else {
+						updateCameraStatusLabel("No streams started successfully. Check logs for errors.")
+					}
+					if strings.TrimSpace(startupUnicastWarning) != "" {
+						dialog.ShowInformation("Unicast Destinations Disabled", startupUnicastWarning, window)
+					}
 				} else {
-					updateCameraStatusLabel("No streams started successfully. Check logs for errors.")
+					updateCameraStatusLabel(inv.Status)
 				}
-				if strings.TrimSpace(startupUnicastWarning) != "" {
-					dialog.ShowInformation("Unicast Destinations Disabled", startupUnicastWarning, window)
+				if startupHasErrors() {
+					actionStatus.SetText(detectionProgressUIStrings.DetectionCompletedWithErrors)
+				} else {
+					actionStatus.SetText("Preview/Record: ready")
+					startupProgressDialog.Hide()
 				}
-			} else {
-				updateCameraStatusLabel(inv.Status)
-			}
-			if startupHasErrors() {
-				actionStatus.SetText(detectionProgressUIStrings.DetectionCompletedWithErrors)
-			} else {
-				actionStatus.SetText("Preview/Record: ready")
-				startupProgressDialog.Hide()
-			}
+				table.Refresh()
+			})
 			logging.InfoLogger.Printf("Initial source detection completed in %s", time.Since(startTime))
-			table.Refresh()
 		}()
 	}
 
@@ -4254,7 +4353,7 @@ func runUI() {
 				return
 			}
 			autoRecoverRTSPStreams()
-			table.Refresh()
+			fyne.Do(table.Refresh)
 		}
 	}()
 
@@ -4264,7 +4363,7 @@ func runUI() {
 		<-sigChan
 		closeFn()
 		ticker.Stop()
-		window.Close()
+		fyne.Do(window.Close)
 	}()
 
 	window.SetCloseIntercept(func() {

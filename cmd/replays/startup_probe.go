@@ -122,7 +122,9 @@ func startStartupScans(cfg *replays.Config, statusLabel, startupLabel *widget.La
 
 		if config.NoMQTT {
 			logging.InfoLogger.Println("MQTT autodiscovery disabled via -noMQTT flag")
-			setStatusLabelText(statusLabel, "MQTT disabled", false)
+			fyne.Do(func() {
+				setStatusLabelText(statusLabel, "MQTT disabled", false)
+			})
 			results <- startupScanResult{order: 1, text: ""}
 		} else {
 			wg.Add(1)
@@ -131,13 +133,17 @@ func startStartupScans(cfg *replays.Config, statusLabel, startupLabel *widget.La
 				broker, err := monitor.UpdateOwlcmsAddress(cfg, filepath.Join(config.GetInstallDir(), "config.toml"))
 				if err != nil {
 					logging.ErrorLogger.Printf("Failed to find MQTT broker: %v", err)
-					setStatusLabelText(statusLabel, "", false)
+					fyne.Do(func() {
+						setStatusLabelText(statusLabel, "", false)
+					})
 					results <- startupScanResult{order: 1, text: fmt.Sprintf("Error: Could not find owlcms server - %v", err)}
 					return
 				}
 
 				cfg.OwlCMS = broker
-				setStatusLabelText(statusLabel, "Ready", false)
+				fyne.Do(func() {
+					setStatusLabelText(statusLabel, "Ready", false)
+				})
 				results <- startupScanResult{order: 1, text: startupMQTTProbeSuccessText(broker)}
 
 				// Start MQTT monitor which handles platform list retrieval.
@@ -168,7 +174,10 @@ func startStartupScans(cfg *replays.Config, statusLabel, startupLabel *widget.La
 		}()
 
 		for result := range results {
-			setMessageLabelText(startupLabel, applyStartupScanResult(messages, result))
+			message := applyStartupScanResult(messages, result)
+			fyne.Do(func() {
+				setMessageLabelText(startupLabel, message)
+			})
 		}
 	}()
 }

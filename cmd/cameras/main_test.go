@@ -1005,6 +1005,50 @@ func TestBuildStreamCommandSpecUsesNVENCFallbackOnlyWhenEncoding(t *testing.T) {
 	}
 }
 
+func TestBuildStreamCommandSpecUsesAVFoundationInput(t *testing.T) {
+	previousCamerasConfig := camerasConfig
+	previousFFmpegConfig := ffmpegConfig
+	previousFFmpegPath := config.GetFFmpegPath()
+	defer func() {
+		camerasConfig = previousCamerasConfig
+		ffmpegConfig = previousFFmpegConfig
+		config.SetFFmpegPath(previousFFmpegPath)
+	}()
+
+	camerasConfig = &camerascfg.Config{
+		Unicast: camerascfg.UnicastConfig{Enabled: true},
+	}
+	ffmpegConfig = &ffmpegcfg.Config{
+		Software: ffmpegcfg.SoftwareEncoder{OutputParameters: "-c:v libx264"},
+		Output:   ffmpegcfg.OutputConfig{ExtraFlags: "-f mpegts"},
+	}
+	config.SetFFmpegPath("ffmpeg")
+
+	stream := &cameraStream{
+		camera: recording.DetectedCamera{Format: "avfoundation", PixFmt: "uyvy422", Device: "0", Size: "1920x1080", Fps: 30},
+		port:   9005,
+	}
+	spec, err := buildStreamCommandSpec(stream, streamOutputLive)
+	if err != nil {
+		t.Fatalf("buildStreamCommandSpec() error = %v", err)
+	}
+	joined := strings.Join(spec.args, " ")
+	for _, want := range []string{"-f avfoundation", "-pixel_format uyvy422", "-video_size 1920x1080", "-framerate 30", "-i 0:none"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("args = %q, want %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "-use_wallclock_as_timestamps") {
+		t.Fatalf("args = %q, do not want wall-clock timestamps for AVFoundation", joined)
+	}
+	if strings.Contains(joined, "-f tee") {
+		t.Fatalf("args = %q, do not want tee for the single preview destination", joined)
+	}
+	if !strings.Contains(joined, "-f mpegts") || !strings.Contains(joined, "udp://127.0.0.1:9005?pkt_size=1316") {
+		t.Fatalf("args = %q, want direct MPEG-TS UDP output", joined)
+	}
+}
+
 func TestStreamNeedsStartupProbeIncludesCopyStreams(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -46,7 +46,7 @@ type EncoderConfig struct {
 	OutputParameters string   `toml:"outputParameters"`
 	VideoFilter      string   `toml:"videoFilter"`
 	TestInit         string   `toml:"testInit"`
-	Platform         string   `toml:"platform"`   // "v4l2"/"dshow" preferred; "linux"/"windows" also accepted; "" means any
+	Platform         string   `toml:"platform"`   // "v4l2"/"dshow"/"avfoundation" preferred; OS aliases also accepted; "" means any
 	GpuVendors       []string `toml:"gpuVendors"` // optional: nvidia, amd, intel
 }
 
@@ -173,8 +173,8 @@ func ExtractDefaultConfig() string {
 }
 
 // filterEncodersForPlatform removes encoder entries that don't match the current OS.
-// Platform values can be OS names ("linux", "windows") or capture API names
-// ("v4l2" for Linux, "dshow" for Windows).
+// Platform values can be OS names or capture API names ("v4l2" for Linux,
+// "dshow" for Windows, and "avfoundation" for macOS).
 func (c *Config) filterEncodersForPlatform() {
 	var filtered []EncoderConfig
 	for _, enc := range c.Encoders {
@@ -196,6 +196,8 @@ func encoderPlatformMatch(platform string) bool {
 		return p == "windows" || p == "dshow"
 	case "linux":
 		return p == "linux" || p == "v4l2"
+	case "darwin":
+		return p == "darwin" || p == "macos" || p == "avfoundation"
 	default:
 		return p == runtime.GOOS
 	}

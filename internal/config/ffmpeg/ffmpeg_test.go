@@ -1,6 +1,7 @@
 package ffmpeg
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,5 +33,28 @@ func TestApplyDefaultsUsesEmbeddedEncoderDefaults(t *testing.T) {
 	}
 	if !strings.Contains(cfg.Software.OutputParameters, "-pix_fmt yuv420p") {
 		t.Fatalf("software OutputParameters = %q, want yuv420p output", cfg.Software.OutputParameters)
+	}
+}
+
+func TestEncoderPlatformMatchRecognizesCurrentPlatformAliases(t *testing.T) {
+	tests := []struct {
+		platform string
+		want     bool
+	}{
+		{platform: "windows", want: runtime.GOOS == "windows"},
+		{platform: "dshow", want: runtime.GOOS == "windows"},
+		{platform: "linux", want: runtime.GOOS == "linux"},
+		{platform: "v4l2", want: runtime.GOOS == "linux"},
+		{platform: "darwin", want: runtime.GOOS == "darwin"},
+		{platform: "macos", want: runtime.GOOS == "darwin"},
+		{platform: "avfoundation", want: runtime.GOOS == "darwin"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.platform, func(t *testing.T) {
+			if got := encoderPlatformMatch(tc.platform); got != tc.want {
+				t.Fatalf("encoderPlatformMatch(%q) = %t, want %t", tc.platform, got, tc.want)
+			}
+		})
 	}
 }

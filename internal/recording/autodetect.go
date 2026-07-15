@@ -24,8 +24,8 @@ import (
 // DetectedCamera holds information about a detected camera device
 type DetectedCamera struct {
 	Name             string
-	Device           string       // device path (Linux) or device name (Windows)
-	Format           string       // v4l2, dshow, or rtsp
+	Device           string       // device path (Linux), device name (Windows), or video index (macOS)
+	Format           string       // v4l2, dshow, avfoundation, or rtsp
 	PixFmt           string       // mjpeg, yuyv422, etc.
 	Size             string       // best resolution found
 	Fps              int          // best fps for that resolution
@@ -103,28 +103,36 @@ func DetectAndWriteConfig(window fyne.Window) {
 	progressDialog.Show()
 
 	go func() {
-		defer progressDialog.Hide()
+		defer fyne.Do(progressDialog.Hide)
 
 		// Load shared ffmpeg.toml config so encoder and camera priorities have one source of truth.
 		cameraCfg, cfgErr := ffmpeg.LoadConfig()
 		if cfgErr != nil {
 			logging.ErrorLogger.Printf("Could not load ffmpeg.toml for automatic detection: %v", cfgErr)
-			dialog.ShowError(fmt.Errorf("could not load ffmpeg.toml for automatic detection: %v", cfgErr), window)
+			fyne.Do(func() {
+				dialog.ShowError(fmt.Errorf("could not load ffmpeg.toml for automatic detection: %v", cfgErr), window)
+			})
 			return
 		}
 
 		// Step 1: Detect available H.264 hardware encoders from ffmpeg.toml definitions.
-		progressLabel.SetText("Detecting hardware encoders...")
+		fyne.Do(func() {
+			progressLabel.SetText("Detecting hardware encoders...")
+		})
 		encoders := DetectEncodersWithConfig(cameraCfg)
 		logging.InfoLogger.Printf("Detected %d hardware encoders", len(encoders))
 
 		// Step 2: Detect cameras using ffmpeg.toml mode priorities.
-		progressLabel.SetText("Detecting cameras...")
+		fyne.Do(func() {
+			progressLabel.SetText("Detecting cameras...")
+		})
 		cameras := DetectCamerasWithConfig(cameraCfg)
 		logging.InfoLogger.Printf("Detected %d cameras", len(cameras))
 
 		// Step 3: Write auto.toml (even with 0 cameras, to show detected encoders)
-		progressLabel.SetText("Writing auto.toml...")
+		fyne.Do(func() {
+			progressLabel.SetText("Writing auto.toml...")
+		})
 		// Output to autoTomlDir if set, otherwise install dir
 		var outputPath string
 		if config.AutoTomlDir != "" {
@@ -135,13 +143,17 @@ func DetectAndWriteConfig(window fyne.Window) {
 		err := writeAutoConfig(outputPath, cameras, encoders, cameraCfg)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to write auto.toml: %v", err)
-			dialog.ShowError(fmt.Errorf("failed to write auto.toml: %v", err), window)
+			fyne.Do(func() {
+				dialog.ShowError(fmt.Errorf("failed to write auto.toml: %v", err), window)
+			})
 			return
 		}
 
 		// Step 4: Show results
 		summary := buildSummary(cameras, encoders, outputPath)
-		showAutoDetectResults(summary, outputPath, window)
+		fyne.Do(func() {
+			showAutoDetectResults(summary, outputPath, window)
+		})
 	}()
 }
 
@@ -454,6 +466,8 @@ func encoderPlatformMatchesRuntime(platform string) bool {
 		return p == "windows" || p == "dshow"
 	case "linux":
 		return p == "linux" || p == "v4l2"
+	case "darwin":
+		return p == "darwin" || p == "macos" || p == "avfoundation"
 	default:
 		return p == runtime.GOOS
 	}
@@ -464,6 +478,9 @@ func detectGPUVendors() map[string]bool {
 
 	if runtime.GOOS == "windows" {
 		return detectGPUVendorsWindows(vendors)
+	}
+	if runtime.GOOS == "darwin" {
+		return vendors
 	}
 
 	// Method 1: Check NVIDIA driver file
@@ -725,9 +742,168 @@ func DetectCamerasWithConfigAndProgressFiltered(cfg *ffmpeg.Config, progress Pro
 		return detectCamerasLinux(cfg, progress, skip)
 	case "windows":
 		return detectCamerasWindows(cfg, progress, skip)
+	case "darwin":
+		return detectCamerasDarwin(cfg, progress, skip)
 	default:
 		return nil
 	}
+}
+
+type avfoundationDevice struct {
+	index string
+	name  string
+}
+
+var avfoundationVideoDeviceRe = regexp.MustCompile(`\[(\d+)\]\s+(.+)$`)
+var avfoundationModeRe = regexp.MustCompile(`(\d+)x(\d+)@\[([^\]]+)\]fps`)
+var avfoundationPixelFormatRe = regexp.MustCompile(`\]\s+([a-zA-Z0-9]+)\s*$`)
+
+// detectCamerasDarwin uses FFmpeg's AVFoundation input to detect macOS cameras.
+func detectCamerasDarwin(cfg *ffmpeg.Config, progress ProbeProgressFunc, skip func(name, matchKey, attachmentPath string) bool) []DetectedCamera {
+	path := config.GetFFmpegPath()
+	if path == "" {
+		path = "ffmpeg"
+	}
+	if progress != nil {
+		progress(ProgressMsg(ProgListing, "AVFoundation devices"))
+	}
+
+	cmd := CreateHiddenCmd(path, "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	_ = cmd.Run() // Listing devices intentionally fails because there is no input.
+
+	var cameras []DetectedCamera
+	for _, device := range parseAVFoundationVideoDevices(out.String()) {
+		matchKey, attachmentPath, _ := resolveAVFoundationCameraIdentity(device.name)
+		if skip != nil && skip(device.name, matchKey, attachmentPath) {
+			continue
+		}
+		if progress != nil {
+			progress(ProgressMsg(ProgLocalSource, device.name))
+		}
+		if camera := probeAVFoundationDevice(path, device, cfg); camera != nil {
+			cameras = append(cameras, *camera)
+		}
+	}
+	return cameras
+}
+
+func parseAVFoundationVideoDevices(output string) []avfoundationDevice {
+	var devices []avfoundationDevice
+	inVideoSection := false
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "AVFoundation video devices:") {
+			inVideoSection = true
+			continue
+		}
+		if strings.Contains(line, "AVFoundation audio devices:") {
+			break
+		}
+		if !inVideoSection {
+			continue
+		}
+		match := avfoundationVideoDeviceRe.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		name := strings.TrimSpace(match[2])
+		if name == "" || strings.HasPrefix(strings.ToLower(name), "capture screen") {
+			continue
+		}
+		devices = append(devices, avfoundationDevice{index: match[1], name: name})
+	}
+	return devices
+}
+
+func probeAVFoundationDevice(ffmpegPath string, device avfoundationDevice, cfg *ffmpeg.Config) *DetectedCamera {
+	input := device.index + ":none"
+	modeProbe := CreateHiddenCmd(ffmpegPath, "-hide_banner", "-f", "avfoundation", "-framerate", "1000", "-i", input)
+	var modeOutput bytes.Buffer
+	modeProbe.Stdout = &modeOutput
+	modeProbe.Stderr = &modeOutput
+	_ = modeProbe.Run() // The invalid framerate prints the supported modes without capturing.
+
+	modes := parseAVFoundationModes(modeOutput.String())
+	if len(modes) == 0 {
+		logging.InfoLogger.Printf("No AVFoundation modes reported for %s", device.name)
+		return nil
+	}
+	best := PickBestCameraModeWithConfig(modes, cfg)
+
+	pixelProbe := CreateHiddenCmd(ffmpegPath,
+		"-hide_banner",
+		"-f", "avfoundation",
+		"-framerate", strconv.Itoa(best.fps),
+		"-video_size", fmt.Sprintf("%dx%d", best.width, best.height),
+		"-pixel_format", "yuv420p",
+		"-i", input,
+		"-frames:v", "1",
+		"-f", "null", "-",
+	)
+	var pixelOutput bytes.Buffer
+	pixelProbe.Stdout = &pixelOutput
+	pixelProbe.Stderr = &pixelOutput
+	_ = pixelProbe.Run() // The unsupported default format prints supported formats; one null frame bounds the probe.
+	pixFmt := parseAVFoundationPixelFormat(pixelOutput.String())
+	if pixFmt == "" {
+		logging.InfoLogger.Printf("No AVFoundation pixel format reported for %s", device.name)
+		return nil
+	}
+
+	matchKey, attachmentPath, identity := resolveAVFoundationCameraIdentity(device.name)
+	return &DetectedCamera{
+		Name:             device.name,
+		Device:           device.index,
+		Format:           "avfoundation",
+		PixFmt:           pixFmt,
+		Size:             fmt.Sprintf("%dx%d", best.width, best.height),
+		Fps:              best.fps,
+		MatchKey:         matchKey,
+		AttachmentPath:   attachmentPath,
+		Identity:         identity,
+		SupportedFormats: uniqueFormats(modes),
+		modes:            modes,
+	}
+}
+
+func parseAVFoundationModes(output string) []cameraMode {
+	var modes []cameraMode
+	for _, match := range avfoundationModeRe.FindAllStringSubmatch(output, -1) {
+		width := atoi(match[1])
+		height := atoi(match[2])
+		maxFPS := 0
+		for _, value := range strings.Fields(match[3]) {
+			fps := parseFps(value)
+			if fps > maxFPS {
+				maxFPS = fps
+			}
+		}
+		if width > 0 && height > 0 && maxFPS > 0 {
+			modes = append(modes, cameraMode{pixFmt: "raw", width: width, height: height, fps: maxFPS})
+		}
+	}
+	return modes
+}
+
+func parseAVFoundationPixelFormat(output string) string {
+	inFormats := false
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "Supported pixel formats:") {
+			inFormats = true
+			continue
+		}
+		if !inFormats {
+			continue
+		}
+		match := avfoundationPixelFormatRe.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		return strings.ToLower(match[1])
+	}
+	return ""
 }
 
 // detectCamerasLinux uses v4l2-ctl to detect cameras and their formats
@@ -1180,6 +1356,14 @@ func resolveWindowsCameraIdentity(name, alternativeName string) (string, string,
 	return "dshow:" + weakName, "", name
 }
 
+func resolveAVFoundationCameraIdentity(name string) (string, string, string) {
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		trimmedName = "unknown"
+	}
+	return "avfoundation:" + strings.ToLower(trimmedName), "", trimmedName
+}
+
 func resolveStableCameraIdentity(name, device, location string) (string, string, string) {
 	if linkName := resolveV4LLinkBase("/dev/v4l/by-path", device); linkName != "" {
 		return "by-path:" + strings.ToLower(strings.TrimSpace(linkName)), linkName, linkName
@@ -1364,6 +1548,8 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 
 		if cam.Format == "dshow" {
 			buf.WriteString(fmt.Sprintf("    camera = 'video=%s'\n", cam.Device))
+		} else if cam.Format == "avfoundation" {
+			buf.WriteString(fmt.Sprintf("    camera = '%s:none'\n", cam.Device))
 		} else {
 			buf.WriteString(fmt.Sprintf("    camera = '%s'\n", cam.Device))
 		}
@@ -1416,7 +1602,7 @@ func writeAutoConfig(outputPath string, cameras []DetectedCamera, encoders []HwE
 
 			// Specify the pixel format for proper raw input handling
 			var fmtFlag string
-			if cam.Format == "dshow" {
+			if cam.Format == "dshow" || cam.Format == "avfoundation" {
 				fmtFlag = fmt.Sprintf("-pixel_format %s", cam.PixFmt)
 			} else {
 				fmtFlag = fmt.Sprintf("-input_format %s", cam.PixFmt)
