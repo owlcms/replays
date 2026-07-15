@@ -1,24 +1,18 @@
 package recording
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/widget"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
@@ -523,103 +517,4 @@ func TerminateRecordings() {
 // GetStartTimeMillis returns the start time in milliseconds
 func GetStartTimeMillis() string {
 	return strconv.FormatInt(state.LastStartTime, 10)
-}
-
-// ListCameras lists available cameras using ffmpeg on Windows or v4l2-ctl on Linux and displays them in a Fyne text area
-func ListCameras(window fyne.Window) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		args := []string{"-list_devices", "true", "-f", "dshow", "-i", "dummy", "-hide_banner"}
-		cmd = CreateFfmpegCmd(args, "listcameras", "info")
-		logging.InfoLogger.Printf("ListCameras: Using ffmpeg path: %s", config.GetFFmpegPath())
-		logging.InfoLogger.Printf("ListCameras: Install directory: %s", config.GetInstallDir())
-		logging.InfoLogger.Printf("ListCameras: Command: %s", cmd.String())
-	case "linux":
-		cmd = exec.Command("v4l2-ctl", "--list-devices")
-		logging.InfoLogger.Printf("ListCameras: Using v4l2-ctl command: %s", cmd.String())
-	default:
-		dialog.ShowInformation("Unsupported Platform", "Camera listing is not supported on this platform.", window)
-		return
-	}
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	logging.InfoLogger.Printf("ListCameras: About to execute command...")
-	if err := cmd.Run(); err != nil {
-		logging.ErrorLogger.Printf("Failed to list cameras: %v", err)
-		logging.ErrorLogger.Printf("Command output: %s", out.String())
-		dialog.ShowError(fmt.Errorf("failed to list cameras: %v\nOutput: %s", err, out.String()), window)
-		return
-	}
-	logging.InfoLogger.Printf("ListCameras: Command executed successfully")
-	logging.InfoLogger.Printf("ListCameras: Raw output length: %d bytes", out.Len())
-	logging.InfoLogger.Printf("ListCameras: Raw output: %s", out.String())
-
-	var cameraNames []string
-	scanner := bufio.NewScanner(&out)
-	switch runtime.GOOS {
-	case "windows":
-		logging.InfoLogger.Printf("ListCameras: Parsing Windows ffmpeg output...")
-		lineCount := 0
-		for scanner.Scan() {
-			line := scanner.Text()
-			lineCount++
-			logging.InfoLogger.Printf("ListCameras: Line %d: %s", lineCount, line)
-			if strings.Contains(line, "(video)") {
-				logging.InfoLogger.Printf("ListCameras: Found video device line: %s", line)
-				start := strings.Index(line, "\"")
-				end := strings.LastIndex(line, "\"")
-				if start != -1 && end != -1 && start != end {
-					cameraName := line[start+1 : end]
-					logging.InfoLogger.Printf("ListCameras: Extracted camera name: %s", cameraName)
-					cameraNames = append(cameraNames, cameraName)
-				} else {
-					logging.InfoLogger.Printf("ListCameras: Could not extract camera name from line (no quotes found)")
-				}
-			}
-		}
-		logging.InfoLogger.Printf("ListCameras: Processed %d lines total", lineCount)
-	case "linux":
-		logging.InfoLogger.Printf("ListCameras: Parsing Linux v4l2-ctl output...")
-		var currentCamera string
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			logging.InfoLogger.Printf("ListCameras: Processing line: %s", line)
-			if strings.Contains(line, "(usb-") {
-				currentCamera = strings.Split(line, " (usb-")[0]
-				logging.InfoLogger.Printf("ListCameras: Found camera: %s", currentCamera)
-			} else if strings.HasPrefix(line, "/dev/video") && currentCamera != "" {
-				cameraEntry := fmt.Sprintf("%s: %s", currentCamera, line)
-				logging.InfoLogger.Printf("ListCameras: Adding camera entry: %s", cameraEntry)
-				cameraNames = append(cameraNames, cameraEntry)
-				currentCamera = ""
-			}
-		}
-	}
-
-	logging.InfoLogger.Printf("ListCameras: Found %d cameras total", len(cameraNames))
-	for i, name := range cameraNames {
-		logging.InfoLogger.Printf("ListCameras: Camera %d: %s", i+1, name)
-	}
-
-	if len(cameraNames) == 0 {
-		dialog.ShowInformation("No Cameras Found", "No cameras were found on this system.", window)
-		return
-	}
-
-	cameraList := strings.Join(cameraNames, "\n")
-	textArea := widget.NewMultiLineEntry()
-	textArea.SetMinRowsVisible(4)
-	textArea.SetText(cameraList)
-	textArea.Wrapping = fyne.TextWrapWord
-
-	dialog := dialog.NewCustom("Available Cameras", "Close", container.NewVBox(
-		widget.NewLabel("The following cameras were found on this system:"),
-		textArea,
-	), window)
-	dialog.Resize(fyne.NewSize(400, 300)) // Increased height by 25%
-	dialog.Show()
 }
