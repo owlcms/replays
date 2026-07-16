@@ -809,12 +809,16 @@ func parseAVFoundationVideoDevices(output string) []avfoundationDevice {
 			continue
 		}
 		name := strings.TrimSpace(match[2])
-		if name == "" || strings.HasPrefix(strings.ToLower(name), "capture screen") {
+		if name == "" || strings.HasPrefix(strings.ToLower(name), "capture screen") || isDeskViewCamera(name) {
 			continue
 		}
 		devices = append(devices, avfoundationDevice{index: match[1], name: name})
 	}
 	return devices
+}
+
+func isDeskViewCamera(name string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), "desk view camera")
 }
 
 func probeAVFoundationDevice(ffmpegPath string, device avfoundationDevice, cfg *ffmpeg.Config) *DetectedCamera {

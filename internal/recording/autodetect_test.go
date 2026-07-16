@@ -127,11 +127,14 @@ func TestParseAVFoundationVideoDevices(t *testing.T) {
 [AVFoundation indev @ 0x1] [0] MacBook Air Microphone`
 
 	got := parseAVFoundationVideoDevices(output)
-	if len(got) != 3 {
-		t.Fatalf("parseAVFoundationVideoDevices() returned %d devices, want 3: %#v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("parseAVFoundationVideoDevices() returned %d devices, want 2: %#v", len(got), got)
 	}
 	if got[0] != (avfoundationDevice{index: "0", name: "MacBook Air Camera"}) {
 		t.Fatalf("first device = %#v", got[0])
+	}
+	if got[1] != (avfoundationDevice{index: "2", name: "JFL Camera"}) {
+		t.Fatalf("second device = %#v", got[1])
 	}
 }
 

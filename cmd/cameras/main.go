@@ -2545,6 +2545,7 @@ func runUI() {
 	var validateSourceStart func(*sourceSpec) error
 	var promptToFreeBusyPort func(*sourceSpec, func())
 	var startSourceFromUI func(sourceSpec)
+	var stopSourceFromUI func(sourceSpec)
 	var stopSingleSource func(string, string) error
 	normalizeRTSPRows := func() {
 		var normalized []*rtspSourceRow
@@ -3210,6 +3211,54 @@ func runUI() {
 		return nil
 	}
 
+	stopSourceFromUI = func(spec sourceSpec) {
+		item, ok := findInventorySource(spec.Key)
+		if !ok {
+			err := fmt.Errorf("source %s not found", spec.Name)
+			dialog.ShowError(err, window)
+			actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
+			return
+		}
+		if err := setSourceMonitoringOn(*item, false); err != nil {
+			dialog.ShowError(err, window)
+			actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
+			return
+		}
+
+		streamIndex := findStreamIndex(spec.Key)
+		if streamIndex < 0 {
+			resetRTSPRecovery(spec.Key)
+			refreshMonitoringStatus(fmt.Sprintf("Stopped %s", item.Name))
+			return
+		}
+		stream := (*currentStreams)[streamIndex]
+		stream.markStopping("toggle source off")
+		table.Refresh()
+		actionStatus.SetText(fmt.Sprintf("Stopping %s...", item.Name))
+
+		go func(stream *cameraStream, key, name string) {
+			stopErr := stopProcess(stream, "toggle source off")
+			fyne.Do(func() {
+				if index := findStreamIndex(key); index >= 0 && (*currentStreams)[index] == stream {
+					*currentStreams = append((*currentStreams)[:index], (*currentStreams)[index+1:]...)
+				}
+				resetRTSPRecovery(key)
+				if stopErr != nil {
+					dialog.ShowError(stopErr, window)
+					actionStatus.SetText(fmt.Sprintf("Stop failed: %v", stopErr))
+					table.Refresh()
+					return
+				}
+				if err := clearRestartDirtyForSource(*item); err != nil {
+					dialog.ShowError(err, window)
+					actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
+					return
+				}
+				refreshMonitoringStatus(fmt.Sprintf("Stopped %s", name))
+			})
+		}(stream, spec.Key, item.Name)
+	}
+
 	validateSourceStart = func(item *sourceSpec) error {
 		if item.OutputPort <= 0 {
 			return fmt.Errorf("%s has no output port configured", item.Name)
@@ -3333,7 +3382,7 @@ func runUI() {
 			if state.exhausted || state.nextRetry.IsZero() || now.Before(state.nextRetry) {
 				continue
 			}
-			if !spec.Enabled || spec.OutputPort <= 0 {
+			if !spec.Enabled || !spec.MonitoringOn || spec.OutputPort <= 0 {
 				state.nextRetry = time.Time{}
 				continue
 			}
@@ -3947,6 +3996,11 @@ func runUI() {
 			cell := obj.(*fyne.Container)
 			label := cell.Objects[0].(*widget.Label)
 			button := cell.Objects[1].(*widget.Button)
+			if id.Col == 4 {
+				label.Truncation = fyne.TextTruncateEllipsis
+			} else {
+				label.Truncation = fyne.TextTruncateOff
+			}
 
 			if id.Row == 0 {
 				button.Hide()
@@ -4023,7 +4077,7 @@ func runUI() {
 				button.SetText("")
 				button.SetIcon(theme.MediaStopIcon())
 				button.Importance = widget.DangerImportance
-				if stream == nil {
+				if stream == nil || stream.isStopping() {
 					button.Disable()
 					button.OnTapped = nil
 					return
@@ -4031,11 +4085,7 @@ func runUI() {
 				button.Enable()
 				capturedSpec := spec
 				button.OnTapped = func() {
-					actionStatus.SetText(fmt.Sprintf("Stopping %s...", capturedSpec.Name))
-					if err := toggleSingleSource(capturedSpec, false); err != nil {
-						dialog.ShowError(err, window)
-						actionStatus.SetText(fmt.Sprintf("Stop failed: %v", err))
-					}
+					stopSourceFromUI(capturedSpec)
 				}
 				return
 			}
