@@ -13,6 +13,8 @@ sudo apt-get install -y \
     build-essential \
     pkg-config \
     libgl1-mesa-dev \
+    libwayland-dev \
+    libxkbcommon-dev \
     xorg-dev \
     git \
     curl \
