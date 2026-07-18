@@ -45,6 +45,8 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 )
 
+require github.com/progrium/darwinkit v0.5.0
+
 require (
 	github.com/FyshOS/fancyfs v0.0.1 // indirect
 	github.com/anthonynsimon/bild v0.14.0 // indirect

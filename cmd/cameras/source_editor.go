@@ -137,6 +137,9 @@ func newUSBSourceRow(spec sourceSpec) *usbSourceRow {
 		portEntry:       portEntry,
 		formatSelect:    formatSelect,
 	}
+	if !r.detected {
+		enabledCheck.Disable()
+	}
 	markDirty := func(_ string) { r.markDirty() }
 	nameEntry.OnChanged = markDirty
 	shortIDEntry.OnChanged = markDirty

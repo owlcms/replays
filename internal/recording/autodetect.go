@@ -26,6 +26,7 @@ type DetectedCamera struct {
 	Name             string
 	Device           string       // device path (Linux), device name (Windows), or video index (macOS)
 	Format           string       // v4l2, dshow, avfoundation, or rtsp
+	TransportType    string       // native transport identifier when the platform exposes one (for example, "usb ")
 	PixFmt           string       // mjpeg, yuyv422, etc.
 	Size             string       // best resolution found
 	Fps              int          // best fps for that resolution
@@ -754,6 +755,10 @@ type avfoundationDevice struct {
 	name  string
 }
 
+type avFoundationDeviceMetadata struct {
+	transportType string
+}
+
 var avfoundationVideoDeviceRe = regexp.MustCompile(`\[(\d+)\]\s+(.+)$`)
 var avfoundationModeRe = regexp.MustCompile(`(\d+)x(\d+)@\[([^\]]+)\]fps`)
 var avfoundationPixelFormatRe = regexp.MustCompile(`\]\s+([a-zA-Z0-9]+)\s*$`)
@@ -774,6 +779,7 @@ func detectCamerasDarwin(cfg *ffmpeg.Config, progress ProbeProgressFunc, skip fu
 	cmd.Stderr = &out
 	_ = cmd.Run() // Listing devices intentionally fails because there is no input.
 
+	metadataByName := avFoundationVideoDeviceMetadata()
 	var cameras []DetectedCamera
 	for _, device := range parseAVFoundationVideoDevices(out.String()) {
 		matchKey, attachmentPath, _ := resolveAVFoundationCameraIdentity(device.name)
@@ -784,6 +790,11 @@ func detectCamerasDarwin(cfg *ffmpeg.Config, progress ProbeProgressFunc, skip fu
 			progress(ProgressMsg(ProgLocalSource, device.name))
 		}
 		if camera := probeAVFoundationDevice(path, device, cfg); camera != nil {
+			if metadata, ok := metadataByName[strings.ToLower(strings.TrimSpace(device.name))]; ok {
+				camera.TransportType = metadata.transportType
+			} else {
+				logging.WarningLogger.Printf("No native AVFoundation transport metadata for %s; includeAll=false will exclude it", device.name)
+			}
 			cameras = append(cameras, *camera)
 		}
 	}
@@ -819,6 +830,36 @@ func parseAVFoundationVideoDevices(output string) []avfoundationDevice {
 
 func isDeskViewCamera(name string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), "desk view camera")
+}
+
+// ResolveAVFoundationDeviceIndex returns the current AVFoundation device index
+// for the named device. AVFoundation numeric indices are NOT stable: they
+// change when cameras are connected/disconnected or when another process opens
+// a device, so an index captured at detection time can later point at a
+// different physical camera. Re-resolving by name immediately before opening
+// the device avoids streaming from the wrong camera (which manifests as a false
+// "framerate not supported" failure when the wrong camera has a lower max fps).
+func ResolveAVFoundationDeviceIndex(name string) (string, bool) {
+	trimmed := strings.ToLower(strings.TrimSpace(name))
+	if trimmed == "" {
+		return "", false
+	}
+	path := config.GetFFmpegPath()
+	if path == "" {
+		path = "ffmpeg"
+	}
+	cmd := CreateHiddenCmd(path, "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	_ = cmd.Run() // Listing devices intentionally fails because there is no input.
+
+	for _, device := range parseAVFoundationVideoDevices(out.String()) {
+		if strings.ToLower(strings.TrimSpace(device.name)) == trimmed {
+			return device.index, true
+		}
+	}
+	return "", false
 }
 
 func probeAVFoundationDevice(ffmpegPath string, device avfoundationDevice, cfg *ffmpeg.Config) *DetectedCamera {

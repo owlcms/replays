@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -727,6 +728,41 @@ func TestCameraStreamInteractiveReadyAllowsRecentProgress(t *testing.T) {
 	}
 }
 
+func TestMacOSCaptureTransportFilter(t *testing.T) {
+	tests := []struct {
+		transportType string
+		want          bool
+	}{
+		{transportType: "usb ", want: true},
+		{transportType: "pci ", want: true},
+		{transportType: "bltn", want: false},
+		{transportType: "virt", want: false},
+		{transportType: "netw", want: false},
+		{transportType: "", want: false},
+	}
+
+	for _, tc := range tests {
+		if got := isMacOSCaptureTransport(tc.transportType); got != tc.want {
+			t.Errorf("isMacOSCaptureTransport(%q) = %t, want %t", tc.transportType, got, tc.want)
+		}
+	}
+}
+
+func TestMacOSCameraWithoutTransportMetadataIsNotFiltered(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS-specific camera classification")
+	}
+
+	cam := recording.DetectedCamera{
+		Name:   "UVC Camera",
+		Format: "avfoundation",
+		PixFmt: "uyvy422",
+	}
+	if isIntegratedCamera(cam) {
+		t.Fatal("AVFoundation camera without transport metadata should remain available")
+	}
+}
+
 func TestBuildUSBSourcesFromDetectedUsesStableAssignmentState(t *testing.T) {
 	previousConfig := camerasConfig
 	defer func() {
@@ -770,7 +806,7 @@ func TestBuildUSBSourcesFromDetectedUsesStableAssignmentState(t *testing.T) {
 	}
 }
 
-func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t *testing.T) {
+func TestBuildUSBSourcesWithProgressKeepsDisabledAssignmentsDisabledWhenDetected(t *testing.T) {
 	previousConfig := camerasConfig
 	previousFFmpegConfig := ffmpegConfig
 	previousDetect := detectUSBCamerasWithConfigAndProgress
@@ -808,18 +844,22 @@ func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t
 	}
 	ffmpegConfig = &ffmpegcfg.Config{}
 
-	var checkedDisabled bool
-	var checkedEnabled bool
 	detectUSBCamerasWithConfigAndProgress = func(cfg *ffmpegcfg.Config, progress recording.ProbeProgressFunc, skip func(name, matchKey, attachmentPath string) bool) []recording.DetectedCamera {
-		if !skip("Disabled Cam", "usb-disabled", "/dev/v4l/by-path/disabled") {
-			t.Fatal("disabled assignment should be skipped before probe")
+		if skip != nil {
+			t.Fatal("USB discovery should probe disabled assignments so they remain visible when reconnected")
 		}
-		checkedDisabled = true
-		if skip("Enabled Cam", "usb-enabled", "/dev/v4l/by-path/enabled") {
-			t.Fatal("enabled assignment should not be skipped before probe")
-		}
-		checkedEnabled = true
 		return []recording.DetectedCamera{{
+			Name:             "Disabled Cam",
+			Device:           "/dev/video8",
+			Format:           "v4l2",
+			PixFmt:           "mjpeg",
+			Size:             "1280x720",
+			Fps:              30,
+			MatchKey:         "usb-disabled",
+			AttachmentPath:   "/dev/v4l/by-path/disabled",
+			Identity:         "/dev/v4l/by-path/disabled",
+			SupportedFormats: []string{"mjpeg", "yuyv422"},
+		}, {
 			Name:             "Enabled Cam",
 			Device:           "/dev/video9",
 			Format:           "v4l2",
@@ -833,9 +873,9 @@ func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t
 		}}
 	}
 
-	sources := buildUSBSourcesWithProgress(9001, map[int]struct{}{}, map[string]struct{}{}, nil)
-	if !checkedDisabled || !checkedEnabled {
-		t.Fatalf("expected skip filter checks for both assignments, got disabled=%t enabled=%t", checkedDisabled, checkedEnabled)
+	sources, changed := buildUSBSourcesWithProgress(9001, map[int]struct{}{}, map[string]struct{}{}, nil)
+	if changed {
+		t.Fatal("detected assignments should not be disabled as absent")
 	}
 	if len(sources) != 2 {
 		t.Fatalf("expected 2 sources, got %d", len(sources))
@@ -857,8 +897,8 @@ func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t
 	if disabled.Enabled {
 		t.Fatal("disabled assignment should stay disabled in inventory")
 	}
-	if disabled.Detected {
-		t.Fatal("disabled assignment should not be marked as live-detected")
+	if !disabled.Detected {
+		t.Fatal("disabled assignment should be marked as detected when it reconnects")
 	}
 	if disabled.Camera.PixFmt != "mjpeg" || disabled.Camera.Size != "1280x720" {
 		t.Fatalf("disabled assignment should keep stored probe metadata, got pixFmt=%q size=%q", disabled.Camera.PixFmt, disabled.Camera.Size)
@@ -873,6 +913,39 @@ func TestBuildUSBSourcesWithProgressSkipsDisabledAssignmentsAndKeepsConfigRows(t
 	inv := assembleSourceInventory(sources, nil, nil)
 	if len(inv.Active) != 1 || inv.Active[0].Key != "usb-enabled" {
 		t.Fatalf("active inventory = %+v, want only enabled detected source", inv.Active)
+	}
+}
+
+func TestBuildUSBSourcesWithProgressDisablesAbsentAssignment(t *testing.T) {
+	previousConfig := camerasConfig
+	previousFFmpegConfig := ffmpegConfig
+	previousDetect := detectUSBCamerasWithConfigAndProgress
+	defer func() {
+		camerasConfig = previousConfig
+		ffmpegConfig = previousFFmpegConfig
+		detectUSBCamerasWithConfigAndProgress = previousDetect
+	}()
+
+	camerasConfig = &camerascfg.Config{DeviceAssignments: []camerascfg.DeviceAssignment{{
+		AttachmentPath: "/dev/v4l/by-path/missing",
+		MatchKey:       "usb-missing",
+		Name:           "Missing Cam",
+		OutputPort:     9001,
+	}}}
+	ffmpegConfig = &ffmpegcfg.Config{}
+	detectUSBCamerasWithConfigAndProgress = func(*ffmpegcfg.Config, recording.ProbeProgressFunc, func(string, string, string) bool) []recording.DetectedCamera {
+		return nil
+	}
+
+	sources, changed := buildUSBSourcesWithProgress(9001, map[int]struct{}{}, map[string]struct{}{}, nil)
+	if !changed {
+		t.Fatal("absence should mark the saved assignment disabled")
+	}
+	if !camerasConfig.DeviceAssignments[0].Disabled {
+		t.Fatal("absent assignment should be disabled in configuration")
+	}
+	if len(sources) != 1 || sources[0].Detected || sources[0].Enabled {
+		t.Fatalf("absent source = %+v, want stored, undetected, and disabled", sources)
 	}
 }
 
@@ -891,6 +964,28 @@ func TestRemoveDeviceAssignmentUsesAttachmentPathFirst(t *testing.T) {
 	}
 	if len(updated) != 1 || updated[0].Name != "Live Cam" {
 		t.Fatalf("updated assignments = %+v, want only Live Cam", updated)
+	}
+}
+
+func TestStoredUSBSourceIsDisabledUntilDetected(t *testing.T) {
+	assignment := &camerascfg.DeviceAssignment{
+		AttachmentPath: "/dev/v4l/by-path/camera",
+		MatchKey:       "usb-camera",
+		Name:           "Platform Camera",
+		ShortID:        "C1",
+		OutputPort:     9001,
+		Disabled:       false,
+	}
+
+	spec := storedUSBSourceSpec(assignment, 9001, map[int]struct{}{}, map[string]struct{}{})
+	if spec.Detected {
+		t.Fatal("stored USB source should not be marked detected")
+	}
+	if spec.Enabled {
+		t.Fatal("stored USB source should be disabled until detected")
+	}
+	if spec.OutputPort != 9001 {
+		t.Fatalf("stored USB source output port = %d, want 9001", spec.OutputPort)
 	}
 }
 
@@ -1074,6 +1169,34 @@ func TestStreamNeedsStartupProbeIncludesCopyStreams(t *testing.T) {
 			},
 			want: true,
 		},
+		{
+			name: "rtsp network stream probes",
+			stream: &cameraStream{
+				camera: recording.DetectedCamera{Format: "rtsp", PixFmt: "h264"},
+			},
+			want: true,
+		},
+		{
+			name: "avfoundation capture device skips probe",
+			stream: &cameraStream{
+				camera: recording.DetectedCamera{Format: "avfoundation", PixFmt: "uyvy422"},
+			},
+			want: false,
+		},
+		{
+			name: "v4l2 capture device skips probe",
+			stream: &cameraStream{
+				camera: recording.DetectedCamera{Format: "v4l2", PixFmt: "mjpeg"},
+			},
+			want: false,
+		},
+		{
+			name: "dshow capture device skips probe",
+			stream: &cameraStream{
+				camera: recording.DetectedCamera{Format: "dshow", PixFmt: "mjpeg"},
+			},
+			want: false,
+		},
 	}
 
 	for i := range tests {
@@ -1125,16 +1248,18 @@ func TestBuildStreamCommandSpecProbeNullCopiesToNullOutput(t *testing.T) {
 	}
 }
 
-func TestRunStartupProbeRetriesFailedGrabWithDebugLogging(t *testing.T) {
+func TestRunStartupProbeRetriesTransientGrabFailure(t *testing.T) {
 	previousCamerasConfig := camerasConfig
 	previousFFmpegConfig := ffmpegConfig
 	previousFFmpegPath := config.GetFFmpegPath()
 	previousRunner := runStartupProbeCommandFunc
+	previousBackoff := streamStartupProbeBackoff
 	defer func() {
 		camerasConfig = previousCamerasConfig
 		ffmpegConfig = previousFFmpegConfig
 		config.SetFFmpegPath(previousFFmpegPath)
 		runStartupProbeCommandFunc = previousRunner
+		streamStartupProbeBackoff = previousBackoff
 	}()
 
 	camerasConfig = &camerascfg.Config{}
@@ -1143,16 +1268,19 @@ func TestRunStartupProbeRetriesFailedGrabWithDebugLogging(t *testing.T) {
 		Output:   ffmpegcfg.OutputConfig{ExtraFlags: "-f mpegts"},
 	}
 	config.SetFFmpegPath("ffmpeg7")
+	streamStartupProbeBackoff = 0
 
 	var logLevels []string
 	var argLists []string
+	var attemptCount int
 	runStartupProbeCommandFunc = func(ffmpegPath string, args []string, logLevel string, timeout time.Duration) (string, error) {
 		logLevels = append(logLevels, logLevel)
 		argLists = append(argLists, strings.Join(append([]string(nil), args...), " "))
-		if logLevel == "error" {
-			return "first grab failed", errors.New("grab failed")
+		attemptCount++
+		if attemptCount < streamStartupProbeAttempts {
+			return "framerate 60.000000 is not supported by the device", errors.New("grab failed")
 		}
-		return "debug grab details", nil
+		return "", nil
 	}
 
 	stream := &cameraStream{
@@ -1162,19 +1290,94 @@ func TestRunStartupProbeRetriesFailedGrabWithDebugLogging(t *testing.T) {
 	}
 
 	err := runStartupProbe(stream, &streamStartupCallbacks{})
-	if err == nil {
-		t.Fatal("runStartupProbe() error = nil, want the first grab failure")
+	if err != nil {
+		t.Fatalf("runStartupProbe() error = %v, want nil after retry", err)
 	}
-	if !strings.Contains(err.Error(), "stream validation failed") || !strings.Contains(err.Error(), "first grab failed") {
-		t.Fatalf("runStartupProbe() error = %q, want stream validation failure with first grab details", err.Error())
+	if attemptCount != streamStartupProbeAttempts {
+		t.Fatalf("attemptCount = %d, want %d transient failures then success", attemptCount, streamStartupProbeAttempts)
 	}
-	if strings.Join(logLevels, ",") != "error,debug" {
-		t.Fatalf("probe log levels = %v, want [error debug]", logLevels)
+	for i, level := range logLevels {
+		if level != "error" {
+			t.Fatalf("probe log level[%d] = %q, want all error-level attempts before success", i, level)
+		}
 	}
-	if len(argLists) != 2 || argLists[0] != argLists[1] {
-		t.Fatalf("probe args = %v, want same args for error and debug grabs", argLists)
+	for i, joined := range argLists {
+		if joined != argLists[0] {
+			t.Fatalf("probe args[%d] = %q, want identical args on every retry", i, joined)
+		}
+		if !strings.Contains(joined, "-f null -") {
+			t.Fatalf("probe args[%d] = %q, want null output", i, joined)
+		}
 	}
-	if !strings.Contains(argLists[0], "-f null -") {
-		t.Fatalf("probe args = %q, want null output", argLists[0])
+}
+
+// TestUVCDeviceStartupProbeUsesCurrentAVFoundationIndex exercises the real
+// root cause on actual hardware: AVFoundation numeric device indices are not
+// stable, so a stored index can point at a different physical camera (for
+// example the built-in FaceTime camera, which maxes out at 30 fps) and reject
+// the configured 60 fps. The start path re-resolves the index by device name
+// before opening, so it targets the intended UVC camera.
+//
+// This test is skipped entirely when no AVFoundation UVC camera capable of
+// 60 fps is present, so it is a no-op on machines/CI without such hardware. It
+// asserts the deterministic resolution logic and does not compete for an
+// exclusive device open (which would contend with any running stream).
+func TestUVCDeviceStartupProbeUsesCurrentAVFoundationIndex(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("AVFoundation index-resolution test only applies to macOS")
 	}
+	if testing.Short() {
+		t.Skip("skipping real-device UVC test in -short mode")
+	}
+
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not found on PATH; skipping real-device UVC test")
+	}
+
+	fc, err := ffmpegcfg.LoadConfig()
+	if err != nil || fc == nil {
+		t.Skipf("cannot load ffmpeg config; skipping real-device UVC test: %v", err)
+	}
+
+	previousFFmpegPath := config.GetFFmpegPath()
+	defer config.SetFFmpegPath(previousFFmpegPath)
+	config.SetFFmpegPath(ffmpegPath)
+
+	cameras := recording.DetectCamerasWithConfig(fc)
+	var cam *recording.DetectedCamera
+	for i := range cameras {
+		if cameras[i].Format == "avfoundation" && cameras[i].Fps >= 60 {
+			cam = &cameras[i]
+			break
+		}
+	}
+	if cam == nil {
+		t.Skip("no AVFoundation UVC camera advertising >= 60 fps detected; skipping")
+	}
+
+	current, ok := recording.ResolveAVFoundationDeviceIndex(cam.Name)
+	if !ok {
+		t.Skipf("camera %q not present in live AVFoundation device list; skipping", cam.Name)
+	}
+
+	// Simulate a stale/wrong stored index and verify the start path re-resolves
+	// it to the camera's current live index by name.
+	staleIndex := "99"
+	if staleIndex == current {
+		staleIndex = "98"
+	}
+	stream := &cameraStream{
+		camera:  *cam,
+		shortID: "UVC",
+		port:    9002,
+	}
+	stream.camera.Device = staleIndex
+
+	resolveAVFoundationStreamIndex(stream)
+
+	if stream.camera.Device != current {
+		t.Fatalf("resolved index = %q, want current live index %q for %q", stream.camera.Device, current, cam.Name)
+	}
+	t.Logf("re-resolved %q from stale index %q to current index %q", cam.Name, staleIndex, current)
 }

@@ -720,10 +720,17 @@ func broadcastConfigSignature(unicastEnabled bool, multicast camerascfg.Multicas
 	return fmt.Sprintf("multicast|%s|local=%t", strings.TrimSpace(multicast.IP), multicast.LocalOnly)
 }
 
-// isIntegratedCamera checks if a camera is likely an integrated webcam.
-// Primary indicator: raw pixel formats (yuyv422, nv12, rgb24) are typically from integrated cameras.
-// External/professional cameras usually offer mjpeg or h264.
+// isIntegratedCamera checks if a camera should be excluded when includeAll is false.
+// macOS uses AVFoundation transport metadata because raw pixel formats do not distinguish
+// built-in and Continuity cameras from USB capture devices.
 func isIntegratedCamera(cam recording.DetectedCamera) bool {
+	if runtime.GOOS == "darwin" && cam.Format == "avfoundation" {
+		if strings.TrimSpace(cam.TransportType) == "" {
+			return false
+		}
+		return !isMacOSCaptureTransport(cam.TransportType)
+	}
+
 	// Raw pixel formats are the primary indicator of integrated cameras
 	switch cam.PixFmt {
 	case "yuyv422", "nv12", "rgb24", "bgr24", "uyvy422":
@@ -770,6 +777,15 @@ func isIntegratedCamera(cam recording.DetectedCamera) bool {
 	}
 }
 
+func isMacOSCaptureTransport(transportType string) bool {
+	switch transportType {
+	case "usb ", "pci ":
+		return true
+	default:
+		return false
+	}
+}
+
 func describeEncodingPlan(cam recording.DetectedCamera, encoder *recording.HwEncoder, fc *ffmpegcfg.Config) string {
 	pixFmt := strings.ToLower(strings.TrimSpace(cam.PixFmt))
 	switch pixFmt {
@@ -810,6 +826,13 @@ const (
 )
 
 const streamStartupProbeTimeout = 5 * time.Second
+
+const streamStartupProbeAttempts = 2
+
+// streamStartupProbeBackoff is the settle delay between preflight attempts. It
+// covers the brief window where a camera the app just released is not yet
+// reopenable. Declared as a var so tests can disable the delay.
+var streamStartupProbeBackoff = 500 * time.Millisecond
 
 const unicastReachabilityTimeout = 250 * time.Millisecond
 
@@ -1046,7 +1069,21 @@ func formatCommandLine(path string, args []string) string {
 }
 
 func streamNeedsStartupProbe(stream *cameraStream) bool {
-	return stream != nil
+	if stream == nil {
+		return false
+	}
+	// Physical capture devices (USB/integrated cameras) can be opened by only one
+	// process at a time, and macOS/AVFoundation (and v4l2/dshow) release them
+	// asynchronously. A separate null-sink preflight opens then closes the device,
+	// and the live stream reopening it immediately races that release, causing
+	// exit 251 (I/O error). For these sources the live command is the single
+	// open, so no separate preflight. Network sources (RTSP) have no such device
+	// exclusivity, so keep the preflight to catch bad URLs/transports early.
+	switch stream.camera.Format {
+	case "avfoundation", "v4l2", "dshow":
+		return false
+	}
+	return true
 }
 
 func summarizeStartupProbeOutput(output string, runErr error) string {
@@ -1131,6 +1168,44 @@ func runStartupProbeCommand(ffmpegPath string, args []string, logLevel string, t
 
 var runStartupProbeCommandFunc = runStartupProbeCommand
 
+// resolveAVFoundationStreamIndex re-resolves the AVFoundation device index from
+// the camera name right before opening it. AVFoundation numeric indices are not
+// stable, so a stored index can point at a different physical camera (for
+// example the built-in FaceTime camera instead of an external UVC camera),
+// which then rejects the configured framerate. Matching by name yields the
+// current index for the intended camera.
+func resolveAVFoundationStreamIndex(stream *cameraStream) {
+	if stream == nil || stream.camera.Format != "avfoundation" {
+		return
+	}
+	name := strings.TrimSpace(stream.camera.Name)
+	if name == "" {
+		return
+	}
+	current, ok := recording.ResolveAVFoundationDeviceIndex(name)
+	if !ok {
+		logging.WarningLogger.Printf("AVFoundation device %q not found in current device list; using stored index %q", name, stream.camera.Device)
+		return
+	}
+	if current != stream.camera.Device {
+		logging.WarningLogger.Printf("AVFoundation index for %q changed from %q to %q; using current index", name, stream.camera.Device, current)
+		stream.camera.Device = current
+	}
+}
+
+// settleAVFoundationDevice waits briefly before opening an AVFoundation capture
+// device so an asynchronous release from a prior open (restart, preview,
+// detection) can complete, avoiding exit 251 (I/O error) on reopen. It is a
+// no-op off macOS and for non-avfoundation sources.
+func settleAVFoundationDevice(stream *cameraStream) {
+	if runtime.GOOS != "darwin" || stream == nil || stream.camera.Format != "avfoundation" {
+		return
+	}
+	if avfoundationOpenSettle > 0 {
+		time.Sleep(avfoundationOpenSettle)
+	}
+}
+
 func runStartupProbe(stream *cameraStream, callbacks *streamStartupCallbacks) error {
 	if !streamNeedsStartupProbe(stream) {
 		return nil
@@ -1145,11 +1220,20 @@ func runStartupProbe(stream *cameraStream, callbacks *streamStartupCallbacks) er
 	logging.InfoLogger.Printf("Startup stream preflight for %s [%s]: %s", stream.camera.Name, stream.shortID, formatCommandLine(spec.ffmpegPath, quickArgs))
 	callbacks.report(recording.ProgressMsg(recording.ProgStreamTest, stream.camera.Name))
 
-	output, err := runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "error", streamStartupProbeTimeout)
-	if err == nil {
-		logging.InfoLogger.Printf("Startup stream preflight passed for %s [%s]: %s", stream.camera.Name, stream.shortID, describeEncodingPlan(stream.camera, stream.encoder, ffmpegConfig))
-		callbacks.report(recording.ProgressMsg(recording.ProgValidatePassed, stream.camera.Name))
-		return nil
+	var output string
+	for attempt := 1; attempt <= streamStartupProbeAttempts; attempt++ {
+		output, err = runStartupProbeCommandFunc(spec.ffmpegPath, spec.args, "error", streamStartupProbeTimeout)
+		if err == nil {
+			logging.InfoLogger.Printf("Startup stream preflight passed for %s [%s]: %s", stream.camera.Name, stream.shortID, describeEncodingPlan(stream.camera, stream.encoder, ffmpegConfig))
+			callbacks.report(recording.ProgressMsg(recording.ProgValidatePassed, stream.camera.Name))
+			return nil
+		}
+		if attempt < streamStartupProbeAttempts {
+			logging.InfoLogger.Printf("Startup stream preflight retry %d/%d for %s [%s] after transient failure: %s", attempt, streamStartupProbeAttempts-1, stream.camera.Name, stream.shortID, summarizeStartupProbeOutput(output, err))
+			if streamStartupProbeBackoff > 0 {
+				time.Sleep(streamStartupProbeBackoff)
+			}
+		}
 	}
 
 	reason := summarizeStartupProbeOutput(output, err)
@@ -1165,12 +1249,26 @@ func runStartupProbe(stream *cameraStream, callbacks *streamStartupCallbacks) er
 	return fmt.Errorf("stream validation failed: %s", reason)
 }
 
+// avfoundationOpenSettle is a short delay before opening an AVFoundation
+// capture device. macOS releases a camera asynchronously after a previous
+// process (a just-stopped stream on restart, a preview, or detection) closes
+// it, and reopening too soon fails with exit 251 (I/O error). A brief wait lets
+// the release complete. Declared as a var so tests can disable it; only applied
+// on macOS for avfoundation sources.
+var avfoundationOpenSettle = 300 * time.Millisecond
+
 // startStream starts ffmpeg to stream a camera to multicast UDP
 func startStream(stream *cameraStream, callbacks *streamStartupCallbacks) (*exec.Cmd, error) {
 	if err := runStartupProbe(stream, callbacks); err != nil {
 		return nil, err
 	}
 	callbacks.report(recording.ProgressMsg(recording.ProgStreamStart, stream.camera.Name))
+
+	// Re-resolve the AVFoundation index by name right before opening, since
+	// numeric indices are not stable and a stored one can point at a different
+	// physical camera.
+	resolveAVFoundationStreamIndex(stream)
+	settleAVFoundationDevice(stream)
 
 	spec, err := buildStreamCommandSpec(stream, streamOutputLive)
 	if err != nil {
@@ -2232,6 +2330,25 @@ func openFile(path string, onDone func()) {
 	}()
 }
 
+func openConfigurationDirectory() {
+	dir := config.GetInstallDir()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", dir)
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	case "linux":
+		cmd = exec.Command("xdg-open", dir)
+	default:
+		logging.WarningLogger.Printf("Unsupported platform: %s", runtime.GOOS)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		logging.ErrorLogger.Printf("Failed to open configuration directory: %v", err)
+	}
+}
+
 func recordClip(stream *cameraStream) (string, error) {
 	clipInput := stream.listenURL()
 	if runtime.GOOS == "windows" {
@@ -2598,6 +2715,17 @@ func runUI() {
 					usbRows[index].detectedFPS = cam.Fps
 					usbRows[index].detectedFormats = append([]string(nil), cam.SupportedFormats...)
 					usbRows[index].dirtyReasons = removeReason(usbRows[index].dirtyReasons, "probe")
+					for i := range currentInventory.USB {
+						if currentInventory.USB[i].Key != usbRows[index].matchKey {
+							continue
+						}
+						currentInventory.USB[i].Detected = true
+						currentInventory.USB[i].Camera = *cam
+						currentInventory.USB[i].SupportedFormats = append([]string(nil), cam.SupportedFormats...)
+						break
+					}
+					usbRows[index].detected = true
+					usbRows[index].enabledCheck.Enable()
 					if err := saveUSBRow(usbRows[index]); err != nil {
 						dialog.ShowError(err, window)
 						actionStatus.SetText(fmt.Sprintf("Save failed: %v", err))
@@ -2921,9 +3049,11 @@ func runUI() {
 	}
 
 	refreshMonitoringStatus := func(message string) {
-		table.Refresh()
-		updateCameraStatusLabel(currentInventory.Status)
-		actionStatus.SetText(message)
+		fyne.Do(func() {
+			table.Refresh()
+			updateCameraStatusLabel(currentInventory.Status)
+			actionStatus.SetText(message)
+		})
 	}
 
 	recoveryStateFor := func(key string) *rtspRecoveryState {
@@ -2975,7 +3105,9 @@ func runUI() {
 			transport:   spec.Transport,
 		}
 
-		callbacks := &streamStartupCallbacks{action: actionStatus.SetText}
+		callbacks := &streamStartupCallbacks{action: func(message string) {
+			fyne.Do(func() { actionStatus.SetText(message) })
+		}}
 		cmd, err := startStream(stream, callbacks)
 		if err != nil {
 			stream.setStopped(fmt.Sprintf("failed: %v", err))
@@ -3074,18 +3206,20 @@ func runUI() {
 				if killErr == nil {
 					killErr = jobutil.WaitForUDPPortFree(port, 500*time.Millisecond)
 				}
-				if killErr != nil {
-					status.SetText(fmt.Sprintf("Failed to kill existing process: %v", killErr))
-					cancelBtn.SetText("Close")
-					cancelBtn.Enable()
-					killBtn.Enable()
-					actionStatus.SetText(fmt.Sprintf("Start failed: %v", killErr))
-					return
-				}
-				prompt.Hide()
-				if onReady != nil {
-					onReady()
-				}
+				fyne.Do(func() {
+					if killErr != nil {
+						status.SetText(fmt.Sprintf("Failed to kill existing process: %v", killErr))
+						cancelBtn.SetText("Close")
+						cancelBtn.Enable()
+						killBtn.Enable()
+						actionStatus.SetText(fmt.Sprintf("Start failed: %v", killErr))
+						return
+					}
+					prompt.Hide()
+					if onReady != nil {
+						onReady()
+					}
+				})
 			}(item.OutputPort, item.Name)
 		}
 		prompt.Show()
@@ -3435,13 +3569,15 @@ func runUI() {
 		if inv.Encoder != nil {
 			currentEncoder = inv.Encoder
 		}
-		updateEncoderStatus()
-		if reloadRows {
-			loadInventoryIntoRows(inv)
-		}
-		renderMonitoringSourceToggles(inv)
-		table.Refresh()
-		updateCameraStatusLabel(inv.Status)
+		fyne.Do(func() {
+			updateEncoderStatus()
+			if reloadRows {
+				loadInventoryIntoRows(inv)
+			}
+			renderMonitoringSourceToggles(inv)
+			table.Refresh()
+			updateCameraStatusLabel(inv.Status)
+		})
 	}
 
 	verificationMessage := func(prefix string) string {
@@ -3734,6 +3870,11 @@ func runUI() {
 		row.enabledCheck.OnChanged = nil
 		row.enabledCheck.SetChecked(spec.Enabled)
 		row.enabledCheck.OnChanged = enabledChanged
+		if spec.Detected {
+			row.enabledCheck.Enable()
+		} else {
+			row.enabledCheck.Disable()
+		}
 
 		nameChanged := row.nameEntry.OnChanged
 		row.nameEntry.OnChanged = nil
@@ -4294,6 +4435,11 @@ func runUI() {
 		go func() {
 			startTime := time.Now()
 			inv := buildSourceInventoryWithProgress(reportProgress)
+			if inv.ConfigChanged {
+				if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+					inv.Errors = append(inv.Errors, fmt.Sprintf("save disabled absent sources: %v", err))
+				}
+			}
 			for _, item := range inv.Errors {
 				reportProgress(recording.ProgressMsg(recording.ProgError, item))
 			}
@@ -4327,6 +4473,11 @@ func runUI() {
 			startTime := time.Now()
 			logging.InfoLogger.Printf("Initial source detection started")
 			inv := buildSourceInventoryWithProgress(reportStartupProgress)
+			if inv.ConfigChanged {
+				if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+					inv.Errors = append(inv.Errors, fmt.Sprintf("save disabled absent sources: %v", err))
+				}
+			}
 			if inv.Encoder != nil {
 				logging.InfoLogger.Printf("Best encoder: %s (%s)", inv.Encoder.Name, inv.Encoder.Description)
 			} else {
@@ -4524,6 +4675,17 @@ func runUI() {
 		container.NewTabItem("Configuration", configurationTab),
 	)
 
+	window.SetMainMenu(fyne.NewMainMenu(
+		fyne.NewMenu("File",
+			fyne.NewMenuItem("Open Configuration Directory", func() {
+				openConfigurationDirectory()
+			}),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Quit", func() {
+				myApp.Quit()
+			}),
+		),
+	))
 	window.SetContent(content)
 	window.Show()
 	startInitialDetection()

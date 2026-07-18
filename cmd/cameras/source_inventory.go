@@ -12,11 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"github.com/owlcms/replays/internal/config"
 	camerascfg "github.com/owlcms/replays/internal/config/cameras"
 	"github.com/owlcms/replays/internal/logging"
 	"github.com/owlcms/replays/internal/recording"
 )
+
 type sourceSpec struct {
 	Key              string
 	AttachmentPath   string
@@ -41,6 +43,7 @@ type sourceInventory struct {
 	USB                 []sourceSpec
 	RTSP                []sourceSpec
 	Active              []sourceSpec
+	ConfigChanged       bool
 	Status              string
 	Errors              []string
 	PendingVerification []string
@@ -75,7 +78,7 @@ func buildSourceInventoryWithProgress(progress func(string)) sourceInventory {
 	if progress != nil {
 		progress(recording.ProgressMsg(recording.ProgCheckingLocal, ""))
 	}
-	usbSpecs := buildUSBSourcesWithProgress(startPort, usedPorts, usedShortIDs, progress)
+	usbSpecs, usbConfigChanged := buildUSBSourcesWithProgress(startPort, usedPorts, usedShortIDs, progress)
 	logging.InfoLogger.Printf("Source inventory USB phase completed in %s with %d source(s)", time.Since(usbStart), len(usbSpecs))
 	encoderStart := time.Now()
 	if progress != nil {
@@ -84,6 +87,7 @@ func buildSourceInventoryWithProgress(progress func(string)) sourceInventory {
 	encoders := recording.DetectEncodersWithConfigAndProgress(ffmpegConfig, progress)
 	logging.InfoLogger.Printf("Source inventory encoder phase completed in %s with %d candidate(s)", time.Since(encoderStart), len(encoders))
 	inv := assembleSourceInventory(usbSpecs, rtspSpecs, recording.PickBestEncoder(encoders))
+	inv.ConfigChanged = usbConfigChanged
 	logging.InfoLogger.Printf("Source inventory build completed in %s: usb=%d rtsp=%d active=%d errors=%d pending=%d",
 		time.Since(start), len(inv.USB), len(inv.RTSP), len(inv.Active), len(inv.Errors), len(inv.PendingVerification))
 	if progress != nil {
@@ -159,9 +163,10 @@ func assembleSourceInventory(usbSpecs, rtspSpecs []sourceSpec, encoder *recordin
 	return inv
 }
 
-func buildUSBSourcesWithProgress(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
-	cameras := detectUSBCamerasWithConfigAndProgress(ffmpegConfig, progress, disabledUSBDetectionFilter(progress))
-	return buildUSBSourcesFromDetected(cameras, startPort, usedPorts, usedShortIDs, progress)
+func buildUSBSourcesWithProgress(startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) ([]sourceSpec, bool) {
+	cameras := detectUSBCamerasWithConfigAndProgress(ffmpegConfig, progress, nil)
+	sources := buildUSBSourcesFromDetected(cameras, startPort, usedPorts, usedShortIDs, progress)
+	return sources, disableAbsentUSBAssignments(sources)
 }
 
 func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort int, usedPorts map[int]struct{}, usedShortIDs map[string]struct{}, progress func(string)) []sourceSpec {
@@ -296,6 +301,25 @@ func buildUSBSourcesFromDetected(cameras []recording.DetectedCamera, startPort i
 	return sources
 }
 
+func disableAbsentUSBAssignments(sources []sourceSpec) bool {
+	assignmentsByAttachment, assignmentsByMatchKey := deviceAssignmentMaps()
+	changed := false
+	for _, source := range sources {
+		if source.Detected {
+			continue
+		}
+		assignment := matchingDeviceAssignment(source.Camera, assignmentsByAttachment, assignmentsByMatchKey)
+		if assignment == nil || assignment.Disabled {
+			continue
+		}
+		assignment.Disabled = true
+		assignment.DirtyReasons = removeDirtyReason(assignment.DirtyReasons, "restart")
+		logging.InfoLogger.Printf("Disabled absent USB source %q (attachmentPath=%s, matchKey=%s)", source.Name, source.AttachmentPath, source.Key)
+		changed = true
+	}
+	return changed
+}
+
 func cachedDetectedCameras(specs []sourceSpec) []recording.DetectedCamera {
 	cameras := make([]recording.DetectedCamera, 0, len(specs))
 	for _, spec := range specs {
@@ -323,21 +347,6 @@ func deviceAssignmentMaps() (map[string]*camerascfg.DeviceAssignment, map[string
 		}
 	}
 	return assignmentsByAttachment, assignmentsByMatchKey
-}
-
-func disabledUSBDetectionFilter(progress func(string)) func(name, matchKey, attachmentPath string) bool {
-	assignmentsByAttachment, assignmentsByMatchKey := deviceAssignmentMaps()
-	return func(name, matchKey, attachmentPath string) bool {
-		assignment := matchingDeviceAssignmentIdentity(name, matchKey, attachmentPath, assignmentsByAttachment, assignmentsByMatchKey)
-		if assignment == nil || !assignment.Disabled {
-			return false
-		}
-		logging.InfoLogger.Printf("Skipping disabled USB source %q before probe (attachmentPath=%s, matchKey=%s)", name, attachmentPath, matchKey)
-		if progress != nil {
-			progress(recording.ProgressMsg(recording.ProgSkippedSource, name))
-		}
-		return true
-	}
 }
 
 func matchingDeviceAssignment(cam recording.DetectedCamera, assignmentsByAttachment, assignmentsByMatchKey map[string]*camerascfg.DeviceAssignment) *camerascfg.DeviceAssignment {
@@ -381,8 +390,7 @@ func storedUSBSourceSpec(assignment *camerascfg.DeviceAssignment, startPort int,
 	usedPorts[port] = struct{}{}
 	supportedFormats := append([]string(nil), assignment.ProbeFormats...)
 	dirtyReasons := normalizeSourceDirtyReasons(assignment.DirtyReasons)
-	enabled := !assignment.Disabled
-	if !enabled {
+	if assignment.Disabled {
 		dirtyReasons = removeDirtyReason(dirtyReasons, "restart")
 	}
 	monitoringOn := true
@@ -396,7 +404,7 @@ func storedUSBSourceSpec(assignment *camerascfg.DeviceAssignment, startPort int,
 		Name:             name,
 		ShortID:          shortID,
 		Summary:          summarizeUSBIdentity(cam),
-		Enabled:          enabled,
+		Enabled:          false,
 		Detected:         false,
 		MonitoringOn:     monitoringOn,
 		OutputPort:       port,
@@ -605,11 +613,11 @@ func probeUSBSource(matchKey string, onDone func(cam *recording.DetectedCamera))
 		for _, cam := range cameras {
 			if cam.MatchKey == matchKey {
 				c := cam
-				onDone(&c)
+				fyne.Do(func() { onDone(&c) })
 				return
 			}
 		}
-		onDone(nil)
+		fyne.Do(func() { onDone(nil) })
 	}()
 }
 
@@ -715,10 +723,10 @@ func probeAndFillRTSPRow(src camerascfg.RTSPSource, onDone func(codec, size stri
 		detected := probeRTSPSource(src)
 		codec := strings.ToLower(strings.TrimSpace(detected.PixFmt))
 		if codec == "unknown" || codec == "" {
-			onDone("", "-", 0, fmt.Errorf("probe failed or no video stream found"))
+			fyne.Do(func() { onDone("", "-", 0, fmt.Errorf("probe failed or no video stream found")) })
 			return
 		}
-		onDone(codec, detected.Size, detected.Fps, nil)
+		fyne.Do(func() { onDone(codec, detected.Size, detected.Fps, nil) })
 	}()
 }
 
