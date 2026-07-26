@@ -1,5 +1,7 @@
 **Change log**
 
+- 2.5.0: Support for macOS
+
 - 2.4.0: replays now works exclusively using streams produced by the cameras module.  If replays is installed on the same machine as the cameras module, you can read the ports in use using the menu. Otherwise use the ports mapping dialog.
 - 2.4.0: improved the cleanup of stale USB devices
 

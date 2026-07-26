@@ -15,6 +15,7 @@ env:
   BUILD_WINDOWS: true
   BUILD_RASPBERRY: true
   BUILD_LINUX: true
+  BUILD_MAC: true
 
 jobs:
   build_replays:
@@ -22,16 +23,16 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
-        go-version: '1.23'
+        go-version: '1.25.5'
 
     - name: Install fyne-cross
       run: |
-        go install github.com/fyne-io/fyne-cross@latest
+        go install github.com/fyne-io/fyne-cross@v1.6.2
         echo "${HOME}/go/bin" >> $GITHUB_PATH
 
     - name: Extract tag
@@ -70,7 +71,7 @@ jobs:
         cp fyne-cross/bin/windows-amd64/replays.exe artifacts/replays_windows.exe
 
     - name: Upload replays artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: replays_artifacts
         path: artifacts/*
@@ -80,16 +81,16 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
-        go-version: '1.23'
+        go-version: '1.25.5'
 
     - name: Install fyne-cross
       run: |
-        go install github.com/fyne-io/fyne-cross@latest
+        go install github.com/fyne-io/fyne-cross@v1.6.2
         echo "${HOME}/go/bin" >> $GITHUB_PATH
 
     - name: Build cameras for Linux amd64
@@ -114,18 +115,117 @@ jobs:
         cp fyne-cross/bin/windows-amd64/cameras.exe artifacts/cameras_windows.exe
 
     - name: Upload cameras artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: cameras_artifacts
         path: artifacts/*
 
-  create_release:
-    runs-on: ubuntu-latest
-    needs: [build_replays, build_cameras]
+  # macOS binaries must be compiled natively: cameras uses AVFoundation through
+  # darwinkit, so cgo is required and cross-compilation is not possible.
+  # One runner per architecture, as in the controlpanel release workflow.
+  build_mac_amd64:
+    runs-on: macos-15-intel
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      CGO_CFLAGS: "-mmacosx-version-min=13.0"
+      CGO_LDFLAGS: "-mmacosx-version-min=13.0"
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      if: ${{ env.BUILD_MAC == 'true' }}
+      uses: actions/checkout@v6
+
+    - name: Set up Go
+      if: ${{ env.BUILD_MAC == 'true' }}
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.5'
+
+    - name: Extract tag
+      if: ${{ env.BUILD_MAC == 'true' }}
+      run: |
+        echo "TAG=${{ inputs.tag }}" >> $GITHUB_ENV
+
+    - name: Substitute tag in version.go
+      if: ${{ env.BUILD_MAC == 'true' }}
+      run: |
+        cp dist/version.go.template internal/config/version.go
+        sed -i '' "s/_TAG_/${TAG}/g" internal/config/version.go
+        cat internal/config/version.go
+
+    - name: Build replays and cameras for macOS amd64
+      if: ${{ env.BUILD_MAC == 'true' }}
+      env:
+        GOOS: darwin
+        GOARCH: amd64
+        CGO_ENABLED: "1"
+      run: |
+        mkdir -p artifacts
+        go build -o artifacts/replays_darwin_amd64 ./cmd/replays
+        go build -o artifacts/cameras_darwin_amd64 ./cmd/cameras
+
+    - name: Upload macOS amd64 artifacts
+      if: ${{ env.BUILD_MAC == 'true' }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: mac_amd64_artifacts
+        path: artifacts/*
+
+  build_mac_arm64:
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      CGO_CFLAGS: "-mmacosx-version-min=13.0"
+      CGO_LDFLAGS: "-mmacosx-version-min=13.0"
+
+    steps:
+    - name: Checkout code
+      if: ${{ env.BUILD_MAC == 'true' }}
+      uses: actions/checkout@v6
+
+    - name: Set up Go
+      if: ${{ env.BUILD_MAC == 'true' }}
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.5'
+
+    - name: Extract tag
+      if: ${{ env.BUILD_MAC == 'true' }}
+      run: |
+        echo "TAG=${{ inputs.tag }}" >> $GITHUB_ENV
+
+    - name: Substitute tag in version.go
+      if: ${{ env.BUILD_MAC == 'true' }}
+      run: |
+        cp dist/version.go.template internal/config/version.go
+        sed -i '' "s/_TAG_/${TAG}/g" internal/config/version.go
+        cat internal/config/version.go
+
+    - name: Build replays and cameras for macOS arm64
+      if: ${{ env.BUILD_MAC == 'true' }}
+      env:
+        GOOS: darwin
+        GOARCH: arm64
+        CGO_ENABLED: "1"
+      run: |
+        mkdir -p artifacts
+        go build -o artifacts/replays_darwin_arm64 ./cmd/replays
+        go build -o artifacts/cameras_darwin_arm64 ./cmd/cameras
+
+    - name: Upload macOS arm64 artifacts
+      if: ${{ env.BUILD_MAC == 'true' }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: mac_arm64_artifacts
+        path: artifacts/*
+
+  create_release:
+    runs-on: ubuntu-latest
+    needs: [build_replays, build_cameras, build_mac_amd64, build_mac_arm64]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
 
     - name: Install GitHub CLI
       run: |
@@ -146,15 +246,27 @@ jobs:
         sed -i "s/_TAG_/${TAG}/g" ./dist/ReleaseNotes.md
 
     - name: Download replays artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         name: replays_artifacts
         path: ./dist
 
     - name: Download cameras artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         name: cameras_artifacts
+        path: ./dist
+
+    - name: Download macOS amd64 artifacts
+      uses: actions/download-artifact@v7
+      with:
+        name: mac_amd64_artifacts
+        path: ./dist
+
+    - name: Download macOS arm64 artifacts
+      uses: actions/download-artifact@v7
+      with:
+        name: mac_arm64_artifacts
         path: ./dist
 
     - name: List artifacts
@@ -198,6 +310,13 @@ jobs:
       run: |
         gh release upload ${{ env.TAG }} dist/replays_linux_arm64
 
+    - name: Upload macOS replays executables
+      if: ${{ env.BUILD_MAC == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/replays_darwin_amd64 dist/replays_darwin_arm64
+
     # Upload cameras executables
     - name: Upload Windows cameras executable
       if: ${{ env.BUILD_WINDOWS == 'true' }}
@@ -219,3 +338,10 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         gh release upload ${{ env.TAG }} dist/cameras_linux_arm64
+
+    - name: Upload macOS cameras executables
+      if: ${{ env.BUILD_MAC == 'true' }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release upload ${{ env.TAG }} dist/cameras_darwin_amd64 dist/cameras_darwin_arm64
