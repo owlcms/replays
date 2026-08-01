@@ -1,7 +1,10 @@
 ### Project Structure
 
-- `cmd/replays`: Main application entry point
+- `cmd/video`: Main application entry point (hosts the Cameras and Replays modules)
 - `internal/`: Private application code
+  - `cameras/`: Cameras module UI and stream management
+  - `replays/`: Replays module UI, HTTP server wiring and MQTT monitoring
+  - `videoconfig/`: Resolves the shared configuration directory
   - `api/`: API handlers and middleware
   - `models/`: Data models
   - `service/`: Business logic
@@ -13,8 +16,12 @@
 ### Running in IDE
 
 ```bash
-# Run the application
-go run cmd/replays/main.go
+# Run the application (both modules)
+go run ./cmd/video
+
+# Run with only one module visible
+go run ./cmd/video --no-replays
+go run ./cmd/video --no-cameras
 ```
 
 ### Configuration-Driven Code

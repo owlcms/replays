@@ -172,6 +172,34 @@ func ExtractDefaultConfig() string {
 	return sharedPath
 }
 
+// ExtractDefaultConfigTo creates ffmpeg.toml at configPath if it does not
+// already exist.
+func ExtractDefaultConfigTo(configPath string) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("create ffmpeg configuration directory: %w", err)
+	}
+	if _, err := os.Stat(configPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("check ffmpeg configuration %s: %w", configPath, err)
+	}
+	if err := os.WriteFile(configPath, defaultConfig, 0644); err != nil {
+		return fmt.Errorf("write ffmpeg configuration %s: %w", configPath, err)
+	}
+	return nil
+}
+
+// LoadConfigFromFile loads a specific ffmpeg.toml file.
+func LoadConfigFromFile(configPath string) (*Config, error) {
+	var cfg Config
+	if _, err := toml.DecodeFile(configPath, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", configPath, err)
+	}
+	cfg.applyDefaults()
+	cfg.filterEncodersForPlatform()
+	return &cfg, nil
+}
+
 // filterEncodersForPlatform removes encoder entries that don't match the current OS.
 // Platform values can be OS names or capture API names ("v4l2" for Linux,
 // "dshow" for Windows, and "avfoundation" for macOS).

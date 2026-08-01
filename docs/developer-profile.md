@@ -51,5 +51,5 @@ For this project:
 
 ```bash
 cd ~/git/replays
-go build ./cmd/cameras
+go build ./cmd/video
 ```

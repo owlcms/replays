@@ -218,6 +218,19 @@ func GetConfigSourcePath() string {
 	return configSourcePath
 }
 
+// SetConfigSourcePath pins the file that SaveConfig writes to.
+func SetConfigSourcePath(path string) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		configSourcePath = ""
+		return
+	}
+	if absPath, err := filepath.Abs(trimmed); err == nil {
+		trimmed = absPath
+	}
+	configSourcePath = trimmed
+}
+
 // SaveConfig writes the full cameras config to disk.
 // If config.toml was previously loaded from embedded defaults, it is written
 // to the install directory and becomes the active config file.
@@ -314,6 +327,23 @@ func ExtractDefaultConfig() string {
 	}
 
 	return instancePath
+}
+
+// ExtractDefaultConfigTo creates the cameras configuration at configPath if it
+// does not already exist.
+func ExtractDefaultConfigTo(configPath string) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("create cameras configuration directory: %w", err)
+	}
+	if _, err := os.Stat(configPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("check cameras configuration %s: %w", configPath, err)
+	}
+	if err := os.WriteFile(configPath, defaultInstanceConfig, 0644); err != nil {
+		return fmt.Errorf("write cameras configuration %s: %w", configPath, err)
+	}
+	return nil
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.

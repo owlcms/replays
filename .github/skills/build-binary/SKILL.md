@@ -18,9 +18,12 @@ argument-hint: '<command or package to build>'
 4. Use a plain `go build ./...` or `go build ./cmd/<name>` only as an additional package check, not as the only build validation.
 
 ## Repo Examples
-- Cameras app: `go build -o cameras.exe ./cmd/cameras`
-- Replays app: `go build -o replays.exe ./cmd/replays`
+- Video app (Cameras + Replays modules): `go build -o video.exe ./cmd/video`
 - Discovery app: `go build -o discovery.exe ./cmd/discovery`
+
+The Cameras and Replays user interfaces live in `internal/cameras` and
+`internal/replays`; they are libraries with no `main` and are built as part of
+`./cmd/video`.
 
 ## Reporting
 When reporting build validation, state the binary command that was run and whether it succeeded.

@@ -53,14 +53,13 @@ jobs:
         sed -i "s/_TAG_/${TAG}/g" internal/config/version.go
         cat internal/config/version.go
 
-    - name: Build replays and cameras for Linux amd64
+    - name: Build video for Linux amd64
       if: ${{ env.BUILD_LINUX == 'true' }}
       env:
         CGO_ENABLED: "1"
       run: |
         mkdir -p artifacts
-        go build -o artifacts/replays_linux_amd64 ./cmd/replays
-        go build -o artifacts/cameras_linux_amd64 ./cmd/cameras
+        go build -o artifacts/video_linux_amd64 ./cmd/video
 
     - name: Upload Linux amd64 artifacts
       if: ${{ env.BUILD_LINUX == 'true' }}
@@ -101,14 +100,13 @@ jobs:
         sed -i "s/_TAG_/${TAG}/g" internal/config/version.go
         cat internal/config/version.go
 
-    - name: Build replays and cameras for Linux arm64
+    - name: Build video for Linux arm64
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       env:
         CGO_ENABLED: "1"
       run: |
         mkdir -p artifacts
-        go build -o artifacts/replays_linux_arm64 ./cmd/replays
-        go build -o artifacts/cameras_linux_arm64 ./cmd/cameras
+        go build -o artifacts/video_linux_arm64 ./cmd/video
 
     - name: Upload Linux arm64 artifacts
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
@@ -151,14 +149,12 @@ jobs:
         sed -i "s/_TAG_/${TAG}/g" internal/config/version.go
         cat internal/config/version.go
 
-    - name: Build replays and cameras for Windows
+    - name: Build video for Windows
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       run: |
         mkdir -p artifacts
-        fyne-cross windows -arch amd64 -env GOTOOLCHAIN=go1.25.5 -name replays -app-id app.owlcms.replays -icon Icon.png ./cmd/replays
-        cp fyne-cross/bin/windows-amd64/replays.exe artifacts/replays_windows.exe
-        fyne-cross windows -arch amd64 -env GOTOOLCHAIN=go1.25.5 -name cameras -app-id app.owlcms.cameras -icon Icon.png ./cmd/cameras
-        cp fyne-cross/bin/windows-amd64/cameras.exe artifacts/cameras_windows.exe
+        fyne-cross windows -arch amd64 -env GOTOOLCHAIN=go1.25.5 -name video -app-id app.owlcms.video -icon Icon.png ./cmd/video
+        cp fyne-cross/bin/windows-amd64/video.exe artifacts/video_windows.exe
 
     - name: Upload Windows artifacts
       if: ${{ env.BUILD_WINDOWS == 'true' }}
@@ -200,7 +196,7 @@ jobs:
         sed -i '' "s/_TAG_/${TAG}/g" internal/config/version.go
         cat internal/config/version.go
 
-    - name: Build replays and cameras for macOS amd64
+    - name: Build video for macOS amd64
       if: ${{ env.BUILD_MAC == 'true' }}
       env:
         GOOS: darwin
@@ -208,8 +204,7 @@ jobs:
         CGO_ENABLED: "1"
       run: |
         mkdir -p artifacts
-        go build -o artifacts/replays_darwin_amd64 ./cmd/replays
-        go build -o artifacts/cameras_darwin_amd64 ./cmd/cameras
+        go build -o artifacts/video_darwin_amd64 ./cmd/video
 
     - name: Upload macOS amd64 artifacts
       if: ${{ env.BUILD_MAC == 'true' }}
@@ -248,7 +243,7 @@ jobs:
         sed -i '' "s/_TAG_/${TAG}/g" internal/config/version.go
         cat internal/config/version.go
 
-    - name: Build replays and cameras for macOS arm64
+    - name: Build video for macOS arm64
       if: ${{ env.BUILD_MAC == 'true' }}
       env:
         GOOS: darwin
@@ -256,8 +251,7 @@ jobs:
         CGO_ENABLED: "1"
       run: |
         mkdir -p artifacts
-        go build -o artifacts/replays_darwin_arm64 ./cmd/replays
-        go build -o artifacts/cameras_darwin_arm64 ./cmd/cameras
+        go build -o artifacts/video_darwin_arm64 ./cmd/video
 
     - name: Upload macOS arm64 artifacts
       if: ${{ env.BUILD_MAC == 'true' }}
@@ -341,60 +335,31 @@ jobs:
             --notes-file ./dist/ReleaseNotes.md
         fi
 
-    # Upload replays executables
-    - name: Upload Windows replays executable
+    # Upload video executables
+    - name: Upload Windows video executable
       if: ${{ env.BUILD_WINDOWS == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload ${{ env.TAG }} dist/replays_windows.exe
+        gh release upload ${{ env.TAG }} dist/video_windows.exe
 
-    - name: Upload Linux amd64 replays executable
+    - name: Upload Linux amd64 video executable
       if: ${{ env.BUILD_LINUX == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload ${{ env.TAG }} dist/replays_linux_amd64
+        gh release upload ${{ env.TAG }} dist/video_linux_amd64
 
-    - name: Upload Raspberry Pi arm64 replays executable
+    - name: Upload Raspberry Pi arm64 video executable
       if: ${{ env.BUILD_RASPBERRY == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload ${{ env.TAG }} dist/replays_linux_arm64
+        gh release upload ${{ env.TAG }} dist/video_linux_arm64
 
-    - name: Upload macOS replays executables
+    - name: Upload macOS video executables
       if: ${{ env.BUILD_MAC == 'true' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        gh release upload ${{ env.TAG }} dist/replays_darwin_amd64 dist/replays_darwin_arm64
-
-    # Upload cameras executables
-    - name: Upload Windows cameras executable
-      if: ${{ env.BUILD_WINDOWS == 'true' }}
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        gh release upload ${{ env.TAG }} dist/cameras_windows.exe
-
-    - name: Upload Linux amd64 cameras executable
-      if: ${{ env.BUILD_LINUX == 'true' }}
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        gh release upload ${{ env.TAG }} dist/cameras_linux_amd64
-
-    - name: Upload Raspberry Pi arm64 cameras executable
-      if: ${{ env.BUILD_RASPBERRY == 'true' }}
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        gh release upload ${{ env.TAG }} dist/cameras_linux_arm64
-
-    - name: Upload macOS cameras executables
-      if: ${{ env.BUILD_MAC == 'true' }}
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        gh release upload ${{ env.TAG }} dist/cameras_darwin_amd64 dist/cameras_darwin_arm64
+        gh release upload ${{ env.TAG }} dist/video_darwin_amd64 dist/video_darwin_arm64
