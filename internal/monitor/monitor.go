@@ -350,7 +350,7 @@ func AutoSelectPlatform(cfg *replays.Config, platforms []string) bool {
 	if len(platforms) == 1 {
 		// Auto-select single platform
 		platform := platforms[0]
-		configFilePath := filepath.Join(config.GetInstallDir(), "config.toml")
+		configFilePath := config.ReplaysConfigPath()
 		if err := replays.UpdatePlatform(configFilePath, platform); err != nil {
 			logging.ErrorLogger.Printf("Error updating platform: %v", err)
 			return false

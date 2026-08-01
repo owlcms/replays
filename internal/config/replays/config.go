@@ -1,7 +1,6 @@
 package replays
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,16 +14,17 @@ import (
 
 // Config represents the replays configuration file structure.
 type Config struct {
-	Port      int                          `toml:"port"`
-	VideoDir  string                       `toml:"videoDir"`
-	Width     int                          `toml:"width"`
-	Height    int                          `toml:"height"`
-	Fps       int                          `toml:"fps"`
-	OwlCMS    string                       `toml:"owlcms"`
-	Platform  string                       `toml:"platform"`
-	LogFfmpeg bool                         `toml:"logFfmpeg"`
-	Multicast config.MulticastSettings     `toml:"mpeg-ts"`
-	Cameras   []config.CameraConfiguration `toml:"-"`
+	Port          int                          `toml:"port"`
+	VideoDir      string                       `toml:"videoDir"`
+	Width         int                          `toml:"width"`
+	Height        int                          `toml:"height"`
+	Fps           int                          `toml:"fps"`
+	OwlCMS        string                       `toml:"owlcms"`
+	Platform      string                       `toml:"platform"`
+	CamerasServer string                       `toml:"camerasServer"`
+	LogFfmpeg     bool                         `toml:"logFfmpeg"`
+	Multicast     config.MulticastSettings     `toml:"mpeg-ts"`
+	Cameras       []config.CameraConfiguration `toml:"-"`
 }
 
 var currentConfig *Config
@@ -109,49 +109,6 @@ func (c *Config) ValidateCamera() error {
 	return nil
 }
 
-// InitConfig processes command-line flags and loads the configuration.
-func InitConfig() (*Config, error) {
-	config.AppName = "replays"
-
-	configFile := flag.String("config", "", "path to configuration file")
-	flag.StringVar(&config.ConfigDir, "configDir", "",
-		"directory containing editable config files (config.toml, auto.toml, etc.)")
-	flag.StringVar(&config.InstallDir, "dir", "replays", fmt.Sprintf(
-		`Name of an alternate installation directory. Default is 'replays'.
-Value is relative to the platform-specific directory for applcation data (%s)
-Used for multiple installations on the same machine (e.g. 'replays2, replay3').
-An absolute path can be provded if needed.`, config.GetInstallDir()))
-	verbose := flag.Bool("v", false, "enable verbose logging")
-	verboseAlt := flag.Bool("verbose", false, "enable verbose logging")
-	flag.BoolVar(&config.NoVideo, "noVideo", false, "log ffmpeg actions but do not execute them")
-	flag.BoolVar(&config.NoMQTT, "noMQTT", false, "disable MQTT autodiscovery and monitoring")
-	flag.StringVar(&config.AutoTomlDir, "autoTomlDir", "",
-		"directory for auto.toml output (default: install dir)")
-	flag.Parse()
-
-	if err := config.ResolveAndEnsureConfigDir(); err != nil {
-		return nil, err
-	}
-
-	if *configFile == "" {
-		*configFile = filepath.Join(config.GetInstallDir(), "config.toml")
-	}
-
-	logging.SetVerbose(*verbose || *verboseAlt)
-	logDir := filepath.Join(config.GetRuntimeDir(), "logs")
-	if err := logging.Init(logDir); err != nil {
-		return nil, fmt.Errorf("failed to initialize logging: %w", err)
-	}
-
-	cfg, err := LoadConfig(*configFile)
-	if err != nil {
-		return nil, fmt.Errorf("error loading configuration: %w", err)
-	}
-
-	config.SetCameraConfigs(cfg.Cameras)
-	return cfg, nil
-}
-
 // UpdateConfigFile updates the owlcms address in the config file.
 func UpdateConfigFile(configFile, owlcmsAddress string) error {
 	content, err := os.ReadFile(configFile)
@@ -231,6 +188,35 @@ func UpdatePlatform(configFile, platform string) error {
 		return fmt.Errorf("failed to write config file: %v", err)
 	}
 	return nil
+}
+
+// UpdateCamerasServer records the remote Video instance that supplies the Cameras inventory.
+func UpdateCamerasServer(configFile, server string) error {
+	input, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("read replays config: %w", err)
+	}
+
+	lines := strings.Split(string(input), "\n")
+	serverLine := fmt.Sprintf("camerasServer = %q", strings.TrimSpace(server))
+	for index, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "camerasServer") {
+			lines[index] = serverLine
+			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+		}
+	}
+
+	insertAt := len(lines)
+	for index, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			insertAt = index
+			break
+		}
+	}
+	lines = append(lines, "")
+	copy(lines[insertAt+1:], lines[insertAt:])
+	lines[insertAt] = serverLine
+	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
 }
 
 // UpdateMpegTSConfig writes the [mpeg-ts] section to the config file.

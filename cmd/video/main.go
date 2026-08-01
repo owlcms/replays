@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"fyne.io/fyne/v2"
@@ -29,7 +30,7 @@ type moduleSelection struct {
 }
 
 func main() {
-	configDir := flag.String("configDir", "", "directory containing cameras.toml, replays.toml, and ffmpeg.toml (default: ./config)")
+	configDir := flag.String("configDir", "", "directory containing cameras.toml, replays.toml, and ffmpeg.toml (default: ./"+videoconfig.DefaultRoot+")")
 	extractConfig := flag.Bool("extractConfig", false, "create missing configuration files in configDir and exit")
 	enableCameras := flag.Bool("cameras", false, "show the Cameras tabs at startup")
 	disableCameras := flag.Bool("no-cameras", false, "hide the Cameras tabs at startup")
@@ -44,12 +45,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	replaysAvailable := selection.replays
 
 	paths, err := videoconfig.Resolve(*configDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	// Every legacy config.GetInstallDir() consumer must see the same directory.
+	config.ConfigDir = paths.Root
 	if *extractConfig {
 		if err := paths.ExtractDefaults(); err != nil {
 			fmt.Fprintf(os.Stderr, "extract configuration: %v\n", err)
@@ -63,7 +67,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	config.AppName = "video"
 	if err := logging.InitWithFile(filepath.Join(paths.Root, "logs"), "video.log"); err != nil {
 		fmt.Fprintf(os.Stderr, "initialize logging: %v\n", err)
 		os.Exit(1)
@@ -78,7 +81,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	if err := replays.Init(replays.Options{ConfigPath: paths.Replays}); err != nil {
+	if err := replays.Init(replays.Options{
+		ConfigPath:        paths.Replays,
+		CamerasConfigPath: paths.Cameras,
+		CamerasAvailable:  selection.cameras,
+		Enabled:           replaysAvailable,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
@@ -117,6 +125,7 @@ func main() {
 			selection.cameras = true
 			visible = append(visible, monitoringTab, configurationTab)
 		}
+		replaysUI.SetCamerasAvailable(selection.cameras)
 		camerasItem.Checked = selection.cameras
 		replaysItem.Checked = selection.replays
 		tabs.SetItems(visible)
@@ -129,6 +138,13 @@ func main() {
 	camerasItem = fyne.NewMenuItem("Cameras", func() {
 		selection.cameras = !selection.cameras
 		refreshTabs()
+		if selection.cameras {
+			go func() {
+				if err := replays.RefreshLocalCameras(); err != nil {
+					logging.ErrorLogger.Printf("Failed to refresh Replays from local Cameras config: %v", err)
+				}
+			}()
+		}
 	})
 	replaysItem = fyne.NewMenuItem("Replays", func() {
 		selection.replays = !selection.replays
@@ -142,11 +158,7 @@ func main() {
 		myApp.Quit()
 	}
 	requestQuit := func() {
-		if selection.replays {
-			replays.ConfirmExit(window, quit)
-			return
-		}
-		quit()
+		confirmVideoShutdown(window, selection.cameras, replaysAvailable, quit)
 	}
 
 	menus := []*fyne.Menu{
@@ -184,8 +196,13 @@ func main() {
 	}()
 
 	window.Show()
-	camerasUI.Start()
-	replaysUI.Start()
+	replaysUI.StartServer(selection.cameras, replaysAvailable)
+	if selection.cameras {
+		camerasUI.Start()
+	}
+	if replaysAvailable {
+		replaysUI.Start()
+	}
 	myApp.Run()
 
 	cameras.Cleanup()
@@ -216,4 +233,36 @@ func resolveSelection(enableCameras, disableCameras, enableReplays, disableRepla
 		return moduleSelection{}, fmt.Errorf("at least one of the Cameras or Replays modules must be enabled")
 	}
 	return selection, nil
+}
+
+func confirmVideoShutdown(window fyne.Window, camerasActive, replaysActive bool, proceed func()) {
+	stopping := make([]string, 0, 2)
+	if camerasActive {
+		stopping = append(stopping, "camera streams")
+	}
+	if replaysActive {
+		stopping = append(stopping, "jury replays and any ongoing recordings")
+	}
+	if len(stopping) == 0 {
+		proceed()
+		return
+	}
+
+	message := fmt.Sprintf("Are you sure you want to exit? This will stop %s.", joinWithAnd(stopping))
+	confirmDialog := dialog.NewConfirm("Confirm Exit", message, func(confirm bool) {
+		if confirm {
+			logging.InfoLogger.Println("User requested application shutdown")
+			proceed()
+		}
+	}, window)
+	confirmDialog.SetDismissText("Cancel")
+	confirmDialog.SetConfirmText("Exit")
+	confirmDialog.Show()
+}
+
+func joinWithAnd(values []string) string {
+	if len(values) < 2 {
+		return values[0]
+	}
+	return strings.Join(values[:len(values)-1], ", ") + " and " + values[len(values)-1]
 }

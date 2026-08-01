@@ -7,6 +7,9 @@ owlcms = ""
 # Platform identifier if more than one platform detected
 platform = "A"
 
+# Remote Video instance used as the Cameras inventory when Cameras is disabled locally.
+camerasServer = ""
+
 # Directory to store video files (can be an absolute path to store on a different drive)
 videoDir = 'videos'
 

@@ -15,7 +15,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/owlcms/replays/internal/config"
-	"github.com/owlcms/replays/internal/config/ffmpeg"
 	"github.com/owlcms/replays/internal/logging"
 )
 
@@ -161,50 +160,44 @@ func LoadConfigFromFile(path string) (*Config, error) {
 	return loadConfigFile(trimmed, false)
 }
 
-// LoadConfigFromDir loads a cameras configuration from configDir/config.toml.
-func LoadConfigFromDir(configDir string) (*Config, error) {
-	trimmed := strings.TrimSpace(configDir)
-	if trimmed == "" {
-		return nil, fmt.Errorf("empty cameras config directory")
+// LoadConfigFromBytes parses a cameras configuration received from another Video instance.
+func LoadConfigFromBytes(data []byte) (*Config, error) {
+	cfg, err := decodeCameraConfig(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse cameras configuration: %w", err)
 	}
-	return LoadConfigFromFile(filepath.Join(trimmed, "config.toml"))
+	cfg.applyDefaults()
+	return &cfg, nil
 }
 
-// LoadConfig loads the cameras instance configuration from config.toml.
-// Search order: exe dir → cwd → install dir → embedded default.
+// LoadConfig reloads the cameras configuration from the file the host pinned
+// with SetConfigSourcePath, falling back to cameras.toml in the config
+// directory and finally to the embedded defaults.
 func LoadConfig() (*Config, error) {
 	var cfg Config
 
-	baseDirs := []string{}
-	if exe, err := os.Executable(); err == nil {
-		baseDirs = append(baseDirs, filepath.Dir(exe))
+	path := configSourcePath
+	if path == "" {
+		path = config.CamerasConfigPath()
 	}
-	if cwd, err := os.Getwd(); err == nil {
-		baseDirs = append(baseDirs, cwd)
-	}
-	baseDirs = append(baseDirs, config.GetInstallDir())
 
 	configSourcePath = ""
-	for _, dir := range baseDirs {
-		path := filepath.Join(dir, "config.toml")
-		if _, err := os.Stat(path); err == nil {
-			fmt.Printf("Cameras instance config: %s\n", path)
-			loaded, loadErr := loadConfigFile(path, true)
-			if loadErr != nil {
-				return nil, loadErr
-			}
-			cfg = *loaded
-			break
+	if _, err := os.Stat(path); err == nil {
+		fmt.Printf("Cameras instance config: %s\n", path)
+		loaded, loadErr := loadConfigFile(path, true)
+		if loadErr != nil {
+			return nil, loadErr
 		}
+		cfg = *loaded
 	}
 
 	if configSourcePath == "" {
 		fmt.Println("Cameras instance config: using embedded defaults")
-		logging.InfoLogger.Println("No config.toml found, using embedded instance defaults")
+		logging.InfoLogger.Println("No cameras.toml found, using embedded instance defaults")
 		var parseErr error
 		cfg, parseErr = decodeCameraConfig(string(defaultInstanceConfig))
 		if parseErr != nil {
-			return nil, fmt.Errorf("failed to parse embedded config.toml: %w", parseErr)
+			return nil, fmt.Errorf("failed to parse embedded cameras.toml: %w", parseErr)
 		}
 	}
 
@@ -241,7 +234,7 @@ func SaveConfig(cfg *Config) error {
 
 	configPath := GetConfigSourcePath()
 	if configPath == "" {
-		configPath = filepath.Join(config.GetInstallDir(), "config.toml")
+		configPath = config.CamerasConfigPath()
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
@@ -300,33 +293,6 @@ func SaveStartPort(startPort int) error {
 		return err
 	}
 	return SaveMulticastSettings(cfg.Multicast.IP, startPort, cfg.Multicast.LocalOnly)
-}
-
-// ExtractDefaultConfig writes the default cameras config.toml
-// to the install directory if it doesn't already exist.
-// Also ensures ffmpeg.toml is extracted via the ffmpeg package.
-func ExtractDefaultConfig() string {
-	installDir := config.GetInstallDir()
-	if err := os.MkdirAll(installDir, 0755); err != nil {
-		logging.ErrorLogger.Printf("Failed to create directory for cameras config files: %v", err)
-		return ""
-	}
-
-	// Ensure ffmpeg.toml exists in the shared config directory
-	if p := ffmpeg.ExtractDefaultConfig(); p == "" {
-		logging.WarningLogger.Println("Failed to extract default ffmpeg.toml")
-	}
-
-	instancePath := filepath.Join(installDir, "config.toml")
-	if _, err := os.Stat(instancePath); os.IsNotExist(err) {
-		if err := os.WriteFile(instancePath, defaultInstanceConfig, 0644); err != nil {
-			logging.ErrorLogger.Printf("Failed to write config.toml: %v", err)
-			return ""
-		}
-		logging.InfoLogger.Printf("Wrote default config.toml to %s", instancePath)
-	}
-
-	return instancePath
 }
 
 // ExtractDefaultConfigTo creates the cameras configuration at configPath if it

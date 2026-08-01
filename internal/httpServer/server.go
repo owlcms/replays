@@ -39,6 +39,12 @@ type VideoInfo struct {
 	DisplayName string
 }
 
+// ModuleAvailability identifies which video modules are running in this process.
+type ModuleAvailability struct {
+	Cameras bool
+	Replays bool
+}
+
 type TemplateData struct {
 	Videos               []VideoInfo
 	StatusMsg            string
@@ -173,9 +179,42 @@ func init() {
 	}
 }
 
-// StartServer starts the HTTP server on the specified port
-func StartServer(port int, _ bool) {
+// StartServer starts the HTTP server on the specified port.
+func StartServer(port int, availability ModuleAvailability) {
+	router := newRouter(availability)
+
+	addr := fmt.Sprintf(":%d", port)
+	Server = &http.Server{
+		Addr:    addr,
+		Handler: router,
+	}
+
+	// Start the WebSocket broadcaster
+	go handleMessages()
+
+	logging.InfoLogger.Printf("Starting HTTP server on %s (cameras available: %t, replays available: %t)\n", addr, availability.Cameras, availability.Replays)
+	if err := Server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logging.ErrorLogger.Printf("Failed to start server: %v", err)
+	}
+}
+
+func newRouter(availability ModuleAvailability) *mux.Router {
 	router := mux.NewRouter()
+	if availability.Cameras {
+		router.HandleFunc("/api/cameras/config", handleCamerasConfig)
+	} else {
+		router.HandleFunc("/api/cameras/config", handleCamerasUnavailable)
+	}
+
+	if availability.Replays {
+		registerReplayRoutes(router)
+	} else {
+		registerUnavailableReplayRoutes(router)
+	}
+	return router
+}
+
+func registerReplayRoutes(router *mux.Router) {
 
 	// Serve static files from embedded filesystem
 	fileServer := http.FileServer(getFileSystem())
@@ -194,19 +233,49 @@ func StartServer(port int, _ bool) {
 	// Accept /replay/{camera:[0-9]+} and /replay/{camera:[0-9]+}.mp4
 	router.HandleFunc("/replay/{camera:[0-9]+}", handleReplay)
 	router.HandleFunc("/replay/{camera:[0-9]+}.mp4", handleReplay).Name("replay-mp4")
+}
 
-	addr := fmt.Sprintf(":%d", port)
-	Server = &http.Server{
-		Addr:    addr,
-		Handler: router,
+func registerUnavailableReplayRoutes(router *mux.Router) {
+	unavailable := http.HandlerFunc(handleReplaysUnavailable)
+	router.PathPrefix("/static/").Handler(unavailable)
+	router.PathPrefix("/videos/").Handler(unavailable)
+	router.HandleFunc("/", handleReplaysUnavailable)
+	router.HandleFunc("/api/sessions", handleReplaysUnavailable)
+	router.HandleFunc("/api/sessions/{session}/lifts", handleReplaysUnavailable)
+	router.HandleFunc("/api/replay-state", handleReplaysUnavailable)
+	router.HandleFunc("/ws", handleReplaysUnavailable)
+	router.HandleFunc("/replay/{camera:[0-9]+}", handleReplaysUnavailable)
+	router.HandleFunc("/replay/{camera:[0-9]+}.mp4", handleReplaysUnavailable).Name("replay-mp4")
+}
+
+func handleReplaysUnavailable(w http.ResponseWriter, _ *http.Request) {
+	http.Error(w, "Replays module is unavailable", http.StatusServiceUnavailable)
+}
+
+func handleCamerasUnavailable(w http.ResponseWriter, _ *http.Request) {
+	http.Error(w, "Cameras module is unavailable", http.StatusServiceUnavailable)
+}
+
+func handleCamerasConfig(w http.ResponseWriter, r *http.Request) {
+	setReplayAPIHeaders(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
 	}
 
-	// Start the WebSocket broadcaster
-	go handleMessages()
+	data, err := os.ReadFile(config.CamerasConfigPath())
+	if err != nil {
+		http.Error(w, "Failed to read cameras configuration", http.StatusInternalServerError)
+		return
+	}
 
-	logging.InfoLogger.Printf("Starting HTTP server on %s\n", addr)
-	if err := Server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logging.ErrorLogger.Printf("Failed to start server: %v", err)
+	w.Header().Set("Content-Type", "application/toml; charset=utf-8")
+	if _, err := w.Write(data); err != nil {
+		logging.ErrorLogger.Printf("Failed to write cameras configuration: %v", err)
 	}
 }
 

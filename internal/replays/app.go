@@ -5,18 +5,14 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"github.com/owlcms/replays/internal/assets"
 	"github.com/owlcms/replays/internal/config"
 	"github.com/owlcms/replays/internal/config/cameras"
 	replayscfg "github.com/owlcms/replays/internal/config/replays"
@@ -27,41 +23,15 @@ import (
 )
 
 var (
-	titleLabel *widget.Label
+	titleLabel             *widget.Label
+	camerasAvailable       bool
+	localCamerasConfigPath string
 
 	// moduleConfig is the loaded replays configuration; moduleConfigPath is the
 	// file every in-app edit is written back to.
 	moduleConfig     *replayscfg.Config
 	moduleConfigPath string
 )
-
-func setAppIcon(myApp fyne.App) {
-	if assets.IconResource != nil && len(assets.IconResource.Content()) > 0 {
-		myApp.SetIcon(assets.IconResource)
-		return
-	}
-
-	iconCandidates := make([]string, 0, 2)
-
-	if exePath, err := os.Executable(); err == nil {
-		iconCandidates = append(iconCandidates, filepath.Join(filepath.Dir(exePath), "Icon.png"))
-	}
-	if wd, err := os.Getwd(); err == nil {
-		iconCandidates = append(iconCandidates, filepath.Join(wd, "Icon.png"))
-	}
-
-	for _, iconPath := range iconCandidates {
-		res, err := fyne.LoadResourceFromPath(iconPath)
-		if err == nil {
-			myApp.SetIcon(res)
-			return
-		}
-	}
-}
-
-func defaultWindowSize() fyne.Size {
-	return fyne.NewSize(1480, 880)
-}
 
 func getReplayListHost() string {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
@@ -107,62 +77,6 @@ func Shutdown() {
 	monitor.DisconnectMQTT()
 
 	logging.InfoLogger.Println("Replays module shutdown complete")
-}
-
-// openApplicationDirectory opens the application directory in the file explorer
-func openApplicationDirectory() {
-	dir := filepath.Dir(moduleConfigPath)
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", dir)
-	case "darwin":
-		cmd = exec.Command("open", dir)
-	case "linux":
-		cmd = exec.Command("xdg-open", dir)
-	default:
-		logging.WarningLogger.Printf("Unsupported platform: %s", runtime.GOOS)
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		logging.ErrorLogger.Printf("Failed to open application directory: %v", err)
-	}
-}
-
-func formatEnabledCameraList(cfg *replayscfg.Config) string {
-	if cfg == nil {
-		return "No configuration loaded."
-	}
-
-	if len(cfg.Cameras) == 0 {
-		return "No Cameras Module stream ports are configured."
-	}
-
-	var builder strings.Builder
-	builder.WriteString("Camera streams received by replays:\n\n")
-
-	for i, camera := range cfg.Cameras {
-		builder.WriteString(fmt.Sprintf("%d. %s\n", i+1, camera.FfmpegCamera))
-		if i < len(cfg.Cameras)-1 {
-			builder.WriteString("\n")
-		}
-	}
-
-	return builder.String()
-}
-
-func showEnabledCameras(cfg *replayscfg.Config, window fyne.Window) {
-	textArea := widget.NewMultiLineEntry()
-	textArea.SetMinRowsVisible(12)
-	textArea.SetText(formatEnabledCameraList(cfg))
-	textArea.Wrapping = fyne.TextWrapWord
-
-	dialog := dialog.NewCustom("Enabled Cameras", "Close", container.NewVBox(
-		widget.NewLabel("Currently active camera sources used by replays:"),
-		textArea,
-	), window)
-	dialog.Resize(fyne.NewSize(640, 420))
-	dialog.Show()
 }
 
 // showOwlCMSServerAddress shows a dialog with the OwlCMS server address
@@ -214,6 +128,152 @@ func showOwlCMSServerAddress(cfg *replayscfg.Config, window fyne.Window) {
 	dialog := dialog.NewCustom("OwlCMS Server Address", "Close", content, window)
 	dialog.Resize(fyne.NewSize(400, 0))
 	dialog.Show()
+}
+
+func showRemoteCamerasImportDialog(cfg *replayscfg.Config, window fyne.Window) {
+	serverAddress := widget.NewEntry()
+	serverAddress.SetPlaceHolder("http://video-cameras.local:8090")
+	content := container.NewVBox(
+		widget.NewLabel("Cameras server address"),
+		serverAddress,
+		widget.NewLabel("The server must expose /api/cameras/config and send its configured streams to this machine."),
+	)
+
+	dialog.NewCustomConfirm("Use Streams from Cameras Server", "Fetch and Use", "Cancel", content,
+		func(use bool) {
+			if !use {
+				return
+			}
+
+			address := serverAddress.Text
+			go func() {
+				preview, err := loadRemoteCamerasImportPreview(address)
+				if err == nil && len(preview.OrderedStreams) == 0 {
+					err = fmt.Errorf("the Cameras server has no enabled streams")
+				}
+				if err == nil && !preview.CompatibilityAllowed {
+					err = fmt.Errorf("%s", preview.CompatibilityMessage)
+				}
+
+				fyne.Do(func() {
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("load Cameras server configuration: %w", err), window)
+						return
+					}
+					showCameraSelectionDialog(cfg, preview, address, window)
+				})
+			}()
+		}, window).Show()
+}
+
+func showSelectCamerasDialog(cfg *replayscfg.Config, window fyne.Window) {
+	go func() {
+		var (
+			preview      *localCamerasImportPreview
+			sourceServer string
+			err          error
+		)
+		if camerasAvailable {
+			preview, err = loadLocalCamerasImportPreview(localCamerasConfigPath)
+		} else {
+			sourceServer = strings.TrimSpace(cfg.CamerasServer)
+			if sourceServer == "" {
+				fyne.Do(func() {
+					showRemoteCamerasImportDialog(cfg, window)
+				})
+				return
+			}
+			preview, err = loadRemoteCamerasImportPreview(sourceServer)
+		}
+
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("load available Cameras: %w", err), window)
+				return
+			}
+			if len(preview.OrderedStreams) == 0 {
+				dialog.ShowInformation("No Cameras", "The selected Cameras source has no enabled streams.", window)
+				return
+			}
+			showCameraSelectionDialog(cfg, preview, sourceServer, window)
+		})
+	}()
+}
+
+func showCameraSelectionDialog(cfg *replayscfg.Config, preview *localCamerasImportPreview, sourceServer string, window fyne.Window) {
+	selected, available := selectedCamerasFirst(preview, cfg.Multicast)
+	optionByLabel := make(map[string]localCamerasStream, len(preview.OrderedStreams))
+	formatOption := func(stream localCamerasStream) string {
+		return fmt.Sprintf("%s  %s [%s]  port %d", formatPreviewShortID(stream.ShortID), stream.Name, stream.Kind, stream.OutputPort)
+	}
+	options := make([]string, 0, len(preview.OrderedStreams))
+	for _, stream := range append(append([]localCamerasStream{}, selected...), available...) {
+		label := formatOption(stream)
+		optionByLabel[label] = stream
+		options = append(options, label)
+	}
+
+	selectors := make([]*widget.Select, maxImportedCameraStreams)
+	formItems := make([]*widget.FormItem, 0, maxImportedCameraStreams)
+	for index := range selectors {
+		selector := widget.NewSelect(options, nil)
+		selector.PlaceHolder = "Not selected"
+		if index < len(selected) {
+			selector.SetSelected(formatOption(selected[index]))
+		}
+		selectors[index] = selector
+		selectorContainer := container.NewGridWrap(fyne.NewSize(360, selector.MinSize().Height), selector)
+		clearButton := widget.NewButtonWithIcon("", theme.ContentClearIcon(), selector.ClearSelected)
+		formItems = append(formItems, widget.NewFormItem(fmt.Sprintf("Camera %d", index+1), container.NewBorder(nil, nil, nil, clearButton, selectorContainer)))
+	}
+
+	content := container.NewVBox(
+		widget.NewLabel("Selected cameras and replay order"),
+		widget.NewForm(formItems...),
+	)
+
+	dialog.NewCustomConfirm("Select Cameras", "Save", "Cancel", content, func(save bool) {
+		if !save {
+			return
+		}
+		newSelection := make([]localCamerasStream, 0, maxImportedCameraStreams)
+		selectedPorts := make(map[int]struct{}, maxImportedCameraStreams)
+		for _, selector := range selectors {
+			if selector.Selected == "" {
+				continue
+			}
+			stream := optionByLabel[selector.Selected]
+			if _, duplicate := selectedPorts[stream.OutputPort]; duplicate {
+				dialog.ShowError(fmt.Errorf("a camera can only be selected once"), window)
+				return
+			}
+			selectedPorts[stream.OutputPort] = struct{}{}
+			newSelection = append(newSelection, stream)
+		}
+		if len(newSelection) == 0 {
+			dialog.ShowError(fmt.Errorf("select at least one camera"), window)
+			return
+		}
+		if err := applyLocalCamerasImport(cfg, preview, newSelection, moduleConfigPath); err != nil {
+			dialog.ShowError(fmt.Errorf("save selected cameras: %w", err), window)
+			return
+		}
+		if sourceServer != "" {
+			if err := replayscfg.UpdateCamerasServer(moduleConfigPath, sourceServer); err != nil {
+				dialog.ShowError(fmt.Errorf("save Cameras server: %w", err), window)
+				return
+			}
+			cfg.CamerasServer = sourceServer
+		}
+		cfg.Cameras = cfg.Multicast.BuildCameraConfigs()
+		config.SetCameraConfigs(cfg.Cameras)
+		successDialog := dialog.NewInformation("Success", "Selected cameras saved. The application will now exit. Please restart it.", window)
+		successDialog.SetOnClosed(func() {
+			window.Close()
+			os.Exit(0)
+		})
+		successDialog.Show()
+	}, window).Show()
 }
 
 // showPlatformSelection shows a dialog with platform selection dropdown
@@ -282,31 +342,6 @@ func showPlatformSelection(cfg *replayscfg.Config, window fyne.Window) {
 	dialog.Show()
 }
 
-// ConfirmExit asks the user to confirm stopping jury replays, then calls proceed.
-// When no competition is connected the confirmation is skipped.
-func ConfirmExit(window fyne.Window, proceed func()) {
-	if !monitor.IsConnected() {
-		logging.InfoLogger.Println("No MQTT connection - shutting down immediately")
-		proceed()
-		return
-	}
-
-	confirmDialog := dialog.NewConfirm(
-		"Confirm Exit",
-		"Are you sure you want to exit? This will stop jury replays. Any ongoing recordings will be stopped.",
-		func(confirm bool) {
-			if confirm {
-				logging.InfoLogger.Println("User requested application shutdown")
-				proceed()
-			}
-		},
-		window,
-	)
-	confirmDialog.SetDismissText("Cancel")
-	confirmDialog.SetConfirmText("Exit")
-	confirmDialog.Show()
-}
-
 func updateTitle() {
 	cfg := replayscfg.GetCurrentConfig()
 	platform := cfg.Platform
@@ -314,202 +349,6 @@ func updateTitle() {
 		platform = "No Platform Selected"
 	}
 	titleLabel.SetText(fmt.Sprintf("OWLCMS Jury Replays - Platform %s", platform))
-}
-
-// showConfigError displays configuration errors in a dialog and allows user to fix them
-func showConfigError(err error, window fyne.Window) {
-	errorMsg := fmt.Sprintf("Configuration Error:\n\n%v\n\nPlease check your config.toml file and fix the error, then click 'Retry' to reload the configuration.", err)
-
-	// Use a scrollable text widget instead of a label
-	content := widget.NewEntry()
-	content.SetText(errorMsg)
-	content.MultiLine = true
-	content.Wrapping = fyne.TextWrapWord
-	scrollableContent := container.NewScroll(content)
-	scrollableContent.SetMinSize(fyne.NewSize(640, 200))
-
-	var configDialog dialog.Dialog
-	retryBtn := widget.NewButton("Retry", func() {
-		// Attempt to reload configuration
-		configFile := moduleConfigPath
-		_, reloadErr := replayscfg.LoadConfig(configFile)
-		if reloadErr != nil {
-			// Still has errors, show again
-			configDialog.Hide()
-			showConfigError(reloadErr, window)
-			return
-		}
-
-		// Configuration loaded successfully, restart the application
-		dialog.ShowInformation("Success", "Configuration loaded successfully. The application will now exit. Please restart it.", window)
-		time.AfterFunc(2*time.Second, func() {
-			window.Close()
-			os.Exit(0)
-		})
-	})
-
-	openConfigBtn := widget.NewButton("Open Config File", func() {
-		openConfigFile()
-	})
-
-	exitBtn := widget.NewButton("Exit", func() {
-		configDialog.Hide()
-	})
-
-	buttonContainer := container.NewHBox(retryBtn, openConfigBtn, exitBtn)
-
-	dialogContent := container.NewVBox(
-		scrollableContent,
-		widget.NewSeparator(),
-		buttonContainer,
-	)
-
-	configDialog = dialog.NewCustom("Configuration Error", "", dialogContent, window)
-	configDialog.SetOnClosed(func() {
-		// User chose to exit instead of fixing
-		os.Exit(1)
-	})
-	configDialog.Resize(fyne.NewSize(690, 340))
-	configDialog.Show()
-}
-
-// openConfigFile opens the config.toml file in the default editor
-func openConfigFile() {
-	configPath := moduleConfigPath
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("notepad", configPath)
-	case "darwin":
-		cmd = exec.Command("open", "-t", configPath)
-	case "linux":
-		// Try common editors
-		editors := []string{"xdg-open", "gedit", "kate", "nano", "vim"}
-		for _, editor := range editors {
-			if _, err := exec.LookPath(editor); err == nil {
-				cmd = exec.Command(editor, configPath)
-				break
-			}
-		}
-	}
-
-	if cmd != nil {
-		if err := cmd.Start(); err != nil {
-			logging.ErrorLogger.Printf("Failed to open config file: %v", err)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Multicast camera helpers
-// ---------------------------------------------------------------------------
-
-// showMulticastConfig shows a dialog to configure the Cameras Module Stream IP and port mapping.
-func showMulticastConfig(cfg *replayscfg.Config, window fyne.Window) {
-	m := cfg.Multicast
-	portToText := func(port int) string {
-		if port <= 0 {
-			return ""
-		}
-		return strconv.Itoa(port)
-	}
-	parseOptionalPort := func(name, text string) (int, error) {
-		trimmed := strings.TrimSpace(text)
-		if trimmed == "" {
-			return 0, nil
-		}
-		port, err := strconv.Atoi(trimmed)
-		if err != nil || port < 1 || port > 65535 {
-			return 0, fmt.Errorf("%s must be empty or a number between 1 and 65535", name)
-		}
-		return port, nil
-	}
-
-	ipEntry := widget.NewEntry()
-	ipEntry.SetText(m.IP)
-
-	port1Entry := widget.NewEntry()
-	port1Entry.SetText(portToText(m.Camera1Port))
-	port2Entry := widget.NewEntry()
-	port2Entry.SetText(portToText(m.Camera2Port))
-	port3Entry := widget.NewEntry()
-	port3Entry.SetText(portToText(m.Camera3Port))
-	port4Entry := widget.NewEntry()
-	port4Entry.SetText(portToText(m.Camera4Port))
-
-	form := widget.NewForm(
-		widget.NewFormItem("Stream IP", ipEntry),
-		widget.NewFormItem("Camera 1 port", port1Entry),
-		widget.NewFormItem("Camera 2 port", port2Entry),
-		widget.NewFormItem("Camera 3 port", port3Entry),
-		widget.NewFormItem("Camera 4 port", port4Entry),
-	)
-
-	hint := widget.NewLabel("Use a multicast address (e.g. 239.255.0.1) for multicast mode, " +
-		"or 0.0.0.0 for unicast mode (passive UDP listener).\n" +
-		"If a port is empty, the corresponding camera is disabled.")
-	hint.Wrapping = fyne.TextWrapWord
-	content := container.NewVBox(form, hint)
-
-	dlg := dialog.NewCustomConfirm("Cameras Module Stream Configuration", "Save", "Cancel", content,
-		func(save bool) {
-			if !save {
-				return
-			}
-
-			ip := strings.TrimSpace(ipEntry.Text)
-			parsedIP := net.ParseIP(ip)
-			if parsedIP == nil {
-				dialog.ShowError(fmt.Errorf("stream IP must be a valid IP address (multicast or unicast)"), window)
-				return
-			}
-			p1, err := parseOptionalPort("Camera 1 port", port1Entry.Text)
-			if err != nil {
-				dialog.ShowError(err, window)
-				return
-			}
-			p2, err := parseOptionalPort("Camera 2 port", port2Entry.Text)
-			if err != nil {
-				dialog.ShowError(err, window)
-				return
-			}
-			p3, err := parseOptionalPort("Camera 3 port", port3Entry.Text)
-			if err != nil {
-				dialog.ShowError(err, window)
-				return
-			}
-			p4, err := parseOptionalPort("Camera 4 port", port4Entry.Text)
-			if err != nil {
-				dialog.ShowError(err, window)
-				return
-			}
-
-			cfg.Multicast.IP = ip
-			cfg.Multicast.Camera1Port = p1
-			cfg.Multicast.Camera2Port = p2
-			cfg.Multicast.Camera3Port = p3
-			cfg.Multicast.Camera4Port = p4
-
-			configFilePath := moduleConfigPath
-			if err := replayscfg.UpdateMpegTSConfig(configFilePath, cfg.Multicast); err != nil {
-				dialog.ShowError(fmt.Errorf("failed to save Cameras Module Stream config: %w", err), window)
-				return
-			}
-
-			mode := "Multicast"
-			if !parsedIP.IsMulticast() {
-				mode = "Unicast"
-			}
-			successDialog := dialog.NewInformation("Success", fmt.Sprintf("%s stream configuration saved. The application will now exit. Please restart it.", mode), window)
-			successDialog.SetOnClosed(func() {
-				window.Close()
-				os.Exit(0)
-			})
-			successDialog.Show()
-		}, window)
-	dlg.Resize(fyne.NewSize(400, 0))
-	dlg.Show()
 }
 
 // isUnicastIP reports whether ip is a unicast listen address (0.0.0.0 or a
@@ -551,58 +390,53 @@ func localMulticastMismatchNote(cfg *replayscfg.Config) string {
 }
 
 func loadStartupCamerasConfigForComparison() (*cameras.Config, string, error) {
-	if config.IsLocalDevRuntime() {
-		devDir := filepath.Join(".", config.LocalVideoConfigDir, "cameras")
-		cfg, err := cameras.LoadConfigFromDir(devDir)
-		if err == nil {
-			configPath := filepath.Join(devDir, "config.toml")
-			if absPath, absErr := filepath.Abs(configPath); absErr == nil {
-				configPath = absPath
-			}
-			return cfg, configPath, nil
-		}
-		logging.WarningLogger.Printf("Failed to load local dev Cameras Module config from %s: %v", devDir, err)
-	}
-
-	options, err := discoverLocalCamerasVersions()
+	configPath := config.CamerasConfigPath()
+	cfg, err := cameras.LoadConfigFromFile(configPath)
 	if err != nil {
 		return nil, "", err
 	}
-	if len(options) == 0 {
-		return nil, "", fmt.Errorf("no local Cameras Module config was found")
-	}
-
-	option := options[0]
-	cfg, err := cameras.LoadConfigFromDir(option.ConfigDir)
-	if err != nil {
-		return nil, "", err
-	}
-	return cfg, option.ConfigPath, nil
+	return cfg, configPath, nil
 }
 
 // Options carries the host-supplied startup settings for the Replays module.
 type Options struct {
-	ConfigPath string
+	ConfigPath        string
+	CamerasConfigPath string
+	CamerasAvailable  bool
+	Enabled           bool
 }
 
 // UI exposes the Replays module content, menus and lifecycle hooks to the host.
 type UI struct {
-	Content fyne.CanvasObject
-	Menus   []*fyne.Menu
-	Start   func()
+	Content             fyne.CanvasObject
+	Menus               []*fyne.Menu
+	Start               func()
+	StartServer         func(camerasAvailable, replaysAvailable bool)
+	SetCamerasAvailable func(bool)
 }
 
 // Init loads the Replays module configuration and prepares the recording runtime.
 // It must be called before BuildUI.
 func Init(opts Options) error {
 	moduleConfigPath = opts.ConfigPath
+	camerasAvailable = opts.CamerasAvailable
+	localCamerasConfigPath = opts.CamerasConfigPath
 
 	cfg, err := replayscfg.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("loading replays config %s: %w", opts.ConfigPath, err)
 	}
+	if opts.Enabled && opts.CamerasAvailable {
+		if err := syncLocalCamerasConfig(cfg); err != nil {
+			return err
+		}
+	}
+
 	config.SetCameraConfigs(cfg.Cameras)
 	moduleConfig = cfg
+	if !opts.Enabled {
+		return nil
+	}
 
 	if err := recording.InitializeFFmpeg(); err != nil {
 		logging.WarningLogger.Printf("Warning: %v", err)
@@ -617,6 +451,38 @@ func Init(opts Options) error {
 	return nil
 }
 
+// RefreshLocalCameras applies the persisted Cameras configuration to Replays.
+func RefreshLocalCameras() error {
+	if !camerasAvailable || moduleConfig == nil {
+		return nil
+	}
+	if err := syncLocalCamerasConfig(moduleConfig); err != nil {
+		return err
+	}
+	if err := recording.EnsureCompatibleFFmpegForRecording(moduleConfig.Cameras); err != nil {
+		logging.WarningLogger.Printf("Warning: failed to switch to compatible ffmpeg for recording: %v", err)
+	}
+	return nil
+}
+
+func syncLocalCamerasConfig(cfg *replayscfg.Config) error {
+	camerasConfigPath := localCamerasConfigPath
+	if camerasConfigPath == "" {
+		camerasConfigPath = config.CamerasConfigPath()
+	}
+	preview, err := loadLocalCamerasImportPreview(camerasConfigPath)
+	if err != nil {
+		return fmt.Errorf("loading local cameras config %s: %w", camerasConfigPath, err)
+	}
+	selected, _ := selectedCamerasFirst(preview, cfg.Multicast)
+	if err := applyLocalCamerasImport(cfg, preview, selected, moduleConfigPath); err != nil {
+		return fmt.Errorf("using local cameras config %s: %w", camerasConfigPath, err)
+	}
+	cfg.Cameras = cfg.Multicast.BuildCameraConfigs()
+	config.SetCameraConfigs(cfg.Cameras)
+	return nil
+}
+
 // BuildUI constructs the Replays module interface inside the host window.
 func BuildUI(window fyne.Window) *UI {
 	cfg := moduleConfig
@@ -624,13 +490,17 @@ func BuildUI(window fyne.Window) *UI {
 	titleLabel = widget.NewLabel("")
 	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
 	updateTitle()
+	selectCamerasButton := widget.NewButton("Select Cameras", func() {
+		showSelectCamerasDialog(cfg, window)
+	})
+	selectCamerasButton.Importance = widget.HighImportance
 
 	var initialStatus string
 	if err := cfg.ValidateCamera(); err != nil {
 		initialStatus = "Error: " + err.Error()
 	}
 
-	topContainer := container.NewVBox(titleLabel)
+	topContainer := container.NewVBox(titleLabel, container.NewHBox(selectCamerasButton))
 
 	statusLabel := widget.NewLabel(initialStatus)
 	statusLabel.Wrapping = fyne.TextWrapWord
@@ -658,35 +528,35 @@ func BuildUI(window fyne.Window) *UI {
 	)
 	content := container.NewPadded(upperContent)
 
+	remoteCamerasItem := fyne.NewMenuItem("Use Streams from Cameras Server", func() {
+		showRemoteCamerasImportDialog(cfg, window)
+	})
+	remoteCamerasItem.Disabled = camerasAvailable
+	replaysMenuItems := []*fyne.MenuItem{
+		fyne.NewMenuItem("Select Cameras", func() {
+			showSelectCamerasDialog(cfg, window)
+		}),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Platform Selection", func() {
+			showPlatformSelection(cfg, window)
+			updateTitle() // Update title after platform selection
+		}),
+		fyne.NewMenuItem("owlcms Server Address", func() {
+			showOwlCMSServerAddress(cfg, window)
+		}),
+		fyne.NewMenuItemSeparator(),
+		remoteCamerasItem,
+	}
 	menus := []*fyne.Menu{
-		fyne.NewMenu("Replays",
-			fyne.NewMenuItem("Platform Selection", func() {
-				showPlatformSelection(cfg, window)
-				updateTitle() // Update title after platform selection
-			}),
-			fyne.NewMenuItem("owlcms Server Address", func() {
-				showOwlCMSServerAddress(cfg, window)
-			}),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Use Streams from Local Cameras Module", func() {
-				showLocalCamerasImportDialog(cfg, window)
-			}),
-			fyne.NewMenuItem("Cameras Module Stream Configuration", func() {
-				showMulticastConfig(cfg, window)
-			}),
-			fyne.NewMenuItem("List Enabled Cameras", func() {
-				showEnabledCameras(cfg, window)
-			}),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Open Application Directory", func() {
-				openApplicationDirectory()
-			}),
-		),
+		fyne.NewMenu("Replays", replaysMenuItems...),
 	}
 
 	// Register platform dialog function for monitor package
 	monitor.ShowPlatformDialogFunc = func() {
-		showPlatformSelection(cfg, window)
+		// Called from the MQTT monitor goroutine.
+		fyne.Do(func() {
+			showPlatformSelection(cfg, window)
+		})
 	}
 
 	// Status update goroutine
@@ -702,21 +572,42 @@ func BuildUI(window fyne.Window) *UI {
 				msg.Text = "Ready"
 			}
 
-			// Update status text and style
-			setStatusLabelText(statusLabel, msg.Text, strings.HasPrefix(msg.Text, "Error:"))
+			text := msg.Text
+			isError := strings.HasPrefix(text, "Error:")
+			fyne.Do(func() {
+				setStatusLabelText(statusLabel, text, isError)
+			})
 
 			if msg.Code == httpServer.Ready {
 				hideTimer = time.AfterFunc(10*time.Second, func() {
-					setStatusLabelText(statusLabel, "Ready", false)
+					fyne.Do(func() {
+						setStatusLabelText(statusLabel, "Ready", false)
+					})
 				})
 			}
 		}
 	}()
 
 	start := func() {
-		go httpServer.StartServer(cfg.Port, config.Verbose)
 		startStartupScans(cfg, statusLabel, startupMessages)
 	}
+	startServer := func(camerasAvailable, replaysAvailable bool) {
+		go httpServer.StartServer(cfg.Port, httpServer.ModuleAvailability{
+			Cameras: camerasAvailable,
+			Replays: replaysAvailable,
+		})
+	}
 
-	return &UI{Content: content, Menus: menus, Start: start}
+	setCamerasAvailable := func(available bool) {
+		camerasAvailable = available
+		remoteCamerasItem.Disabled = available
+	}
+
+	return &UI{
+		Content:             content,
+		Menus:               menus,
+		Start:               start,
+		StartServer:         startServer,
+		SetCamerasAvailable: setCamerasAvailable,
+	}
 }

@@ -16,6 +16,9 @@
 ### Running in IDE
 
 ```bash
+# Build the runnable development binary
+go build -o video ./cmd/video
+
 # Run the application (both modules)
 go run ./cmd/video
 
@@ -23,6 +26,18 @@ go run ./cmd/video
 go run ./cmd/video --no-replays
 go run ./cmd/video --no-cameras
 ```
+
+### Run Modes
+
+```bash
+# Build from source and run with this repository's ./video_config directory.
+./run-dev.sh
+
+# Run the newest installed Video version, including prereleases, with the configuration files in that version directory.
+./run-production.sh
+```
+
+`run-production.sh` looks in the platform default `owlcms-video` installation directory. Set `VIDEO_INSTALL_DIR` to use another installation root. Set `VIDEO_DEV_CONFIG_DIR` to use another development configuration directory.
 
 ### Configuration-Driven Code
 

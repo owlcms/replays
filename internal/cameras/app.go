@@ -38,9 +38,8 @@ import (
 )
 
 var (
-	includeAll    bool
-	startPort     int
-	extractConfig bool
+	includeAll bool
+	startPort  int
 
 	previewMu   sync.Mutex
 	previewCmds []*exec.Cmd
@@ -59,11 +58,6 @@ const (
 	defaultWindowWidth  = 1368
 	defaultWindowHeight = 880
 )
-
-func defaultWindowSize(window fyne.Window) fyne.Size {
-	_ = window
-	return fyne.NewSize(defaultWindowWidth, defaultWindowHeight)
-}
 
 var ffmpegVideoResolutionPattern = regexp.MustCompile(`\b(\d{2,5})x(\d{2,5})\b`)
 
@@ -1427,6 +1421,9 @@ func monitorFFmpegProgress(stream *cameraStream, stdout io.Reader) {
 			stream.updateProgress(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		logging.WarningLogger.Printf("ffmpeg progress read failed for %s: %v", stream.camera.Name, err)
+	}
 }
 
 // monitorFFmpegErrors reads stderr for error logging (skip noisy H.264 sync messages)
@@ -1455,6 +1452,9 @@ func monitorFFmpegErrors(stream *cameraStream, stderr io.Reader) {
 		if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "unable") || strings.Contains(lower, "invalid") || strings.Contains(lower, "permission denied") || strings.Contains(lower, "device or resource busy") {
 			logging.ErrorLogger.Printf("ffmpeg stderr [%s]: %s", stream.camera.Name, line)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		logging.WarningLogger.Printf("ffmpeg stderr read failed for %s: %v", stream.camera.Name, err)
 	}
 }
 
@@ -2308,25 +2308,6 @@ func openFile(path string, onDone func()) {
 	}()
 }
 
-func openConfigurationDirectory() {
-	dir := filepath.Dir(configFilePath)
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", dir)
-	case "darwin":
-		cmd = exec.Command("open", dir)
-	case "linux":
-		cmd = exec.Command("xdg-open", dir)
-	default:
-		logging.WarningLogger.Printf("Unsupported platform: %s", runtime.GOOS)
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		logging.ErrorLogger.Printf("Failed to open configuration directory: %v", err)
-	}
-}
-
 func recordClip(stream *cameraStream) (string, error) {
 	clipInput := stream.listenURL()
 	if runtime.GOOS == "windows" {
@@ -2466,8 +2447,10 @@ func BuildUI(window fyne.Window) *UI {
 			clipLinkTimer.Stop()
 		}
 		clipLinkTimer = time.AfterFunc(d, func() {
-			clipLink.Hide()
-			actionStatus.SetText("Preview/Record: ready")
+			fyne.Do(func() {
+				clipLink.Hide()
+				actionStatus.SetText("Preview/Record: ready")
+			})
 		})
 	}
 
@@ -4483,7 +4466,6 @@ func BuildUI(window fyne.Window) *UI {
 					},
 				})
 			}
-
 			fyne.Do(func() {
 				currentInventory = inv
 				if inv.Encoder != nil {
@@ -4640,11 +4622,30 @@ func BuildUI(window fyne.Window) *UI {
 	)
 	configurationTab.SetMinSize(fyne.NewSize(0, 420))
 
+	var includeInternalCamerasItem *fyne.MenuItem
+	includeInternalCamerasItem = fyne.NewMenuItem("Include Internal Cameras", func() {
+		if camerasConfig == nil {
+			return
+		}
+
+		previous := camerasConfig.Cameras.IncludeAll
+		camerasConfig.Cameras.IncludeAll = !previous
+		if err := camerascfg.SaveConfig(camerasConfig); err != nil {
+			camerasConfig.Cameras.IncludeAll = previous
+			dialog.ShowError(fmt.Errorf("save Include Internal Cameras setting: %w", err), window)
+			return
+		}
+
+		includeInternalCamerasItem.Checked = camerasConfig.Cameras.IncludeAll
+		logging.InfoLogger.Printf("Include internal cameras set to %t", camerasConfig.Cameras.IncludeAll)
+		rescanBtn.OnTapped()
+	})
+	includeInternalCamerasItem.Checked = camerasConfig.Cameras.IncludeAll
+
 	menus := []*fyne.Menu{
 		fyne.NewMenu("Cameras",
-			fyne.NewMenuItem("Open Configuration Directory", func() {
-				openConfigurationDirectory()
-			}),
+			includeInternalCamerasItem,
+			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Rescan Sources", func() {
 				rescanBtn.OnTapped()
 			}),

@@ -8,16 +8,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/owlcms/replays/internal/config"
 	camerascfg "github.com/owlcms/replays/internal/config/cameras"
 	ffmpegcfg "github.com/owlcms/replays/internal/config/ffmpeg"
 	replayscfg "github.com/owlcms/replays/internal/config/replays"
 )
 
 const (
-	DefaultRoot     = "config"
-	CamerasFilename = "cameras.toml"
-	ReplaysFilename = "replays.toml"
-	FFmpegFilename  = "ffmpeg.toml"
+	DefaultRoot     = config.LocalVideoConfigDir
+	CamerasFilename = config.CamerasFilename
+	ReplaysFilename = config.ReplaysFilename
+	FFmpegFilename  = config.FFmpegFilename
 )
 
 // Paths names the three required configuration documents for one video module.

@@ -40,9 +40,8 @@ var (
 	NoVideo       bool
 	NoMQTT        bool
 	AutoTomlDir   string
-	ConfigDir     string // per-instance config dir (set by --configDir)
+	ConfigDir     string // config dir holding the three .toml files (set by --configDir)
 	InstallDir    string
-	AppName       string // "cameras" or "replays" — set by each binary before config resolution
 	videoDir      string
 	Width         int
 	Height        int
@@ -58,18 +57,35 @@ const ControlPanelDirEnv = "VIDEO_CONTROLPANEL_DIR"
 const SharedConfigDirEnv = "VIDEO_CONFIGDIR"
 const LocalVideoConfigDir = "video_config"
 
-// ResolveAndEnsureConfigDir resolves the per-instance ConfigDir:
-// 1) explicit --configDir value (already stored in ConfigDir),
-// 2) local ./video_config/<AppName> fallback for development.
-// VIDEO_CONFIGDIR is NOT used here — it is the shared directory for ffmpeg.toml only.
+// The video application keeps exactly these three documents side by side in a
+// single configuration directory.
+const (
+	CamerasFilename = "cameras.toml"
+	ReplaysFilename = "replays.toml"
+	FFmpegFilename  = "ffmpeg.toml"
+)
+
+// CamerasConfigPath returns the cameras document inside the config directory.
+func CamerasConfigPath() string {
+	return filepath.Join(GetInstallDir(), CamerasFilename)
+}
+
+// ReplaysConfigPath returns the replays document inside the config directory.
+func ReplaysConfigPath() string {
+	return filepath.Join(GetInstallDir(), ReplaysFilename)
+}
+
+// FFmpegConfigPath returns the ffmpeg document inside the config directory.
+func FFmpegConfigPath() string {
+	return filepath.Join(GetInstallDir(), FFmpegFilename)
+}
+
+// ResolveAndEnsureConfigDir resolves ConfigDir from the explicit --configDir
+// value, falling back to ./video_config for development.
 // It normalizes to an absolute path and ensures the directory exists.
 func ResolveAndEnsureConfigDir() error {
 	if strings.TrimSpace(ConfigDir) == "" {
-		if AppName == "" {
-			ConfigDir = filepath.Join(".", LocalVideoConfigDir)
-		} else {
-			ConfigDir = filepath.Join(".", LocalVideoConfigDir, AppName)
-		}
+		ConfigDir = filepath.Join(".", LocalVideoConfigDir)
 	}
 
 	absConfigDir, err := filepath.Abs(ConfigDir)
@@ -86,20 +102,14 @@ func ResolveAndEnsureConfigDir() error {
 }
 
 // IsLocalDevRuntime reports whether the runtime root is the default local
-// ./video_config/<AppName> folder (i.e. not overridden by --configDir and
-// not launched by the control panel with VIDEO_CONFIGDIR).
+// ./video_config folder (i.e. not overridden by --configDir and not launched
+// by the control panel with VIDEO_CONFIGDIR).
 func IsLocalDevRuntime() bool {
 	if strings.TrimSpace(os.Getenv(SharedConfigDirEnv)) != "" {
 		return false
 	}
 
-	var devDir string
-	if AppName == "" {
-		devDir = filepath.Join(".", LocalVideoConfigDir)
-	} else {
-		devDir = filepath.Join(".", LocalVideoConfigDir, AppName)
-	}
-	absDevDir, err := filepath.Abs(devDir)
+	absDevDir, err := filepath.Abs(filepath.Join(".", LocalVideoConfigDir))
 	if err != nil {
 		return false
 	}
@@ -107,40 +117,24 @@ func IsLocalDevRuntime() bool {
 	return filepath.Clean(GetInstallDir()) == filepath.Clean(absDevDir)
 }
 
-// GetInstallDir returns the per-instance configuration directory.
-// This is where app-specific config files (config.toml, auto.toml, etc.) live.
-// It does NOT return the shared directory — use GetSharedConfigDir() for that.
+// GetInstallDir returns the configuration directory holding cameras.toml,
+// replays.toml, ffmpeg.toml and the generated auto.toml.
 func GetInstallDir() string {
 	if ConfigDir != "" {
 		return ConfigDir
 	}
 
-	var fallback string
-	if AppName == "" {
-		fallback = filepath.Join(".", LocalVideoConfigDir)
-	} else {
-		fallback = filepath.Join(".", LocalVideoConfigDir, AppName)
-	}
+	fallback := filepath.Join(".", LocalVideoConfigDir)
 	if abs, err := filepath.Abs(fallback); err == nil {
 		return abs
 	}
 	return fallback
 }
 
-// GetSharedConfigDir returns the shared configuration directory.
-// This is where ffmpeg.toml lives. In control-panel mode it comes from
-// VIDEO_CONFIGDIR; in dev mode it falls back to ./video_config/ffmpeg.
+// GetSharedConfigDir returns the directory holding ffmpeg.toml, which is the
+// same single configuration directory as everything else.
 func GetSharedConfigDir() string {
-	if envDir := strings.TrimSpace(os.Getenv(SharedConfigDirEnv)); envDir != "" {
-		if abs, err := filepath.Abs(envDir); err == nil {
-			return abs
-		}
-		return envDir
-	}
-	if abs, err := filepath.Abs(filepath.Join(".", LocalVideoConfigDir, "ffmpeg")); err == nil {
-		return abs
-	}
-	return filepath.Join(".", LocalVideoConfigDir, "ffmpeg")
+	return GetInstallDir()
 }
 
 // GetRuntimeDir returns the directory of the running executable.

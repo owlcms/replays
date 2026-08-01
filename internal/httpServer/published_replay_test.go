@@ -71,6 +71,42 @@ func writeReplayTestFile(t *testing.T, videoDir string, session string, filename
 	}
 }
 
+func TestModuleRoutesReflectAvailability(t *testing.T) {
+	oldConfigDir := config.ConfigDir
+	config.ConfigDir = t.TempDir()
+	t.Cleanup(func() {
+		config.ConfigDir = oldConfigDir
+	})
+
+	camerasConfig := []byte("[multicast]\nstartPort = 9001\n")
+	if err := os.WriteFile(config.CamerasConfigPath(), camerasConfig, 0644); err != nil {
+		t.Fatalf("write cameras config: %v", err)
+	}
+
+	camerasOnly := newRouter(ModuleAvailability{Cameras: true})
+	recorder := httptest.NewRecorder()
+	camerasOnly.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/cameras/config", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected cameras config from cameras-only server, got %d", recorder.Code)
+	}
+	if recorder.Body.String() != string(camerasConfig) {
+		t.Fatalf("unexpected cameras config response %q", recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	camerasOnly.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected replays route to be unavailable, got %d", recorder.Code)
+	}
+
+	replaysOnly := newRouter(ModuleAvailability{Replays: true})
+	recorder = httptest.NewRecorder()
+	replaysOnly.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/cameras/config", nil))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected cameras config to be unavailable, got %d", recorder.Code)
+	}
+}
+
 func TestPublishedReplayStatePublishesAndClears(t *testing.T) {
 	videoDir := withReplayTestVideoDir(t)
 	filename := "2026-05-08_11h09m59s_LARRIVEE_Mariane_CLEANJERK_attempt1_Camera1.mp4"

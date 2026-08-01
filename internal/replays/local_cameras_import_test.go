@@ -1,64 +1,20 @@
 package replays
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/owlcms/replays/internal/config"
 	camerascfg "github.com/owlcms/replays/internal/config/cameras"
 )
 
-func TestDiscoverLocalCamerasVersionsInDirSortsNewestFirst(t *testing.T) {
-	root := t.TempDir()
-	versions := []string{"2.9.0", "2.10.0", "2.3.4"}
-	for _, version := range versions {
-		configDir := filepath.Join(root, version)
-		if err := os.MkdirAll(configDir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", version, err)
-		}
-		if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[multicast]\nstartPort = 9001\n"), 0o644); err != nil {
-			t.Fatalf("write config.toml for %s: %v", version, err)
-		}
-	}
-
-	options, err := discoverLocalCamerasVersionsInDir(root)
-	if err != nil {
-		t.Fatalf("discover versions: %v", err)
-	}
-	if len(options) != 3 {
-		t.Fatalf("expected 3 versions, got %d", len(options))
-	}
-	if options[0].Version != "2.10.0" || options[1].Version != "2.9.0" || options[2].Version != "2.3.4" {
-		t.Fatalf("unexpected version order: %#v", options)
-	}
-}
-
-func TestDiscoverLocalCamerasVersionsUsesEnvOverride(t *testing.T) {
-	overrideDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(overrideDir, "config.toml"), []byte("[multicast]\nstartPort = 9001\n"), 0o644); err != nil {
-		t.Fatalf("write override config.toml: %v", err)
-	}
-	t.Setenv(localCamerasDirOverrideEnv, overrideDir)
-
-	options, err := discoverLocalCamerasVersions()
-	if err != nil {
-		t.Fatalf("discover versions with env override: %v", err)
-	}
-	if len(options) != 1 {
-		t.Fatalf("expected 1 override option, got %d", len(options))
-	}
-	if options[0].ConfigDir != overrideDir {
-		t.Fatalf("expected override dir %q, got %q", overrideDir, options[0].ConfigDir)
-	}
-	if options[0].ConfigPath != filepath.Join(overrideDir, "config.toml") {
-		t.Fatalf("expected override config path %q, got %q", filepath.Join(overrideDir, "config.toml"), options[0].ConfigPath)
-	}
-}
-
 func TestLoadLocalCamerasImportPreviewUsesPassiveListenerForUnicast(t *testing.T) {
 	configDir := t.TempDir()
-	configPath := filepath.Join(configDir, "config.toml")
+	configPath := filepath.Join(configDir, "cameras.toml")
 	content := `
 [multicast]
 ip = "239.255.0.1"
@@ -97,15 +53,10 @@ outputPort = 9005
 transport = "tcp"
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write config.toml: %v", err)
+		t.Fatalf("write cameras.toml: %v", err)
 	}
 
-	preview, err := loadLocalCamerasImportPreview(localCamerasVersionOption{
-		Label:      "2.10.0",
-		Version:    "2.10.0",
-		ConfigDir:  configDir,
-		ConfigPath: configPath,
-	})
+	preview, err := loadLocalCamerasImportPreview(configPath)
 	if err != nil {
 		t.Fatalf("load import preview: %v", err)
 	}
@@ -141,7 +92,7 @@ transport = "tcp"
 
 func TestLoadLocalCamerasImportPreviewFlagsUnicastWithoutLocalDestination(t *testing.T) {
 	configDir := t.TempDir()
-	configPath := filepath.Join(configDir, "config.toml")
+	configPath := filepath.Join(configDir, "cameras.toml")
 	content := `
 [multicast]
 ip = "239.255.0.1"
@@ -166,15 +117,10 @@ outputPort = 9005
 transport = "tcp"
 `
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write config.toml: %v", err)
+		t.Fatalf("write cameras.toml: %v", err)
 	}
 
-	preview, err := loadLocalCamerasImportPreview(localCamerasVersionOption{
-		Label:      "2.10.0",
-		Version:    "2.10.0",
-		ConfigDir:  configDir,
-		ConfigPath: configPath,
-	})
+	preview, err := loadLocalCamerasImportPreview(configPath)
 	if err != nil {
 		t.Fatalf("load import preview: %v", err)
 	}
@@ -209,4 +155,88 @@ func TestCollectLocalCamerasStreamsSkipsDisabledSources(t *testing.T) {
 	if streams[0].ShortID != "C1" || streams[1].ShortID != "R1" {
 		t.Fatalf("unexpected collected streams: %#v", streams)
 	}
+}
+
+func TestLoadRemoteCamerasImportPreviewFetchesCamerasEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/cameras/config" {
+			t.Errorf("expected cameras config endpoint, got %q", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/toml")
+		_, _ = writer.Write([]byte(`
+[multicast]
+ip = "239.44.0.1"
+
+[[deviceAssignment]]
+name = "Remote Camera"
+shortId = "C1"
+outputPort = 9011
+on = true
+`))
+	}))
+	defer server.Close()
+
+	preview, err := loadRemoteCamerasImportPreview(server.URL)
+	if err != nil {
+		t.Fatalf("load remote config: %v", err)
+	}
+	if preview.ListenIP != "239.44.0.1" {
+		t.Fatalf("expected remote multicast IP, got %q", preview.ListenIP)
+	}
+	if len(preview.ImportedStreams) != 1 || preview.ImportedStreams[0].OutputPort != 9011 {
+		t.Fatalf("unexpected imported streams: %#v", preview.ImportedStreams)
+	}
+}
+
+func TestImportedMpegTSSettingsReplacePriorPorts(t *testing.T) {
+	preview := buildCamerasImportPreview(&camerascfg.Config{
+		Multicast: camerascfg.MulticastConfig{IP: "239.44.0.1"},
+		DeviceAssignments: []camerascfg.DeviceAssignment{
+			{Name: "Camera 2", ShortID: "C2", OutputPort: 9012, On: boolPointer(true)},
+			{Name: "Camera 1", ShortID: "C1", OutputPort: 9011, On: boolPointer(true)},
+		},
+	}, "remote")
+
+	settings, err := importedMpegTSSettings(config.MulticastSettings{
+		IP:          "239.255.0.1",
+		Camera1Port: 8001,
+		Camera2Port: 8002,
+		Camera3Port: 8003,
+		Camera4Port: 8004,
+	}, preview, preview.ImportedStreams)
+	if err != nil {
+		t.Fatalf("build imported settings: %v", err)
+	}
+	if settings.IP != "239.44.0.1" {
+		t.Fatalf("expected fetched IP, got %q", settings.IP)
+	}
+	if settings.Camera1Port != 9011 || settings.Camera2Port != 9012 || settings.Camera3Port != 0 || settings.Camera4Port != 0 {
+		t.Fatalf("expected fetched ports to replace prior ports, got %#v", settings)
+	}
+}
+
+func TestSelectedCamerasFirstPreservesConfiguredReplayOrder(t *testing.T) {
+	preview := buildCamerasImportPreview(&camerascfg.Config{
+		Multicast: camerascfg.MulticastConfig{IP: "239.44.0.1"},
+		DeviceAssignments: []camerascfg.DeviceAssignment{
+			{Name: "Camera 1", ShortID: "C1", OutputPort: 9011, On: boolPointer(true)},
+			{Name: "Camera 2", ShortID: "C2", OutputPort: 9012, On: boolPointer(true)},
+			{Name: "Camera 3", ShortID: "C3", OutputPort: 9013, On: boolPointer(true)},
+		},
+	}, "local")
+
+	selected, available := selectedCamerasFirst(preview, config.MulticastSettings{
+		Camera1Port: 9013,
+		Camera2Port: 9011,
+	})
+	if len(selected) != 2 || selected[0].OutputPort != 9013 || selected[1].OutputPort != 9011 {
+		t.Fatalf("expected configured order at the top, got %#v", selected)
+	}
+	if len(available) != 1 || available[0].OutputPort != 9012 {
+		t.Fatalf("expected remaining camera below selected cameras, got %#v", available)
+	}
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }

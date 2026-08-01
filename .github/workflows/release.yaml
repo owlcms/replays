@@ -1,4 +1,4 @@
-name: Release owlcms-replays
+name: Release OWLCMS Video
 
 on:
   workflow_dispatch:
@@ -326,12 +326,12 @@ jobs:
       run: |
         if [[ "${TAG}" == *"-"* ]]; then
           gh release create ${{ env.TAG }} \
-            --title "owlcms jury replays ${{ env.TAG }}" \
+            --title "OWLCMS Video ${{ env.TAG }}" \
             --notes-file ./dist/ReleaseNotes.md \
             --prerelease
         else
           gh release create ${{ env.TAG }} \
-            --title "owlcms jury replays ${{ env.TAG }}" \
+            --title "OWLCMS Video ${{ env.TAG }}" \
             --notes-file ./dist/ReleaseNotes.md
         fi
 
