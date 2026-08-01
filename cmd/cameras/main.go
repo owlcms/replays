@@ -37,6 +37,7 @@ import (
 	ffmpegcfg "github.com/owlcms/replays/internal/config/ffmpeg"
 	"github.com/owlcms/replays/internal/jobutil"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/menubar"
 	"github.com/owlcms/replays/internal/recording"
 )
 
@@ -4558,20 +4559,21 @@ func runUI() {
 		}
 	}()
 
+	exitUI := func() {
+		closeFn()
+		ticker.Stop()
+		window.SetCloseIntercept(nil)
+		myApp.Quit()
+	}
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		closeFn()
-		ticker.Stop()
-		fyne.Do(window.Close)
+		fyne.Do(exitUI)
 	}()
 
-	window.SetCloseIntercept(func() {
-		closeFn()
-		ticker.Stop()
-		window.Close()
-	})
+	window.SetCloseIntercept(exitUI)
 
 	multicastRow := container.NewHBox(
 		widget.NewLabel("Multicast IP:"),
@@ -4675,18 +4677,19 @@ func runUI() {
 		container.NewTabItem("Configuration", configurationTab),
 	)
 
-	window.SetMainMenu(fyne.NewMainMenu(
+	mainMenu := fyne.NewMainMenu(
 		fyne.NewMenu("File",
 			fyne.NewMenuItem("Open Configuration Directory", func() {
 				openConfigurationDirectory()
 			}),
 			fyne.NewMenuItemSeparator(),
 			fyne.NewMenuItem("Quit", func() {
-				myApp.Quit()
+				window.Close()
 			}),
 		),
-	))
-	window.SetContent(content)
+	)
+	window.SetMainMenu(mainMenu)
+	window.SetContent(menubar.WithDarwinMenu(mainMenu, content))
 	window.Show()
 	startInitialDetection()
 	myApp.Run()

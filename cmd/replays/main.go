@@ -26,6 +26,7 @@ import (
 	"github.com/owlcms/replays/internal/config/replays"
 	"github.com/owlcms/replays/internal/httpServer"
 	"github.com/owlcms/replays/internal/logging"
+	"github.com/owlcms/replays/internal/menubar"
 	"github.com/owlcms/replays/internal/monitor"
 	"github.com/owlcms/replays/internal/recording"
 )
@@ -752,10 +753,6 @@ func main() {
 	)
 	content := container.NewPadded(upperContent)
 
-	window.SetContent(content)
-	window.Resize(defaultWindowSize())
-	window.CenterOnScreen()
-
 	// Create main menu
 	multicastConfigItem := fyne.NewMenuItem("Cameras Module Stream Configuration", func() {
 		showMulticastConfig(cfg, window)
@@ -797,6 +794,9 @@ func main() {
 		),
 	)
 	window.SetMainMenu(mainMenu)
+	window.SetContent(menubar.WithDarwinMenu(mainMenu, content))
+	window.Resize(defaultWindowSize())
+	window.CenterOnScreen()
 
 	// Register platform dialog function for monitor package
 	monitor.ShowPlatformDialogFunc = func() {
