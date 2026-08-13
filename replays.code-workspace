@@ -1,13 +1,10 @@
 {
 	"folders": [
 		{
-			"path": "."
-		},
-		{
 			"path": "../owlcms-controlpanel"
 		},
 		{
-			"path": "../owlcms-streaming"
+			"path": "../video"
 		}
 	],
 	"settings": {}
